@@ -84,6 +84,68 @@ test('an insertion directly next to the other side edit is a conflict, one line 
   expect(mergeText(base, ticked, apart)).toEqual({ ok: true, text: toggleTask(apart, at) });
 });
 
+test('equal line counts are not enough to merge line by line', () => {
+  // Beide tauschen L0 und L1, ours löscht L2, theirs löscht L3. Im Konfliktbereich haben alle drei Fassungen zwei
+  // Zeilen, aber theirs fügt dort L0 ein und löscht L3, ersetzt also nichts: Stelle für Stelle käme L2 zurück, und die
+  // Löschung von ours ginge verloren.
+  const original = 'L0\nL1\nL2\nL3';
+  const ours = 'L1\nL0\nL3';
+  const theirs = 'L1\nL0\nL2';
+  expect(mergeText(original, ours, theirs)).toEqual({ ok: false });
+  expect(mergeText(original, theirs, ours)).toEqual({ ok: false });
+});
+
+test('replacing several lines next to a replaced line still merges line by line', () => {
+  const lines = (...replaced: string[]) => ['L0', ...replaced, 'L4', 'L5'].join('\n');
+  const original = lines('L1', 'L2', 'L3');
+  const ours = lines('A1', 'A2', 'L3'); // zwei Zeilen durch zwei ersetzt
+  const theirs = lines('L1', 'L2', 'B3'); // die Nachbarzeile ersetzt
+  const both = lines('A1', 'A2', 'B3');
+  expect(mergeText(original, ours, theirs)).toEqual({ ok: true, text: both });
+  expect(mergeText(original, theirs, ours)).toEqual({ ok: true, text: both });
+});
+
+test('no line is lost or brought back, for every small combination of replacing, deleting and inserting', () => {
+  // Drei Zeilen. Jede Seite behält, löscht oder ersetzt jede davon durch "X" und fügt höchstens ein "X" ein. Beide
+  // Seiten schreiben dasselbe "X", wie bei Leerzeilen: Gleicher Text an verschiedenen Stellen darf nichts verwechseln.
+  const original = ['B0', 'B1', 'B2'];
+  const sides = new Map<string, string[]>();
+  for (let code = 0; code < 27 * 5; code++) {
+    const fates = [code % 3, Math.floor(code / 3) % 3, Math.floor(code / 9) % 3]; // 0 behalten, 1 löschen, 2 ersetzen
+    const insertAt = Math.floor(code / 27) - 1; // -1: nichts einfügen
+    const lines: string[] = [];
+    original.forEach((line, i) => {
+      if (insertAt === i) lines.push('X');
+      if (fates[i] === 0) lines.push(line);
+      if (fates[i] === 2) lines.push('X');
+    });
+    if (insertAt === original.length) lines.push('X');
+    sides.set(lines.join('\n'), lines);
+  }
+
+  const count = (lines: string[], text: string) => lines.filter((line) => line === text).length;
+  const problems: string[] = [];
+  let merged = 0;
+  for (const [oursText, ours] of sides) {
+    for (const [theirsText, theirs] of sides) {
+      if ([oursText, theirsText].includes(original.join('\n')) || oursText === theirsText) continue; // Schnellwege
+      const r = mergeText(original.join('\n'), oursText, theirsText);
+      if (!r.ok) continue;
+      merged++;
+      const out = r.text.split('\n');
+      const detail = `ours: ${ours.join(' ')} | theirs: ${theirs.join(' ')} | Ergebnis: ${out.join(' ')}`;
+      // Eine Ausgangszeile bleibt genau dann stehen, wenn beide Seiten sie behalten haben, in der alten Reihenfolge.
+      const kept = original.filter((line) => ours.includes(line) && theirs.includes(line));
+      if (out.filter((line) => original.includes(line)).join() !== kept.join()) problems.push(`Ausgangszeilen: ${detail}`);
+      // Kein "X" geht verloren, und es entstehen keine neuen.
+      const xs = count(out, 'X');
+      if (xs < Math.max(count(ours, 'X'), count(theirs, 'X')) || xs > count(ours, 'X') + count(theirs, 'X')) problems.push(`X: ${detail}`);
+    }
+  }
+  expect(problems.slice(0, 3)).toEqual([]);
+  expect(merged).toBeGreaterThan(100); // die Prüfung läuft nicht leer
+});
+
 test('the same edit on both sides is taken once, also next to other changes', () => {
   const tick = lineOf(base, 'Liste Planobjekte');
   const occurrences = (text: string, part: string) => text.split(part).length - 1;
@@ -124,6 +186,29 @@ test('a note with Windows line endings keeps them', () => {
   const r = mergeText(crlf, ours, theirs);
   expect(r).toEqual({ ok: true, text: toggleTask(ours, second) });
   expect(r.ok && r.text.replace(/\r\n/g, '')).not.toMatch(/[\r\n]/); // nach dem Abzug aller \r\n bleibt kein Umbruch übrig
+});
+
+test('a note over 3000 lines is a conflict instead of a slow merge', () => {
+  const note = (count: number) => Array.from({ length: count }, (_, i) => `Zeile ${i}`);
+  const change = (lines: string[], at: number) => lines.map((line, i) => (i === at ? `${line} geändert` : line));
+  const text = (lines: string[]) => lines.join('\n');
+
+  // Genau 3000 Zeilen werden noch zusammengeführt.
+  const atLimit = note(3000);
+  const bothChanged = text(change(change(atLimit, 100), 2000));
+  expect(mergeText(text(atLimit), text(change(atLimit, 100)), text(change(atLimit, 2000)))).toEqual({ ok: true, text: bothChanged });
+
+  // Eine Zeile mehr, in jeder einzelnen der drei Fassungen: Konflikt. Ohne die Grenze ließe sich jeder dieser Fälle zusammenführen.
+  const over = note(3001);
+  expect(mergeText(text(over), text(change(over, 100)), text(change(over, 2000)))).toEqual({ ok: false });
+  const shorter = over.slice(0, 3000); // beide Seiten kürzen um dieselbe letzte Zeile, nur base ist zu lang
+  expect(mergeText(text(over), text(change(shorter, 100)), text(change(shorter, 2000)))).toEqual({ ok: false });
+  expect(mergeText(text(atLimit), text([...change(atLimit, 100), 'neu']), text(change(atLimit, 2000)))).toEqual({ ok: false });
+  expect(mergeText(text(atLimit), text(change(atLimit, 100)), text([...change(atLimit, 2000), 'neu']))).toEqual({ ok: false });
+
+  // Hat eine Seite nichts geändert, gilt die andere ohne Vergleich, auch bei langen Notizen.
+  expect(mergeText(text(over), text(over), text(change(over, 5)))).toEqual({ ok: true, text: text(change(over, 5)) });
+  expect(mergeText(text(over), text(change(over, 5)), text(over))).toEqual({ ok: true, text: text(change(over, 5)) });
 });
 
 // Kleiner Zufallsgenerator (mulberry32): jeder Lauf prüft dieselben Fälle.
