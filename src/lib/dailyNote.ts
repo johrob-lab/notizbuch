@@ -1,0 +1,166 @@
+import type { Day } from './dates';
+
+/** Reihenfolge der Abschnitte (Überschriften der Ebene 2, ohne `## `) in einer Tagesnotiz. */
+export const SECTION_ORDER: readonly string[] = [
+  'Morgenbriefing (automatisch)',
+  'Ergänzungen',
+  'Handschrift',
+  'Besprechungen',
+  'Besprechungen (GoodNotes)',
+  'Tagesabschluss (Chat)',
+  'Abendüberblick (automatisch)',
+];
+
+/** Abschnitt einer Tagesnotiz. `start` ist der Zeilenindex der Überschrift, `end` exklusiv. Gezählt wird in `md.split('\n')`. */
+export type Section = { heading: string; start: number; end: number };
+
+const ERGAENZUNGEN = 'Ergänzungen';
+
+// Überschrift der Ebene 2: `## Text`, nicht `### Text` und nicht `##Text`. `\s*$` schluckt auch ein `\r`.
+const HEADING = /^## +(\S.*?)\s*$/;
+// Aufzählungszeichen, optional eingerückt, optional mit Kästchen: `- `, `- [ ] `, `- [x] `. Gruppe 1: Inhalt des Kästchens.
+const ITEM = /^[ \t]*- (?:\[([ xX])\] )?/;
+// Marker der Routinen, `%%todo:…%%`, samt Leerraum davor. Ein `%%` ohne Ende gilt bis zum Zeilenende.
+const MARKER = /\s*%%.*?(?:%%|$)/g;
+
+type Item = {
+  /** Einrückung, Aufzählungszeichen und Kästchen, zum Beispiel `- [ ] `. */
+  prefix: string;
+  /** Inhalt des Kästchens (` `, `x` oder `X`), bei einem Listenpunkt ohne Kästchen `undefined`. */
+  box: string | undefined;
+  /** Der Rest der Zeile ohne ein abschließendes `\r`. */
+  body: string;
+  /** `\r` bei Windows-Zeilenenden, sonst leer. Wird beim Zurückschreiben wieder angehängt. */
+  eol: string;
+};
+
+function splitEol(line: string): [content: string, eol: string] {
+  return line.endsWith('\r') ? [line.slice(0, -1), '\r'] : [line, ''];
+}
+
+function parseItem(line: string): Item | null {
+  const [content, eol] = splitEol(line);
+  const match = ITEM.exec(content);
+  if (!match) return null;
+  return { prefix: match[0], box: match[1], body: content.slice(match[0].length), eol };
+}
+
+function itemAt(lines: string[], line: number): Item {
+  const item = lines[line] === undefined ? null : parseItem(lines[line]);
+  if (!item) throw new Error(`Zeile ${line} ist kein Listenpunkt`);
+  return item;
+}
+
+/**
+ * Text für eine Zeile: Zeilenumbrüche werden zu Leerzeichen, `%%` fällt weg (sonst entstünde oder
+ * bräche ein Marker), getrimmt.
+ */
+function cleanText(text: string): string {
+  return text.replace(/\s*[\r\n]+\s*/g, ' ').replace(/%%/g, '').trim();
+}
+
+/** Alle Abschnitte der Ebene 2 in der Reihenfolge der Datei. */
+export function parseSections(md: string): Section[] {
+  const lines = md.split('\n');
+  const sections: Section[] = [];
+  lines.forEach((line, i) => {
+    const match = HEADING.exec(line);
+    if (!match) return;
+    const previous = sections.at(-1);
+    if (previous) previous.end = i;
+    sections.push({ heading: match[1], start: i, end: lines.length });
+  });
+  return sections;
+}
+
+/** `- `, `- [ ] ` oder `- [x] ` am Zeilenanfang, auch eingerückt. */
+export function isItemLine(line: string): boolean {
+  return parseItem(line) !== null;
+}
+
+/** Der Text, den man in der Notiz sieht: ohne Aufzählungszeichen, ohne Kästchen, ohne `%%…%%`. */
+export function visibleText(line: string): string {
+  const [content] = splitEol(line);
+  const item = parseItem(content);
+  return (item ? item.body : content).replace(MARKER, '').trim();
+}
+
+/** Setzt den Haken oder nimmt ihn weg. Wirft, wenn die Zeile kein Kästchen hat. */
+export function toggleTask(md: string, line: number): string {
+  const lines = md.split('\n');
+  const item = itemAt(lines, line);
+  if (item.box === undefined) throw new Error(`Zeile ${line} hat kein Kästchen`);
+  const box = item.box === ' ' ? 'x' : ' ';
+  lines[line] = item.prefix.replace(/\[[ xX]\]/, `[${box}]`) + item.body + item.eol;
+  return lines.join('\n');
+}
+
+/**
+ * Ersetzt den sichtbaren Text eines Listenpunkts. Das Präfix bleibt, alle Marker bleiben in ihrer
+ * Reihenfolge und wandern ans Zeilenende, getrennt durch je ein Leerzeichen. Wirft, wenn die Zeile
+ * kein Listenpunkt ist.
+ */
+export function editItemText(md: string, line: number, text: string): string {
+  const lines = md.split('\n');
+  const item = itemAt(lines, line);
+  const markers = [...item.body.matchAll(MARKER)].map((match) => match[0].trim());
+  lines[line] = item.prefix + [cleanText(text), ...markers].filter(Boolean).join(' ') + item.eol;
+  return lines.join('\n');
+}
+
+/**
+ * Legt den Abschnitt an, falls er fehlt, und gibt den Zeilenindex seiner Überschrift zurück.
+ * Er kommt vor den ersten vorhandenen Abschnitt, der laut `SECTION_ORDER` später folgt, sonst ans
+ * Ende (so auch eine Überschrift, die nicht in `SECTION_ORDER` steht).
+ */
+export function ensureSection(md: string, heading: string): { md: string; line: number } {
+  const sections = parseSections(md);
+  const existing = sections.find((section) => section.heading === heading);
+  if (existing) return { md, line: existing.start };
+
+  const lines = md.split('\n');
+  const rank = SECTION_ORDER.indexOf(heading);
+  const later = rank < 0 ? undefined : sections.find((section) => SECTION_ORDER.indexOf(section.heading) > rank);
+
+  if (later) {
+    // Direkt vor die spätere Überschrift. Die Leerzeile danach trennt den neuen Abschnitt von ihr,
+    // davor steht normalerweise schon eine, sonst kommt eine dazu.
+    const needsBlank = later.start > 0 && lines[later.start - 1].trim() !== '';
+    lines.splice(later.start, 0, ...(needsBlank ? [''] : []), `## ${heading}`, '');
+    return { md: lines.join('\n'), line: later.start + (needsBlank ? 1 : 0) };
+  }
+
+  // Ans Ende: genau eine Leerzeile davor, danach endet die Datei mit einem Zeilenumbruch.
+  while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
+  const line = lines.length > 0 ? lines.length + 1 : 0;
+  lines.push(...(lines.length > 0 ? [''] : []), `## ${heading}`, '');
+  return { md: lines.join('\n'), line };
+}
+
+/**
+ * Hängt `- [ ] text` (mit Haken) oder `- text` unten an den Abschnitt „Ergänzungen“ an und legt ihn
+ * bei Bedarf an. Ein Text ohne sichtbare Zeichen ändert nichts.
+ */
+export function appendErgaenzung(md: string, text: string, asTask: boolean): string {
+  const clean = cleanText(text);
+  if (!clean) return md;
+
+  const ensured = ensureSection(md, ERGAENZUNGEN);
+  const lines = ensured.md.split('\n');
+
+  // Die neue Zeile kommt hinter die letzte nicht leere Zeile des Abschnitts (sonst hinter die Überschrift).
+  // Die Leerzeile vor der nächsten Überschrift bleibt dadurch erhalten.
+  let last = ensured.line;
+  for (let i = ensured.line + 1; i < lines.length && !HEADING.test(lines[i]); i++) {
+    if (lines[i].trim() !== '') last = i;
+  }
+  const item = asTask ? `- [ ] ${clean}` : `- ${clean}`;
+  // Nach einem Listenpunkt geht es direkt weiter, nach Überschrift oder Fließtext trennt eine Leerzeile.
+  lines.splice(last + 1, 0, ...(isItemLine(lines[last]) ? [item] : ['', item]));
+  return lines.join('\n');
+}
+
+/** Neue Tagesnotiz mit YAML-Kopf und Titel, noch ohne Abschnitte. */
+export function newDailyNote(d: Day): string {
+  return `---\ndate: ${d}\ntags: [daily]\n---\n# ${d}\n`;
+}
