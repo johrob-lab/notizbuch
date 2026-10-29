@@ -1,6 +1,10 @@
+import { boundsOf, emptyBox, growBox, lineWidth, type Box } from './bounds';
+import { hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
 import { clampView, GestureFilter, gestureView, isTwoFingerTap, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
-import { hitStroke, StrokeBuilder } from './stroke';
-import { INK, MM, PAGE_H, PAGE_W, WIDTH_MM, type FieldBox, type InkColor, type Page, type Stroke, type WidthName } from './types';
+import { History, restore, type Removed } from './history';
+import { extrapolate } from './predict';
+import { StrokeBuilder } from './stroke';
+import { INK, PAGE_H, PAGE_W, WIDTH_MM, type FieldBox, type InkColor, type Page, type Stroke, type WidthName } from './types';
 
 // Die Schreibfläche: drei Canvas-Ebenen übereinander (Grund mit Papier und fertigen Strichen, Live mit dem Strich, der
 // gerade entsteht, Vorhersage mit dem Stück voraus). Die Zeigerlogik stammt aus dem Stift-Test
@@ -13,23 +17,21 @@ export type SurfaceOptions = {
   /** Stärke der Glättung (σ, siehe `SMOOTHING`). */
   sigma: number;
   prediction: boolean;
+  /**
+   * Das Tor, das entscheidet, welche Berührungen Finger sind (Handballen, Stift liegt auf). Wer außerhalb der Fläche
+   * Berührungen annimmt, wo beim Schreiben die Hand ruht (der Schnellwechsel), teilt es mit der Fläche. Ohne Angabe hat
+   * die Fläche ein eigenes.
+   */
+  filter?: GestureFilter;
   /** Die Seite hat sich geändert (Strich fertig, radiert, rückgängig, wiederholt). Wird sofort, nicht verzögert, gerufen. */
   onChange: (p: Page) => void;
 };
 
-/** Rahmen als [links, oben, rechts, unten]. */
-type Box = [number, number, number, number];
-type Bounds = { box: Box; maxW: number };
-type Removed = { stroke: Stroke; index: number };
-type Action = { type: 'add'; stroke: Stroke } | { type: 'erase'; removed: Removed[] };
 type Drawing = { id: number; builder: StrokeBuilder; box: Box; current: Stroke; hist: { x: number; y: number; t: number }[] };
 type Erasing = { id: number; removed: Removed[]; last: Pt2 };
 type Gesture = { revert: View; ref: View; from: Pt2[]; moved: boolean; snapView: View | null };
 
 const ERASER_RADIUS_PX = 10;
-/** Abstand der Prüfpunkte entlang des Radierwegs: Auch ein schneller Stift lässt keine Lücke, durch die ein Strich rutscht. */
-const ERASER_STEP_PX = 5;
-const MAX_HISTORY = 300;
 /** Ab so vielen Punkten auf der Seite zoomt eine Geste nur das Bild und zeichnet erst am Ende neu. */
 const HEAVY_POINTS = 8000;
 const MIN_ZOOM = 0.3;
@@ -37,14 +39,6 @@ const MAX_ZOOM = 10;
 const PAPER = '#fffefa';
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
-const emptyBox = (): Box => [Infinity, Infinity, -Infinity, -Infinity];
-
-function growBox(b: Box, p: Pt2): void {
-  if (p.x < b[0]) b[0] = p.x;
-  if (p.y < b[1]) b[1] = p.y;
-  if (p.x > b[2]) b[2] = p.x;
-  if (p.y > b[3]) b[3] = p.y;
-}
 
 /** Alle Zeigerereignisse zwischen zwei Bildern, soweit der Browser sie liefert, sonst nur das eine. */
 function samples(e: PointerEvent): PointerEvent[] {
@@ -80,7 +74,6 @@ export class InkSurface {
   // Seite
   private head: Pick<Page, 'kind' | 'key' | 'meta'> = { kind: 'tag', key: '', meta: {} };
   private strokes: Stroke[] = [];
-  private readonly bounds = new WeakMap<Stroke, Bounds>();
   private background: HTMLImageElement | null = null;
   private backgroundSvg = '';
 
@@ -100,11 +93,10 @@ export class InkSurface {
   private hasView = false;
 
   // Verlauf
-  private undoStack: Action[] = [];
-  private redoStack: Action[] = [];
+  private readonly history = new History();
 
   // Eingabe
-  private readonly filter = new GestureFilter();
+  private readonly filter: GestureFilter;
   private drawing: Drawing | null = null;
   private erasing: Erasing | null = null;
   private readonly touches = new Map<number, Pt2>();
@@ -119,6 +111,7 @@ export class InkSurface {
   constructor(el: HTMLElement, o: SurfaceOptions) {
     this.el = el;
     this.opts = o;
+    this.filter = o.filter ?? new GestureFilter();
     this.readOnly = o.readOnly;
     if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
     Object.assign(el.style, { overflow: 'hidden', touchAction: 'none', userSelect: 'none', cursor: 'grab' });
@@ -150,11 +143,11 @@ export class InkSurface {
   // ---------- Öffentliche Schnittstelle ----------
 
   get canUndo(): boolean {
-    return !this.readOnly && this.undoStack.length > 0;
+    return !this.readOnly && this.history.canUndo;
   }
 
   get canRedo(): boolean {
-    return !this.readOnly && this.redoStack.length > 0;
+    return !this.readOnly && this.history.canRedo;
   }
 
   /**
@@ -163,12 +156,14 @@ export class InkSurface {
    * (dasselbe wie für `serializePage`). Die Felder zeichnet die Fläche nicht selbst, sie stecken im Hintergrund.
    */
   setPage(p: Page, _fields: FieldBox[], background: string): void {
+    // Was gerade entsteht, bleibt: Ein Strich kommt am Ende zur neuen Seite dazu. Radiert der Stift gerade, bleiben die
+    // Striche weg, die er schon erfasst hat, und er radiert weiter (auch aus der neuen Seite).
+    const erased = this.erasing ? new Set(this.erasing.removed.map((r) => r.stroke.id)) : null;
     this.head = { kind: p.kind, key: p.key, meta: { ...p.meta } };
     this.strokes = p.strokes.slice();
-    this.undoStack = [];
-    this.redoStack = [];
-    this.erasing = null; // ein Strich, der gerade entsteht, bleibt: Er kommt am Ende zur neuen Seite dazu
-    if (!this.drawing) this.clearLive(true);
+    this.history.clear();
+    if (this.erasing && erased) this.erasing.removed = takeOutIds(this.strokes, erased);
+    if (!this.drawing && !this.erasing) this.clearLive(true);
     this.setBackground(background);
     this.render();
   }
@@ -190,32 +185,31 @@ export class InkSurface {
     this.widthMm = WIDTH_MM[w];
   }
 
+  /**
+   * Sperrt die Fläche oder gibt sie frei. Beim Sperren endet, was gerade entsteht, ohne zur Seite zu gehören: Ein Strich
+   * verschwindet, radierte Striche stehen wieder da. Die Seite wird nicht mehr gespeichert, also soll auch nichts auf
+   * dem Bildschirm stehen, was nie gespeichert wird.
+   */
   setReadOnly(on: boolean): void {
     this.readOnly = on;
+    if (on) this.cancelInput();
   }
 
   undo(): void {
-    const a = this.readOnly ? undefined : this.undoStack.pop();
-    if (!a) return;
-    if (a.type === 'add') {
-      const i = this.strokes.lastIndexOf(a.stroke);
-      if (i >= 0) this.strokes.splice(i, 1);
-    } else {
-      for (let k = a.removed.length - 1; k >= 0; k--) this.strokes.splice(a.removed[k].index, 0, a.removed[k].stroke);
-    }
-    this.redoStack.push(a);
-    this.render();
-    this.changed();
+    if (!this.readOnly && this.history.undo(this.strokes)) this.edited();
   }
 
   redo(): void {
-    const a = this.readOnly ? undefined : this.redoStack.pop();
-    if (!a) return;
-    if (a.type === 'add') this.strokes.push(a.stroke);
-    else for (const r of a.removed) this.strokes.splice(r.index, 1);
-    this.undoStack.push(a);
-    this.render();
-    this.changed();
+    if (!this.readOnly && this.history.redo(this.strokes)) this.edited();
+  }
+
+  /**
+   * Der Stift hebt ab, ohne dass er es getan hat, weil die Seite verlassen wird: Ein Strich oder Radieren im Gang
+   * wird fertig und gemeldet wie sonst beim Abheben.
+   */
+  finishInput(): void {
+    if (this.drawing) this.finishDraw(true);
+    if (this.erasing) this.finishErase();
   }
 
   /** Die ganze Seitenbreite auf den Bildschirm. */
@@ -237,9 +231,12 @@ export class InkSurface {
     this.observer.disconnect();
     cancelAnimationFrame(this.raf);
     clearTimeout(this.predTimer);
-    this.base.remove();
-    this.live.remove();
-    this.pred.remove();
+    for (const c of [this.base, this.live, this.pred, this.snap]) {
+      c.remove();
+      // Safari gibt den Speicher einer Zeichenfläche erst frei, wenn sie nichts mehr zu halten hat, und deckelt alle zusammen.
+      c.width = 0;
+      c.height = 0;
+    }
   }
 
   // ---------- Aufbau ----------
@@ -298,6 +295,23 @@ export class InkSurface {
     this.opts.onChange(this.getPage());
   }
 
+  /** Die Striche haben sich durch Rückgängig oder Wiederholen geändert. */
+  private edited(): void {
+    this.render();
+    this.changed();
+  }
+
+  /** Verwirft, was gerade entsteht (siehe `setReadOnly`). */
+  private cancelInput(): void {
+    if (this.drawing) this.finishDraw(false);
+    const er = this.erasing;
+    if (!er) return;
+    this.erasing = null;
+    restore(this.strokes, er.removed);
+    this.clearLive(true);
+    this.render();
+  }
+
   // ---------- Koordinaten ----------
 
   private local(e: { clientX: number; clientY: number }): Pt2 {
@@ -315,24 +329,14 @@ export class InkSurface {
 
   // ---------- Zeichnen ----------
 
-  /** Linienbreite eines Strichs auf dem Bildschirm: nie dünner als ein Bildpunkt, sonst verschwindet er. */
-  private lineW(s: Stroke): number {
-    return Math.max(s.w > 0 ? s.w : s.widthMm * MM, 1 / (this.view.s * this.dpr));
+  /** Ein Bildpunkt in Seiteneinheiten: Dünner wird kein Strich gezeichnet, sonst verschwindet er. */
+  private pixel(): number {
+    return 1 / (this.view.s * this.dpr);
   }
 
-  private boundsOf(s: Stroke): Bounds {
-    let b = this.bounds.get(s);
-    if (!b) {
-      const box = emptyBox();
-      let maxW = 0;
-      for (const p of s.pts) {
-        growBox(box, p);
-        if (p.w > maxW) maxW = p.w;
-      }
-      b = { box, maxW };
-      this.bounds.set(s, b);
-    }
-    return b;
+  /** Linienbreite eines Strichs auf dem Bildschirm. */
+  private lineW(s: Stroke): number {
+    return lineWidth(s, this.pixel());
   }
 
   /**
@@ -415,7 +419,7 @@ export class InkSurface {
       const x1 = x0 + this.vw / view.s;
       const y1 = y0 + this.vh / view.s;
       for (const s of this.strokes) {
-        const { box, maxW } = this.boundsOf(s);
+        const { box, maxW } = boundsOf(s);
         const m = Math.max(maxW, this.lineW(s));
         if (box[2] + m < x0 || box[0] - m > x1 || box[3] + m < y0 || box[1] - m > y1) continue;
         this.drawStroke(bctx, s);
@@ -486,31 +490,8 @@ export class InkSurface {
     } catch {
       // keine Vorhersage vom Browser
     }
-    if (!target) {
-      // Sonst aus der Geschwindigkeit der letzten Punkte 18 ms vorausrechnen, höchstens 16 px weit.
-      const h = d.hist;
-      const n = h.length;
-      if (n < 3) return;
-      const a = h[n - 1];
-      let b = h[0];
-      for (let i = n - 2; i >= 0; i--) {
-        if (a.t - h[i].t >= 12) {
-          b = h[i];
-          break;
-        }
-      }
-      const dt = a.t - b.t;
-      if (dt <= 0 || dt > 60) return;
-      let dx = ((a.x - b.x) / dt) * 18;
-      let dy = ((a.y - b.y) / dt) * 18;
-      const len = Math.hypot(dx, dy);
-      if (len < 0.5) return;
-      if (len > 16) {
-        dx *= 16 / len;
-        dy *= 16 / len;
-      }
-      target = { x: a.x + dx, y: a.y + dy };
-    }
+    target ??= extrapolate(d.hist); // sonst aus der Geschwindigkeit der letzten Punkte vorausrechnen
+    if (!target) return;
     const pts = d.current.pts;
     const last = pts[pts.length - 1];
     const t = this.toPage(target.x, target.y);
@@ -569,7 +550,7 @@ export class InkSurface {
     this.strokes.push(s);
     this.setView(this.bctx);
     this.drawStroke(this.bctx, s);
-    this.push({ type: 'add', stroke: s });
+    this.history.push({ type: 'add', stroke: s });
     this.changed();
   }
 
@@ -580,28 +561,15 @@ export class InkSurface {
     const er = this.erasing;
     if (!er) return;
     const p = this.toPage(at.x, at.y);
-    const r = ERASER_RADIUS_PX / this.view.s;
-    let hit = false;
-    for (let i = this.strokes.length - 1; i >= 0; i--) {
-      const s = this.strokes[i];
-      const { box, maxW } = this.boundsOf(s);
-      const w = this.lineW(s);
-      const m = r + Math.max(maxW, w);
-      if (p.x < box[0] - m || p.x > box[2] + m || p.y < box[1] - m || p.y > box[3] + m) continue;
-      // `hitStroke` rechnet mit der Breite des Strichs, gezeichnet wird er aber mindestens einen Bildpunkt breit.
-      if (hitStroke(s, p.x, p.y, r + Math.max(0, w - s.w) / 2)) {
-        er.removed.push({ stroke: s, index: i });
-        this.strokes.splice(i, 1);
-        hit = true;
-      }
-    }
-    if (hit) this.scheduleRender();
+    const hits = hitIndexes(this.strokes, p, ERASER_RADIUS_PX / this.view.s, this.pixel());
+    if (!hits.length) return;
+    er.removed.push(...takeOut(this.strokes, hits));
+    this.scheduleRender();
   }
 
-  /** Radiert entlang einer Strecke, in Schritten von 5 Bildschirmpunkten, damit kein Strich zwischen zwei Messpunkten durchrutscht. */
+  /** Radiert entlang einer Strecke in kleinen Schritten, damit kein Strich zwischen zwei Messpunkten durchrutscht. */
   private erasePath(from: Pt2, to: Pt2): void {
-    const steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / ERASER_STEP_PX));
-    for (let i = 1; i <= steps; i++) this.eraseAt({ x: from.x + ((to.x - from.x) * i) / steps, y: from.y + ((to.y - from.y) * i) / steps });
+    for (const at of pointsAlong(from, to)) this.eraseAt(at);
   }
 
   private eraserCursor(p: Pt2): void {
@@ -623,14 +591,8 @@ export class InkSurface {
     this.erasing = null;
     this.clearLive(true);
     if (!er?.removed.length) return;
-    this.push({ type: 'erase', removed: er.removed });
+    this.history.push({ type: 'erase', removed: er.removed });
     this.changed();
-  }
-
-  private push(a: Action): void {
-    this.undoStack.push(a);
-    if (this.undoStack.length > MAX_HISTORY) this.undoStack.shift();
-    this.redoStack.length = 0;
   }
 
   // ---------- Ansicht und Gesten ----------

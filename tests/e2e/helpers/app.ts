@@ -29,6 +29,8 @@ export type Device = 'iPad' | 'Firmen-PC';
 export type OpenOptions = {
   /** Jede Anfrage an GitHub scheitert wie ohne Netz. */
   offline?: boolean;
+  /** Anfragen nach einer Datei antworten mit einem Serverfehler (500), bis `RepoMock.failReads` wieder `false` ist. */
+  failReads?: boolean;
   device?: Device;
   /** Dateien, die zusätzlich im Repo liegen (oder die Fassung aus dem Mini-Vault ersetzen). */
   files?: Record<string, string>;
@@ -43,6 +45,8 @@ export type RepoMock = {
   deletes: Delete[];
   /** Anfragen, die der Mock nicht kennt. Sie bekommen den Status 501. */
   unhandled: string[];
+  /** Solange das `true` ist, antwortet GitHub auf jede Anfrage nach einer Datei mit einem Serverfehler (500). */
+  failReads: boolean;
   read(path: string): string | undefined;
   /** Eine Änderung von einem anderen Gerät: neuer Stand und neuer Commit, aber kein Eintrag in `puts`. */
   commit(path: string, text: string): void;
@@ -94,11 +98,12 @@ function createRepo(extra: Record<string, string>): RepoMock & { files: Map<stri
 
   const contentsPrefix = `/repos/${REPO}/contents/`;
 
-  return {
+  const mock: ReturnType<typeof createRepo> = {
     files,
     puts,
     deletes,
     unhandled,
+    failReads: false,
     read: (path) => files.get(path),
     commit(path, text) {
       files.set(path, text);
@@ -122,6 +127,7 @@ function createRepo(extra: Record<string, string>): RepoMock & { files: Map<stri
           .normalize('NFC');
         const text = files.get(path);
         if (method === 'GET') {
+          if (mock.failReads) return json(route, 500, { message: 'Server Error' });
           if (text === undefined) return json(route, 404, { message: 'Not Found' });
           return json(route, 200, {
             type: 'file',
@@ -176,6 +182,7 @@ function createRepo(extra: Record<string, string>): RepoMock & { files: Map<stri
       return fail();
     },
   };
+  return mock;
 }
 
 /**
@@ -186,6 +193,7 @@ function createRepo(extra: Record<string, string>): RepoMock & { files: Map<stri
  */
 export async function openSeeded(page: Page, hash: string, o: OpenOptions = {}): Promise<RepoMock> {
   const repo = createRepo(o.files ?? {});
+  repo.failReads = o.failReads ?? false;
   await page.route('https://api.github.com/**', (route) => (o.offline ? route.abort('internetdisconnected') : repo.handle(route)));
 
   const settings = {
@@ -288,5 +296,12 @@ export async function bringToForeground(page: Page): Promise<void> {
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
     document.dispatchEvent(new Event('visibilitychange'));
+  });
+}
+
+/** Das Netz ist wieder da: Das Gerät meldet `online`. */
+export async function networkBack(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('online'));
   });
 }

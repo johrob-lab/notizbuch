@@ -44,21 +44,42 @@ function gate() {
 
 type Gate = ReturnType<typeof gate>;
 
-function fakeEngine(initial: string | null = null) {
+function fakeEngine(initial: string | null = null, others: Record<string, string | null> = {}) {
   const readGates: Gate[] = [];
   const writeGates: Gate[] = [];
+  const files = new Map<string, string | null>([[PATH, initial], ...Object.entries(others)]);
+  const listeners = new Set<(paths: string[]) => void>();
   const e = {
-    /** Die Fassung, die `read` liefert und `write` ersetzt, wie die lokale Kopie der echten Engine. */
-    text: initial,
+    /** Die Fassung von `PATH`, die `read` liefert und `write` ersetzt, wie die lokale Kopie der echten Engine. */
+    get text(): string | null {
+      return files.get(PATH) ?? null;
+    },
+    set text(value: string | null) {
+      files.set(PATH, value);
+    },
+    files,
     log: [] as string[],
     reads: 0,
     writes: [] as string[],
     active: 0,
     maxActive: 0,
     flushes: 0,
+    /** So viele der nächsten Schreibaufträge scheitern. Ein gescheiterter Auftrag ändert die Kopie nicht. */
     failWrites: 0,
     readError: undefined as Error | undefined,
-    onRemoteChange: undefined as ((paths: string[]) => void) | undefined,
+    get listenerCount(): number {
+      return listeners.size;
+    },
+    /** Fremde Änderungen an diesen Dateien kommen an. */
+    notify(paths: string[]): void {
+      for (const listener of [...listeners]) listener(paths);
+    },
+    addRemoteChangeListener(listener: (paths: string[]) => void): () => void {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     /** Die nächste `read`-Anfrage liest sofort, antwortet aber erst nach `release()`. */
     holdRead(): Gate {
       const g = gate();
@@ -71,10 +92,10 @@ function fakeEngine(initial: string | null = null) {
       return g;
     },
     async read(path: string): Promise<string | null> {
-      expect(path).toBe(PATH);
+      expect(files.has(path)).toBe(true);
       e.reads++;
       e.log.push('read');
-      const value = e.text;
+      const value = files.get(path) ?? null;
       const g = readGates.shift();
       if (g) {
         g.arrive();
@@ -84,13 +105,12 @@ function fakeEngine(initial: string | null = null) {
       return value;
     },
     async write(path: string, text: string, kind: 'md' | 'svg'): Promise<void> {
-      expect(path).toBe(PATH);
+      expect(files.has(path)).toBe(true);
       expect(kind).toBe('svg');
       e.log.push('write');
       e.active++;
       e.maxActive = Math.max(e.maxActive, e.active);
       e.writes.push(text);
-      e.text = text;
       try {
         const g = writeGates.shift();
         if (g) {
@@ -101,6 +121,7 @@ function fakeEngine(initial: string | null = null) {
           e.failWrites--;
           throw new Error('Speicher voll');
         }
+        files.set(path, text);
       } finally {
         e.active--;
         e.log.push('written');
@@ -131,15 +152,40 @@ function fakeSurface(start: Page = empty()) {
   return s satisfies PageSurface;
 }
 
-function open(engine: ReturnType<typeof fakeEngine>, surface: ReturnType<typeof fakeSurface>, o: { readOnly?: boolean } = {}) {
+/** Die Anlässe für einen neuen Versuch, von Hand ausgelöst: `fire()` heißt, das Netz ist zurück. */
+function fakeCues() {
+  const subscribed = new Set<() => void>();
+  return {
+    subscribe(retry: () => void): () => void {
+      subscribed.add(retry);
+      return () => {
+        subscribed.delete(retry);
+      };
+    },
+    /** Wie viele Zuhörer gerade auf einen Anlass warten. */
+    get listening(): number {
+      return subscribed.size;
+    },
+    fire(): void {
+      for (const retry of [...subscribed]) retry();
+    },
+  };
+}
+
+function open(
+  engine: ReturnType<typeof fakeEngine>,
+  surface: ReturnType<typeof fakeSurface>,
+  o: { readOnly?: boolean; path?: string; cues?: ReturnType<typeof fakeCues> } = {},
+) {
   const phases: Phase[] = [];
   const saveFailed: boolean[] = [];
   const session = new PageSession({
     engine,
-    path: PATH,
+    path: o.path ?? PATH,
     emptyPage: empty,
     readOnly: o.readOnly ?? false,
     surface,
+    retryCues: o.cues?.subscribe,
     onPhase: (p) => phases.push(p),
     onSaveFailed: (f) => saveFailed.push(f),
   });
@@ -222,15 +268,104 @@ test('an unreadable page is locked, announced and never written', async () => {
   expect(engine.writes).toEqual([]);
 });
 
-test('text the engine cannot read is just as unreadable', async () => {
+test('an error while reading is no broken page: it is announced as not loaded, locked and never written', async () => {
   const engine = fakeEngine('egal');
-  engine.readError = new TypeError('Kein UTF-8');
+  engine.readError = new Error('GitHub antwortete mit Status 500.');
   const surface = fakeSurface();
   const { session, phases } = open(engine, surface);
   await session.reload();
-  expect(phases).toEqual(['unlesbar']);
+  expect(phases).toEqual(['nichtGeladen']);
   expect(surface.readOnly).toBe(true);
   expect(surface.sets).toEqual([]);
+  session.changed(pageOf(stroke('x', 5)));
+  await settle();
+  expect(engine.writes).toEqual([]);
+});
+
+test('a page that could not be loaded loads when a retry cue comes, and then stops waiting for cues', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  engine.readError = new Error('GitHub antwortete mit Status 500.');
+  const cues = fakeCues();
+  const surface = fakeSurface();
+  const { session, phases } = open(engine, surface, { cues });
+  await session.reload();
+  expect(phases).toEqual(['nichtGeladen']);
+  expect(cues.listening).toBe(1);
+
+  engine.readError = undefined;
+  cues.fire();
+  await settle();
+  expect(phases).toEqual(['nichtGeladen', 'bereit']);
+  expect(ids(surface.page)).toEqual(['a']);
+  expect(surface.readOnly).toBe(false);
+  expect(cues.listening).toBe(0);
+});
+
+test('a page that still cannot be loaded keeps waiting, with one subscription and no writing', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  engine.readError = new Error('GitHub antwortete mit Status 500.');
+  const cues = fakeCues();
+  const surface = fakeSurface();
+  const { session, phases } = open(engine, surface, { cues });
+  await session.reload();
+  cues.fire();
+  await settle();
+  cues.fire();
+  await settle();
+  expect(engine.reads).toBe(3);
+  expect(phases.every((phase) => phase === 'nichtGeladen')).toBe(true);
+  expect(cues.listening).toBe(1);
+  expect(surface.readOnly).toBe(true);
+  session.changed(pageOf(stroke('x', 5)));
+  await settle();
+  expect(engine.writes).toEqual([]);
+});
+
+test('a broken page is no reason to try again, only a change from another device is', async () => {
+  const engine = fakeEngine(BROKEN);
+  const cues = fakeCues();
+  const surface = fakeSurface();
+  const { session, phases } = open(engine, surface, { cues });
+  await session.reload();
+  expect(phases).toEqual(['unlesbar']);
+  expect(cues.listening).toBe(0);
+});
+
+test('closing stops waiting for retry cues', async () => {
+  const engine = fakeEngine('egal');
+  engine.readError = new Error('GitHub antwortete mit Status 500.');
+  const cues = fakeCues();
+  const { session } = open(engine, fakeSurface(), { cues });
+  await session.reload();
+  session.close();
+  expect(cues.listening).toBe(0);
+});
+
+test('a page that was shown and then cannot be read again is locked, and loads again on a cue', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  const cues = fakeCues();
+  const surface = fakeSurface();
+  const { session, phases } = open(engine, surface, { cues });
+  await session.reload();
+  expect(cues.listening).toBe(0);
+
+  engine.readError = new Error('GitHub antwortete mit Status 500.');
+  engine.notify([PATH]);
+  await settle();
+  expect(phases).toEqual(['bereit', 'nichtGeladen']);
+  expect(surface.readOnly).toBe(true);
+  session.changed(pageOf(stroke('late', 9000)));
+  await settle();
+  expect(engine.writes).toEqual([]);
+
+  engine.readError = undefined;
+  engine.text = svgOf(stroke('a', 1000), stroke('b', 3000));
+  cues.fire();
+  await settle();
+  expect(phases).toEqual(['bereit', 'nichtGeladen', 'bereit']);
+  expect(surface.readOnly).toBe(false);
+  expect(ids(surface.page)).toEqual(['a', 'b']);
+  expect(cues.listening).toBe(0);
 });
 
 test('a page that becomes unreadable is locked, and unlocked again once it can be read', async () => {
@@ -240,7 +375,7 @@ test('a page that becomes unreadable is locked, and unlocked again once it can b
   await session.reload();
 
   engine.text = BROKEN;
-  engine.onRemoteChange?.([PATH]);
+  engine.notify([PATH]);
   await settle();
   expect(phases).toEqual(['bereit', 'unlesbar']);
   expect(surface.readOnly).toBe(true);
@@ -249,7 +384,7 @@ test('a page that becomes unreadable is locked, and unlocked again once it can b
   expect(engine.writes).toEqual([]);
 
   engine.text = svgOf(stroke('a', 1000), stroke('b', 3000));
-  engine.onRemoteChange?.([PATH]);
+  engine.notify([PATH]);
   await settle();
   expect(phases).toEqual(['bereit', 'unlesbar', 'bereit']);
   expect(surface.readOnly).toBe(false);
@@ -302,6 +437,174 @@ test('a failed save is reported, and the next change saves the whole page again'
   expect(ids(engine.writes[1])).toEqual(['a', 'b']);
 });
 
+test('a failed save is tried once more when the page is closed', async () => {
+  const engine = fakeEngine(null);
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+  engine.failWrites = 1;
+  session.changed(pageOf(stroke('a', 1)));
+  await settle();
+  expect(engine.writes).toHaveLength(1);
+  expect(engine.text).toBeNull(); // gescheitert: nichts gespeichert
+
+  session.close();
+  await settle();
+  expect(engine.writes).toHaveLength(2);
+  expect(engine.writes[1]).toBe(engine.writes[0]);
+  expect(ids(engine.text!)).toEqual(['a']);
+  expect(engine.log.slice(-2)).toEqual(['written', 'flush']);
+});
+
+test('a change that arrives while a save fails is saved right away', async () => {
+  const engine = fakeEngine(null);
+  const surface = fakeSurface();
+  const { session, saveFailed } = open(engine, surface);
+  await session.reload();
+  engine.failWrites = 1;
+  const slow = engine.holdWrite();
+  session.changed(pageOf(stroke('a', 1)));
+  await slow.reached;
+  session.changed(pageOf(stroke('a', 1), stroke('b', 2))); // kommt, während der erste Auftrag noch läuft
+  slow.release(); // und der erste scheitert
+  await settle();
+  expect(engine.writes.map(ids)).toEqual([['a'], ['a', 'b']]);
+  expect(saveFailed).toEqual([true, false]);
+  expect(ids(engine.text!)).toEqual(['a', 'b']);
+});
+
+test('a failed save is not repeated on its own', async () => {
+  const engine = fakeEngine(null);
+  const surface = fakeSurface();
+  const { session, saveFailed } = open(engine, surface);
+  await session.reload();
+  engine.failWrites = 100;
+  session.changed(pageOf(stroke('a', 1)));
+  await settle();
+  await settle();
+  expect(engine.writes).toHaveLength(1);
+  expect(saveFailed).toEqual([true]);
+});
+
+test('a failed save is tried again before the page is read again, so the strokes are not lost', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  const surface = fakeSurface();
+  const { session, phases } = open(engine, surface);
+  await session.reload();
+  engine.failWrites = 1;
+  surface.page = pageOf(stroke('a', 1000), stroke('mine', 5000));
+  session.changed(surface.page);
+  await settle();
+  expect(engine.writes).toHaveLength(1);
+
+  engine.notify([PATH]);
+  await settle();
+  expect(engine.writes).toHaveLength(2);
+  expect(engine.log.slice(-3)).toEqual(['write', 'written', 'read']); // erst speichern, dann lesen
+  expect(ids(surface.page)).toEqual(['a', 'mine']);
+  expect(phases.at(-1)).toBe('bereit');
+});
+
+test('when that second try fails too, the strokes of the page stay and are saved together with what was read', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000, 100)));
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+  engine.failWrites = 2;
+  surface.page = pageOf(stroke('a', 1000, 100), stroke('mine', 5000, 400));
+  session.changed(surface.page);
+  await settle();
+
+  engine.text = svgOf(stroke('a', 1000, 100), stroke('b', 500, 200)); // ein anderes Gerät hat 'b' ergänzt
+  engine.notify([PATH]);
+  await settle();
+  expect(ids(surface.page)).toEqual(['b', 'a', 'mine']);
+  const saved = engine.writes[engine.writes.length - 1];
+  expect(ids(saved).sort()).toEqual(['a', 'b', 'mine']);
+  expect(engine.text).toBe(saved);
+});
+
+test('a failed save is not written into a broken page, and not lost: it joins the page once that can be read again', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  const surface = fakeSurface();
+  const { session, phases } = open(engine, surface);
+  await session.reload();
+  engine.failWrites = 2;
+  surface.page = pageOf(stroke('a', 1000), stroke('mine', 5000));
+  session.changed(surface.page);
+  await settle();
+
+  engine.text = BROKEN;
+  engine.notify([PATH]);
+  await settle();
+  expect(phases.at(-1)).toBe('unlesbar');
+  const attempts = engine.writes.length;
+  session.changed(pageOf(stroke('late', 9000))); // eine gesperrte Fläche meldet nichts, aber falls doch: nichts wird geschrieben
+  await settle();
+  expect(engine.writes).toHaveLength(attempts);
+  expect(engine.text).toBe(BROKEN);
+
+  engine.text = svgOf(stroke('a', 1000), stroke('b', 3000)); // ein anderes Gerät hat die Seite repariert
+  engine.notify([PATH]);
+  await settle();
+  expect(phases.at(-1)).toBe('bereit');
+  expect(ids(surface.page)).toEqual(['a', 'b', 'mine']);
+  expect(ids(engine.text ?? '')).toEqual(['a', 'b', 'mine']);
+});
+
+test('a failed save is not written when the page is closed while it is locked', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  const surface = fakeSurface();
+  const { session, phases } = open(engine, surface);
+  await session.reload();
+  engine.failWrites = 2;
+  session.changed(pageOf(stroke('a', 1000), stroke('mine', 5000)));
+  await settle();
+
+  engine.text = BROKEN;
+  engine.notify([PATH]);
+  await settle();
+  expect(phases.at(-1)).toBe('unlesbar');
+  const attempts = engine.writes.length;
+  session.close();
+  await settle();
+  expect(engine.writes).toHaveLength(attempts);
+  expect(engine.text).toBe(BROKEN);
+});
+
+test('a change that waits behind a running save is not written once the page was locked, and joins the page later', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  const surface = fakeSurface();
+  const { session, phases } = open(engine, surface);
+  await session.reload();
+
+  engine.text = BROKEN; // ein anderes Gerät macht die Seite kaputt ...
+  const read = engine.holdRead();
+  engine.notify([PATH]);
+  await read.reached; // ... und die Sitzung liest sie gerade
+  const running = engine.holdWrite();
+  surface.page = pageOf(stroke('a', 1000), stroke('one', 5000));
+  session.changed(surface.page); // das Speichern läuft
+  await running.reached;
+  surface.page = pageOf(stroke('a', 1000), stroke('one', 5000), stroke('two', 6000));
+  session.changed(surface.page); // die neuere Fassung wartet dahinter
+
+  read.release(); // jetzt zeigt sich: Die Seite ist kaputt
+  await settle();
+  expect(phases.at(-1)).toBe('unlesbar');
+  running.release();
+  await settle();
+  expect(engine.writes).toHaveLength(1); // nur das, was schon lief
+  expect(ids(engine.writes[0])).toEqual(['a', 'one']);
+
+  engine.text = svgOf(stroke('a', 1000), stroke('b', 3000)); // repariert
+  engine.notify([PATH]);
+  await settle();
+  expect(phases.at(-1)).toBe('bereit');
+  expect(ids(surface.page)).toEqual(['a', 'b', 'one', 'two']);
+  expect(ids(engine.text ?? '')).toEqual(['a', 'b', 'one', 'two']);
+});
+
 // ---------- Fremde Änderungen ----------
 
 test('a change from another device replaces the page', async () => {
@@ -311,28 +614,51 @@ test('a change from another device replaces the page', async () => {
   await session.reload();
 
   engine.text = svgOf(stroke('a', 1000), stroke('b', 500));
-  engine.onRemoteChange?.([PATH]);
+  engine.notify([PATH]);
   await settle();
   expect(ids(surface.page)).toEqual(['b', 'a']);
   expect(engine.writes).toEqual([]); // ansehen ist kein Schreiben
 });
 
-test('changes to other files are none of its business, but the previous handler hears them', async () => {
+test('changes to other files are none of its business', async () => {
   const engine = fakeEngine(svgOf(stroke('a', 1000)));
-  const heard: string[][] = [];
-  engine.onRemoteChange = (paths) => heard.push(paths);
   const surface = fakeSurface();
   const { session } = open(engine, surface);
   await session.reload();
   const reads = engine.reads;
 
-  engine.onRemoteChange?.(['05 Daily Notes/2026-10-29.md']);
+  engine.notify(['05 Daily Notes/2026-10-29.md']);
   await settle();
   expect(engine.reads).toBe(reads);
-  engine.onRemoteChange?.([PATH]);
+  engine.notify([PATH]);
   await settle();
   expect(engine.reads).toBe(reads + 1);
-  expect(heard).toEqual([['05 Daily Notes/2026-10-29.md'], [PATH]]);
+});
+
+test('sessions of several pages on one engine hear their own page and can close in any order', async () => {
+  const OTHER = '07 Anhänge/Notizbuch/2026/2026-10-30 Tag.svg';
+  const engine = fakeEngine(svgOf(stroke('a', 1000)), { [OTHER]: svgOf(stroke('x', 1000)) });
+  const first = fakeSurface();
+  const second = fakeSurface();
+  const one = open(engine, first);
+  const two = open(engine, second, { path: OTHER });
+  await one.session.reload();
+  await two.session.reload();
+  expect(engine.listenerCount).toBe(2);
+
+  // Die erste Sitzung schließt zuerst, obwohl die zweite später kam.
+  one.session.close();
+  expect(engine.listenerCount).toBe(1);
+  const reads = engine.reads;
+  engine.files.set(OTHER, svgOf(stroke('x', 1000), stroke('y', 2000)));
+  engine.notify([OTHER]);
+  await settle();
+  expect(engine.reads).toBe(reads + 1);
+  expect(ids(second.page)).toEqual(['x', 'y']);
+  expect(ids(first.page)).toEqual(['a']); // die geschlossene Seite bleibt, wie sie war
+
+  two.session.close();
+  expect(engine.listenerCount).toBe(0);
 });
 
 test('the path is compared in its composed form', async () => {
@@ -341,7 +667,7 @@ test('the path is compared in its composed form', async () => {
   const { session } = open(engine, surface);
   await session.reload();
   const reads = engine.reads;
-  engine.onRemoteChange?.([PATH.normalize('NFD')]);
+  engine.notify([PATH.normalize('NFD')]);
   await settle();
   expect(engine.reads).toBe(reads + 1);
 });
@@ -352,7 +678,7 @@ test('the same strokes do not reset the page, so undo keeps working', async () =
   const { session } = open(engine, surface);
   await session.reload();
   expect(surface.sets).toHaveLength(1);
-  engine.onRemoteChange?.([PATH]);
+  engine.notify([PATH]);
   await settle();
   expect(surface.sets).toHaveLength(1);
 });
@@ -438,11 +764,10 @@ test('a stroke made while a vanished page was being read is kept', async () => {
 
 test('closing uploads once everything is saved and stops listening', async () => {
   const engine = fakeEngine(null);
-  const previous = (_paths: string[]) => undefined;
-  engine.onRemoteChange = previous;
   const surface = fakeSurface();
   const { session } = open(engine, surface);
   await session.reload();
+  expect(engine.listenerCount).toBe(1);
 
   const slow = engine.holdWrite();
   session.changed(pageOf(stroke('a', 1)));
@@ -455,9 +780,9 @@ test('closing uploads once everything is saved and stops listening', async () =>
   expect(engine.flushes).toBe(1);
   expect(engine.log.slice(-2)).toEqual(['written', 'flush']);
 
-  expect(engine.onRemoteChange).toBe(previous);
+  expect(engine.listenerCount).toBe(0);
   const reads = engine.reads;
-  engine.onRemoteChange?.([PATH]);
+  engine.notify([PATH]);
   await settle();
   expect(engine.reads).toBe(reads);
 });

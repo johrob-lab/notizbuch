@@ -1,8 +1,8 @@
 import { expect, test as base, type Page } from '@playwright/test';
 import { serializePage } from '../../src/ink/svg';
 import type { Stroke } from '../../src/ink/types';
-import { bringToForeground, lastHead, openSeeded, queued, savedSettings, sendToBackground } from './helpers/app';
-import { inkNear, mouse, pen, pinch, touch, twoFingerTap, viewOf, wheel } from './helpers/pointer';
+import { bringToForeground, lastHead, networkBack, openSeeded, queued, savedSettings, sendToBackground } from './helpers/app';
+import { centerOf, inkNear, mouse, palm, pen, pinch, touch, twoFingerTap, viewOf, wheel } from './helpers/pointer';
 
 /** Jeder Test achtet auf Fehler, die im Browser unbehandelt bleiben (zum Beispiel eine Ausnahme beim Zeichnen). */
 const test = base.extend<{ browserErrors: void }>({
@@ -22,7 +22,11 @@ const test = base.extend<{ browserErrors: void }>({
 test.use({ serviceWorkers: 'block', viewport: { width: 1200, height: 1700 } });
 
 const DAY = '#/tag/2026-10-29';
+const NEXT_DAY = '#/tag/2026-10-30';
 const TAG = '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg';
+const QUICK = '[data-testid="quick-switch"]';
+const UNREADABLE = 'Diese Seite lässt sich nicht lesen und wird nicht verändert.';
+const NOT_LOADED = 'Diese Seite konnte nicht geladen werden. Neuer Versuch, sobald das Netz da ist.';
 /** Ein Strich im unteren Teil der Seite. */
 const LINE: [number, number][] = [
   [200, 1000],
@@ -115,9 +119,9 @@ test('readOnly mouse never draws', async ({ page }) => {
   expect((await viewOf(page)).x).not.toBeCloseTo(before.x, 0);
   await expect(button(page, 'Radierer')).toHaveCount(0);
   await expect(page.getByTestId('quick-switch')).toHaveCount(0);
-  await sendToBackground(page);
-  await page.waitForTimeout(300);
+  // Ein Strich wird schon im Ereignis des Stifts gespeichert: Was die Warteschlange jetzt nicht hat, kommt auch nicht mehr.
   expect(await queued(page)).toEqual({});
+  await sendToBackground(page);
   expect(repo.puts).toEqual([]);
 });
 
@@ -171,6 +175,21 @@ test('finger drag pans, two fingers zoom', async ({ page }) => {
   expect(after.x).toBeCloseTo(middle.x, 0);
   expect(after.y).toBeCloseTo(middle.y, 0);
   expect(await strokeCount(page)).toBe(0);
+});
+
+test('a wide contact does not move the page, a finger does', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const start = await viewOf(page);
+  await palm(page).stroke([
+    [600, 800],
+    [500, 700],
+  ]);
+  expect(await viewOf(page)).toEqual(start);
+  await touch(page).stroke([
+    [600, 800],
+    [500, 700],
+  ]);
+  expect((await viewOf(page)).x).not.toBeCloseTo(start.x, 0);
 });
 
 test('mouse drag pans, wheel scrolls, ctrl wheel zooms', async ({ page }) => {
@@ -303,20 +322,49 @@ test('undo brings back erased strokes in their place', async ({ page }) => {
   await expect(button(page, 'Rückgängig')).toBeDisabled();
 });
 
+test('an erase goes on when a change from another device replaces the page', async ({ page }) => {
+  const repo = await openSeeded(page, DAY, { files: { [TAG]: pageWith(stroke('a', 1000, 300)) } });
+  expect(await strokeIds(page)).toEqual(['a']);
+  await expect.poll(() => lastHead(page)).not.toBeNull();
+
+  await button(page, 'Radierer').click();
+  const eraser = pen(page);
+  await eraser.down(130, 310); // mitten auf dem Strich 'a'
+  expect(await strokeIds(page)).toEqual([]);
+
+  // Ein anderes Gerät ergänzt 'b'. Die Seite wird ersetzt, während der Stift noch auf dem Bildschirm liegt.
+  repo.commit(TAG, pageWith(stroke('a', 1000, 300), stroke('b', 500, 500)));
+  await bringToForeground(page);
+  await expect.poll(() => strokeIds(page)).toContain('b');
+  expect(await strokeIds(page)).toEqual(['b']); // 'a' ist bis hierhin radiert und bleibt es
+
+  await eraser.move(130, 510); // der Stift radiert weiter und trifft 'b'
+  await eraser.up(130, 510);
+  expect(await strokeIds(page)).toEqual([]);
+  await expect.poll(async () => (await queued(page))[TAG]).toBeDefined();
+  const saved = (await queued(page))[TAG];
+  expect(saved).not.toContain('data-id="a"');
+  expect(saved).not.toContain('data-id="b"');
+
+  // Rückgängig bringt beide zurück, an ihre Plätze.
+  await button(page, 'Rückgängig').click();
+  expect(await strokeIds(page)).toEqual(['b', 'a']);
+});
+
 // ---------- Schnellwechsel ----------
 
 test('quick switch toggles eraser with pen tap', async ({ page }) => {
   await openSeeded(page, DAY);
   const eraser = button(page, 'Radierer');
   await pen(page).stroke(LINE);
-  await pen(page).tapOn('[data-testid="quick-switch"]');
+  await pen(page).tapOn(QUICK);
   await expect(eraser).toHaveAttribute('aria-pressed', 'true');
   await pen(page).stroke([
     [260, 960],
     [260, 1060],
   ]);
   expect(await strokeCount(page)).toBe(0);
-  await pen(page).tapOn('[data-testid="quick-switch"]');
+  await pen(page).tapOn(QUICK);
   await expect(eraser).toHaveAttribute('aria-pressed', 'false');
   await expect(button(page, 'Kugelschreiber')).toHaveAttribute('aria-pressed', 'true');
 });
@@ -324,11 +372,11 @@ test('quick switch toggles eraser with pen tap', async ({ page }) => {
 test('quick switch ignores finger taps and moves with a finger', async ({ page }) => {
   await openSeeded(page, DAY);
   const quick = page.getByTestId('quick-switch');
-  await touch(page).tapOn('[data-testid="quick-switch"]');
+  await touch(page).tapOn(QUICK);
   await expect(button(page, 'Radierer')).toHaveAttribute('aria-pressed', 'false');
 
   const before = (await quick.boundingBox())!;
-  await touch(page).dragOn('[data-testid="quick-switch"]', -300, -200);
+  await touch(page).dragOn(QUICK, -300, -200);
   const after = (await quick.boundingBox())!;
   expect(after.x - before.x).toBeCloseTo(-300, 0);
   expect(after.y - before.y).toBeCloseTo(-200, 0);
@@ -341,6 +389,88 @@ test('quick switch ignores finger taps and moves with a finger', async ({ page }
   const reloaded = (await quick.boundingBox())!;
   expect(reloaded.x).toBeCloseTo(after.x, 0);
   expect(reloaded.y).toBeCloseTo(after.y, 0);
+});
+
+test('quick switch is not moved by a hand that rests on it while the pen is down', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const quick = page.getByTestId('quick-switch');
+  const rest = (await quick.boundingBox())!;
+  const writer = pen(page);
+  await writer.down(200, 1000);
+  await writer.move(260, 1020);
+  await touch(page).dragOn(QUICK, -300, -200);
+  await writer.up(260, 1020);
+  expect(await quick.boundingBox()).toEqual(rest);
+  expect((await savedSettings(page))?.quickSwitchPos).toBeUndefined();
+
+  // Die Sperre gilt nur für den Moment des Schreibens: Nach der Pause lässt sich der Knopf wieder schieben.
+  await afterPalmWindow(page);
+  await touch(page).dragOn(QUICK, -300, -200);
+  expect(((await quick.boundingBox())!).x - rest.x).toBeCloseTo(-300, 0);
+});
+
+test('quick switch is not moved by a wide contact', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const quick = page.getByTestId('quick-switch');
+  const rest = (await quick.boundingBox())!;
+  await palm(page).dragOn(QUICK, -300, -200);
+  expect(await quick.boundingBox()).toEqual(rest);
+  expect((await savedSettings(page))?.quickSwitchPos).toBeUndefined();
+
+  await touch(page).dragOn(QUICK, -300, -200);
+  expect(((await quick.boundingBox())!).x - rest.x).toBeCloseTo(-300, 0);
+});
+
+test('a finger drag of the quick switch is taken back when the pen comes down', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const quick = page.getByTestId('quick-switch');
+  const rest = (await quick.boundingBox())!;
+  const centre = await centerOf(page, QUICK);
+  const hand = touch(page);
+  await hand.downOn(QUICK, centre.x, centre.y);
+  await hand.moveOn(QUICK, centre.x - 100, centre.y - 100);
+  expect(((await quick.boundingBox())!).x - rest.x).toBeCloseTo(-100, 0); // der Knopf folgt dem Finger
+
+  // Jetzt schreibt jemand: Der Finger war die Hand. Der Knopf geht zurück und bleibt es.
+  const writer = pen(page);
+  await writer.down(200, 1000);
+  await hand.moveOn(QUICK, centre.x - 300, centre.y - 200);
+  expect(await quick.boundingBox()).toEqual(rest);
+  await hand.upOn(QUICK, centre.x - 300, centre.y - 200);
+  await writer.up(200, 1000);
+  expect(await quick.boundingBox()).toEqual(rest);
+  expect((await savedSettings(page))?.quickSwitchPos).toBeUndefined();
+});
+
+test('a cancelled finger drag puts the quick switch back and saves nothing', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const quick = page.getByTestId('quick-switch');
+  const rest = (await quick.boundingBox())!;
+  await touch(page).dragOn(QUICK, -300, -200, { cancel: true });
+  expect(await quick.boundingBox()).toEqual(rest);
+  expect((await savedSettings(page))?.quickSwitchPos).toBeUndefined();
+});
+
+test('the pen on the quick switch holds off fingers on the page for the moment', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const centre = await centerOf(page, QUICK);
+  const before = await viewOf(page);
+  const writer = pen(page);
+  await writer.downOn(QUICK, centre.x, centre.y); // der Stift liegt auf dem Knopf, die Hand daneben auf der Seite
+  await touch(page).stroke([
+    [600, 800],
+    [500, 700],
+  ]);
+  expect(await viewOf(page)).toEqual(before);
+  await writer.upOn(QUICK, centre.x, centre.y); // das Tippen wechselt das Werkzeug
+  await expect(button(page, 'Radierer')).toHaveAttribute('aria-pressed', 'true');
+
+  await afterPalmWindow(page);
+  await touch(page).stroke([
+    [600, 800],
+    [500, 700],
+  ]);
+  expect((await viewOf(page)).x).not.toBeCloseTo(before.x, 0);
 });
 
 // ---------- Speichern ----------
@@ -387,13 +517,12 @@ test('a stroke is uploaded when the app goes to the background', async ({ page }
 
 test('unreadable page stays unchanged', async ({ page }) => {
   const repo = await openSeeded(page, DAY, { files: { [TAG]: BROKEN } });
-  await expect(page.getByText('Diese Seite lässt sich nicht lesen und wird nicht verändert.')).toBeVisible();
+  await expect(page.getByText(UNREADABLE)).toBeVisible();
   await expect(button(page, 'Radierer')).toHaveCount(0);
   await pen(page).stroke(LINE);
   expect(await strokeCount(page)).toBe(0);
-  await sendToBackground(page);
-  await page.waitForTimeout(300);
   expect(await queued(page)).toEqual({});
+  await sendToBackground(page);
   expect(repo.puts).toEqual([]);
   expect(repo.read(TAG)).toBe(BROKEN);
 });
@@ -426,15 +555,155 @@ test('a page that another device breaks is locked and never written', async ({ p
 
   repo.commit(TAG, BROKEN);
   await bringToForeground(page);
-  await expect(page.getByText('Diese Seite lässt sich nicht lesen und wird nicht verändert.')).toBeVisible();
+  await expect(page.getByText(UNREADABLE)).toBeVisible();
   await expect(button(page, 'Radierer')).toHaveCount(0);
   await expect(page.getByTestId('quick-switch')).toHaveCount(0);
 
   await pen(page).stroke(LINE);
   expect(await strokeIds(page)).toEqual(['a']);
-  await sendToBackground(page);
-  await page.waitForTimeout(300);
   expect(await queued(page)).toEqual({});
+  await sendToBackground(page);
   expect(repo.puts).toEqual([]);
   expect(repo.read(TAG)).toBe(BROKEN);
+});
+
+const leaveFor = (page: Page, hash: string) =>
+  page.evaluate((next) => {
+    window.location.hash = next;
+  }, hash);
+const waitForPageOf = (page: Page, key: string) =>
+  page.waitForFunction((day) => window.__notizbuch?.currentPage?.().key === day, key);
+
+test('leaving the page in the middle of a stroke keeps the stroke', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  const writer = pen(page);
+  await writer.down(200, 1000);
+  await writer.move(260, 1020);
+  await writer.move(320, 1000);
+  await leaveFor(page, NEXT_DAY); // der Stift liegt noch auf dem Bildschirm
+  await waitForPageOf(page, '2026-10-30');
+  // Beim Verlassen einer Seite lädt die Engine hoch: Der Strich ist schon auf GitHub (im Mock).
+  await expect.poll(() => repo.puts.length).toBe(1);
+  expect(repo.puts[0].path).toBe(TAG);
+  expect(repo.puts[0].text).toContain('<path');
+  expect(await strokeCount(page)).toBe(0);
+
+  await leaveFor(page, DAY);
+  await waitForPageOf(page, '2026-10-29');
+  await expect.poll(() => strokeCount(page)).toBe(1);
+});
+
+test('leaving the page in the middle of an erase keeps the erase', async ({ page }) => {
+  const repo = await openSeeded(page, DAY, { files: { [TAG]: pageWith(stroke('a', 1000, 300)) } });
+  await expect.poll(() => lastHead(page)).not.toBeNull();
+  await button(page, 'Radierer').click();
+  await pen(page).down(130, 310); // der Radierer hat den Strich 'a' schon weggenommen, der Stift liegt noch auf
+  expect(await strokeIds(page)).toEqual([]);
+  await leaveFor(page, NEXT_DAY);
+  await waitForPageOf(page, '2026-10-30');
+  await expect.poll(() => repo.puts.length).toBe(1);
+  expect(repo.puts[0].path).toBe(TAG);
+  expect(repo.puts[0].text).not.toContain('data-id="a"');
+
+  await leaveFor(page, DAY);
+  await waitForPageOf(page, '2026-10-29');
+  await expect.poll(() => strokeCount(page)).toBe(0);
+});
+
+test('fingers work again on the next page when the pen was still down as the page was left', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const writer = pen(page);
+  await writer.down(200, 1000);
+  await writer.move(260, 1020);
+  await leaveFor(page, NEXT_DAY); // der Stift hebt auf der alten Fläche nie mehr ab
+  await waitForPageOf(page, '2026-10-30');
+  await afterPalmWindow(page);
+  const before = await viewOf(page);
+  await touch(page).stroke([
+    [600, 800],
+    [500, 700],
+  ]);
+  expect((await viewOf(page)).x).not.toBeCloseTo(before.x, 0);
+});
+
+test('a stroke in progress is dropped when the page gets locked', async ({ page }) => {
+  const repo = await openSeeded(page, DAY, { files: { [TAG]: pageWith(stroke('a', 1000, 300)) } });
+  await expect.poll(() => lastHead(page)).not.toBeNull();
+  const writer = pen(page);
+  await writer.down(200, 1000);
+  await writer.move(260, 1020); // der Strich entsteht
+
+  repo.commit(TAG, BROKEN); // ein anderes Gerät macht die Seite kaputt
+  await bringToForeground(page);
+  await expect(page.getByText(UNREADABLE)).toBeVisible();
+  await writer.move(320, 1000);
+  await writer.up(320, 1000);
+  // Der Strich wäre nie gespeichert worden, also bleibt er auch nicht stehen.
+  expect(await strokeIds(page)).toEqual(['a']);
+  expect(await queued(page)).toEqual({});
+});
+
+test('an erase in progress is undone when the page gets locked', async ({ page }) => {
+  const repo = await openSeeded(page, DAY, { files: { [TAG]: pageWith(stroke('a', 1000, 300)) } });
+  await expect.poll(() => lastHead(page)).not.toBeNull();
+  await button(page, 'Radierer').click();
+  const eraser = pen(page);
+  await eraser.down(130, 310);
+  expect(await strokeIds(page)).toEqual([]);
+
+  repo.commit(TAG, BROKEN);
+  await bringToForeground(page);
+  await expect(page.getByText(UNREADABLE)).toBeVisible();
+  expect(await strokeIds(page)).toEqual(['a']); // radiert und nie gespeichert: Der Strich steht wieder da
+  await eraser.up(130, 310);
+  expect(await strokeIds(page)).toEqual(['a']);
+  expect(await queued(page)).toEqual({});
+});
+
+test('leaving a page releases the memory of its canvases', async ({ page }) => {
+  await openSeeded(page, DAY);
+  type Held = { __held: HTMLCanvasElement[] };
+  await page.evaluate(() => {
+    (window as unknown as Held).__held = [...document.querySelectorAll('canvas')];
+  });
+  const state = () =>
+    page.evaluate(() => (window as unknown as Held).__held.map((c) => ({ attached: c.isConnected, empty: c.width === 0 && c.height === 0 })));
+  expect(await state()).toEqual(Array.from({ length: 3 }, () => ({ attached: true, empty: false })));
+
+  await leaveFor(page, NEXT_DAY);
+  await waitForPageOf(page, '2026-10-30');
+  // Safari hält den Speicher einer Zeichenfläche, bis sie auf Größe 0 gesetzt wird; ein Tagwechsel soll nichts anhäufen.
+  expect(await state()).toEqual(Array.from({ length: 3 }, () => ({ attached: false, empty: true })));
+});
+
+test('a page that could not be loaded is loaded again when the network is back', async ({ page }) => {
+  const repo = await openSeeded(page, DAY, { files: { [TAG]: pageWith(stroke('a', 1000, 300)) }, failReads: true });
+  await expect(page.getByText(NOT_LOADED)).toBeVisible();
+  await expect(button(page, 'Radierer')).toHaveCount(0);
+  await expect(page.getByTestId('quick-switch')).toHaveCount(0);
+  await pen(page).stroke(LINE);
+  expect(await strokeCount(page)).toBe(0);
+  expect(await queued(page)).toEqual({});
+
+  repo.failReads = false;
+  await networkBack(page);
+  await expect.poll(() => strokeIds(page)).toEqual(['a']);
+  await expect(page.getByText(NOT_LOADED)).toHaveCount(0);
+  await expect(button(page, 'Radierer')).toBeVisible();
+  await pen(page).stroke(LINE);
+  await expect.poll(() => strokeCount(page)).toBe(2);
+});
+
+test('a page that could not be loaded is loaded again when the app comes back to the front', async ({ page }) => {
+  const repo = await openSeeded(page, DAY, { files: { [TAG]: pageWith(stroke('a', 1000, 300)) }, failReads: true });
+  await expect(page.getByText(NOT_LOADED)).toBeVisible();
+  await sendToBackground(page);
+  await bringToForeground(page);
+  await expect(page.getByText(NOT_LOADED)).toBeVisible(); // GitHub macht noch Ärger: weiter warten
+
+  repo.failReads = false;
+  await sendToBackground(page);
+  await bringToForeground(page);
+  await expect.poll(() => strokeIds(page)).toEqual(['a']);
+  await expect(page.getByText(NOT_LOADED)).toHaveCount(0);
 });

@@ -58,11 +58,16 @@ export class SyncEngine {
   readonly status: Signal<SyncStatus> = signal({ state: 'gesichert', pending: 0 });
   /** Die eigene Fassung liegt jetzt unter `copyPath`, der fremde Stand bleibt unter `path`. */
   onConflict?: (i: { path: string; copyPath: string }) => void;
-  /** Die lokale Fassung dieser Dateien hat sich durch fremde Änderungen geändert. Die Oberfläche soll sie neu lesen. */
+  /**
+   * Die lokale Fassung dieser Dateien hat sich durch fremde Änderungen geändert. Die Oberfläche soll sie neu lesen.
+   * Es gibt einen Zuhörer; wer neben anderen zuhören will (mehrere Seiten sind zugleich offen), nimmt
+   * `addRemoteChangeListener`.
+   */
   onRemoteChange?: (paths: string[]) => void;
   /** Eine Datei ließ sich nicht abgleichen (nicht erlaubter Pfad, kaputte Datei). Ohne Datei ist `path` leer. */
   onError?: (i: { path: string; error: unknown }) => void;
 
+  readonly #remoteListeners = new Set<(paths: string[]) => void>();
   readonly #client: SyncClient;
   readonly #store: Store;
   readonly #device: string;
@@ -134,6 +139,31 @@ export class SyncEngine {
     clearTimeout(this.#textTimer);
     clearTimeout(this.#inkTimer);
     this.#started = false;
+  }
+
+  // ---------- Fremde Änderungen melden ----------
+
+  /**
+   * Meldet fremde Änderungen (wie `onRemoteChange`) an einen weiteren Zuhörer, unabhängig von allen anderen. Gibt die
+   * Abmeldung zurück; sie darf beliebig oft und in beliebiger Reihenfolge gerufen werden. Wirft ein Zuhörer, geht die
+   * Meldung an die anderen trotzdem, und der Fehler kommt als `onError` (ohne Datei).
+   */
+  addRemoteChangeListener(listener: (paths: string[]) => void): () => void {
+    this.#remoteListeners.add(listener);
+    return () => {
+      this.#remoteListeners.delete(listener);
+    };
+  }
+
+  #remoteChanged(paths: string[]): void {
+    this.onRemoteChange?.(paths);
+    for (const listener of [...this.#remoteListeners]) {
+      try {
+        listener(paths);
+      } catch (error) {
+        this.onError?.({ path: '', error });
+      }
+    }
   }
 
   // ---------- Lesen und Schreiben ----------
@@ -441,7 +471,7 @@ export class SyncEngine {
     // Zeigt die Seite etwas anderes, als die lokale Kopie jetzt ist (zusammengeführt, oder von einem anderen Fenster
     // hochgeladen), soll sie neu lesen. Hat sie die Datei nie geholt, gibt es nichts zu lesen. Schrieb sie schon weiter,
     // ist die lokale Kopie ihr Text, und es bleibt still.
-    if (held !== undefined && localText !== null && held !== localText) this.onRemoteChange?.([path]);
+    if (held !== undefined && localText !== null && held !== localText) this.#remoteChanged([path]);
   }
 
   // ---------- Gleichzeitige Änderungen ----------
@@ -499,7 +529,7 @@ export class SyncEngine {
     // den fremden Stand und wird zusammengeführt oder wieder zur Kopie, statt ihn zu überschreiben.
     this.#page.set(path, { sha: entry.baseSha, baseText: entry.baseText });
     if (wantsCopy) this.onConflict?.({ path, copyPath });
-    this.onRemoteChange?.([path]);
+    this.#remoteChanged([path]);
   }
 
   /** Name für die Konfliktkopie: `(Konflikt)`, dann `(Konflikt 2)` und so weiter. Eine ältere Kopie wird nie überschrieben. */
@@ -577,7 +607,7 @@ export class SyncEngine {
       // Die Seite hält weiter ihren Text, der auf der alten Fassung beruht. Schreibt sie darauf weiter, trifft der Upload
       // auf den fremden Stand und wird zusammengeführt, statt ihn mit der lokalen Kopie als Grundlage zu überschreiben.
       this.#page.set(path, wasBasedOn);
-      this.onRemoteChange?.([path]);
+      this.#remoteChanged([path]);
     }
   }
 
@@ -619,7 +649,7 @@ export class SyncEngine {
       } finally {
         // Was schon übernommen ist, muss die Seite erfahren, auch wenn ein späterer Pfad die Abfrage anhält. Sonst
         // schriebe sie weiter auf den alten Text, und der Upload überschriebe die fremde Änderung.
-        if (refreshed.length > 0) this.onRemoteChange?.(refreshed);
+        if (refreshed.length > 0) this.#remoteChanged(refreshed);
       }
       await this.#store.put('meta', head, 'lastHead');
     } catch (error) {
@@ -661,7 +691,7 @@ export class SyncEngine {
 
   async #refreshInBackground(path: string): Promise<void> {
     try {
-      if (await this.#refreshCopy(path, false)) this.onRemoteChange?.([path]);
+      if (await this.#refreshCopy(path, false)) this.#remoteChanged([path]);
     } catch (error) {
       if (!this.#noteStop(error)) this.onError?.({ path, error });
     }

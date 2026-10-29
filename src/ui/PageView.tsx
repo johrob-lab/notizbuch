@@ -1,5 +1,6 @@
 import type { Signal } from '@preact/signals';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { GestureFilter } from '../ink/gestures';
 import { InkSurface } from '../ink/surface';
 import type { InkColor, Page, WidthName } from '../ink/types';
 import type { Day } from '../lib/dates';
@@ -7,6 +8,7 @@ import { tagPagePath } from '../lib/filenames';
 import { statusLabel, type SyncEngine } from '../sync/engine';
 import { PageSession, type Phase } from './pageSession';
 import { QuickSwitch } from './QuickSwitch';
+import { retryCues } from './retryCues';
 import { Toolbar, type Tool } from './Toolbar';
 
 // Eine Tagesseite zum Schreiben. Lesen, Speichern und fremde Änderungen übernimmt `PageSession`, diese Datei verbindet
@@ -26,6 +28,7 @@ type Props = {
 };
 
 const UNREADABLE = 'Diese Seite lässt sich nicht lesen und wird nicht verändert.';
+const NOT_LOADED = 'Diese Seite konnte nicht geladen werden. Neuer Versuch, sobald das Netz da ist.';
 
 /** Testzugang: nur lesen, enthält keine Geheimnisse. Er steht da, sobald die Seite gelesen ist. */
 type TestAccess = { currentPage(): Page; toClient(x: number, y: number): { x: number; y: number } };
@@ -41,6 +44,8 @@ export function PageView(p: Props) {
   const { engine, day, readOnly, sigma, prediction } = p;
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<InkSurface | null>(null);
+  // Ein Tor gegen Handballen für Fläche und Schnellwechsel: Beide liegen dort, wo beim Schreiben die Hand ruht.
+  const [palm] = useState(() => new GestureFilter());
   const [phase, setPhase] = useState<Phase>('laden');
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState<InkColor>('schwarz');
@@ -58,6 +63,7 @@ export function PageView(p: Props) {
       readOnly: true, // bis die Seite gelesen ist
       sigma,
       prediction,
+      filter: palm,
       onChange: (page) => {
         setHistory({ canUndo: view.canUndo, canRedo: view.canRedo });
         session.changed(page);
@@ -80,6 +86,7 @@ export function PageView(p: Props) {
         setPage: (page) => view.setPage(page, [], ''),
         setReadOnly: (on) => view.setReadOnly(on),
       },
+      retryCues,
       onPhase: (next) => {
         setHistory({ canUndo: view.canUndo, canRedo: view.canRedo });
         setPhase(next);
@@ -93,10 +100,11 @@ export function PageView(p: Props) {
     return () => {
       if (testAccessHolder().__notizbuch === access) delete testAccessHolder().__notizbuch;
       surface.current = null;
+      view.finishInput(); // ein Strich, der gerade entsteht, gehört noch zur Seite
       session.close();
       view.destroy();
     };
-  }, [engine, day, readOnly, sigma, prediction]);
+  }, [engine, day, readOnly, sigma, prediction, palm]);
 
   const chooseTool = (t: Tool) => {
     setTool(t);
@@ -114,7 +122,7 @@ export function PageView(p: Props) {
     chooseTool('pen');
   };
 
-  const canWrite = !readOnly && phase !== 'unlesbar';
+  const canWrite = !readOnly && phase !== 'unlesbar' && phase !== 'nichtGeladen';
 
   return (
     <div class="seite">
@@ -146,6 +154,11 @@ export function PageView(p: Props) {
             {UNREADABLE}
           </p>
         )}
+        {phase === 'nichtGeladen' && (
+          <p class="hinweis" role="status">
+            {NOT_LOADED}
+          </p>
+        )}
         {saveFailed && (
           <p class="hinweis fehler" role="alert">
             Die letzte Änderung konnte nicht auf diesem Gerät gespeichert werden.
@@ -155,6 +168,7 @@ export function PageView(p: Props) {
           <QuickSwitch
             tool={tool}
             pos={p.quickSwitchPos}
+            filter={palm}
             onToggle={() => chooseTool(tool === 'pen' ? 'eraser' : 'pen')}
             onMove={p.onQuickSwitchMove}
           />

@@ -91,6 +91,77 @@ test('a copy that already has the new sha is not reported', async () => {
   expect(h.remoteChanges).toEqual([]);
 });
 
+/** Eine Datei, die ein anderes Gerät ändert: Die Abfrage übernimmt sie und sagt es der Seite. */
+async function changeElsewhere(text: string, sha: string, head: string): Promise<void> {
+  fake.files[A] = { text, sha };
+  fake.changes = [A];
+  fake.head = head;
+  await e.pollRemote();
+}
+
+async function openA(): Promise<void> {
+  fake.files[A] = { text: 'a1', sha: 'sa1' };
+  fake.head = 'h1';
+  await e.read(A);
+  await e.pollRemote();
+}
+
+test('listeners hear a remote change next to onRemoteChange, and each can sign off', async () => {
+  await openA();
+  const first: string[][] = [];
+  const second: string[][] = [];
+  const signOffFirst = e.addRemoteChangeListener((paths) => first.push(paths));
+  e.addRemoteChangeListener((paths) => second.push(paths));
+
+  await changeElsewhere('a2', 'sa2', 'h2');
+  expect(h.remoteChanges).toEqual([[A]]);
+  expect(first).toEqual([[A]]);
+  expect(second).toEqual([[A]]);
+
+  signOffFirst();
+  await changeElsewhere('a3', 'sa3', 'h3');
+  expect(first).toEqual([[A]]);
+  expect(second).toEqual([[A], [A]]);
+});
+
+test('the same listener signing off twice is harmless, and the others stay', async () => {
+  await openA();
+  const heard: string[][] = [];
+  const signOff = e.addRemoteChangeListener(() => undefined);
+  e.addRemoteChangeListener((paths) => heard.push(paths));
+  signOff();
+  signOff();
+  await changeElsewhere('a2', 'sa2', 'h2');
+  expect(heard).toEqual([[A]]);
+});
+
+test('a listener that throws does not keep the others from hearing, and the error is reported', async () => {
+  await openA();
+  const heard: string[][] = [];
+  const failure = new Error('kaputt');
+  e.addRemoteChangeListener(() => {
+    throw failure;
+  });
+  e.addRemoteChangeListener((paths) => heard.push(paths));
+
+  await changeElsewhere('a2', 'sa2', 'h2');
+  expect(heard).toEqual([[A]]);
+  expect(h.errors).toEqual([{ path: '', error: failure }]);
+  expect(await lastHead()).toBe('h2'); // die Abfrage selbst ist durch
+});
+
+test('a listener that signs off while it is being told does not skip the next one', async () => {
+  await openA();
+  const heard: string[] = [];
+  const signOff: () => void = e.addRemoteChangeListener(() => {
+    heard.push('first');
+    signOff();
+  });
+  e.addRemoteChangeListener(() => heard.push('second'));
+  await changeElsewhere('a2', 'sa2', 'h2');
+  expect(heard).toEqual(['first', 'second']);
+});
+
 test('a head that did not change asks for nothing more', async () => {
   fake.head = 'h1';
   await e.pollRemote();

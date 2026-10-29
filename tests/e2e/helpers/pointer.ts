@@ -6,9 +6,12 @@ import type { Page } from '@playwright/test';
 
 export type Kind = 'pen' | 'touch' | 'mouse';
 type Phase = 'down' | 'move' | 'up';
-type Step = { kind: Kind; id: number; primary: boolean; phase: Phase; x: number; y: number };
+type Step = { kind: Kind; id: number; primary: boolean; phase: Phase; x: number; y: number; size: number };
 
 const LIVE = 'canvas[data-layer="live"]';
+/** So groß ist die Auflagefläche eines Fingers im Test (ein Handballen ist größer als 120). */
+const FINGER_SIZE = 1;
+const PALM_SIZE = 150;
 
 /**
  * Spielt die Schritte in der Reihenfolge ab, alle in einem Aufruf: Zwischen zwei Ereignissen vergeht keine Wartezeit.
@@ -28,6 +31,8 @@ async function play(page: Page, steps: Step[]): Promise<void> {
             pointerType: s.kind,
             isPrimary: s.primary,
             pressure: 0.5,
+            width: s.size,
+            height: s.size,
             clientX: at.x,
             clientY: at.y,
             button: s.phase === 'move' ? -1 : 0,
@@ -43,6 +48,48 @@ async function play(page: Page, steps: Step[]): Promise<void> {
   );
 }
 
+type OnElementEvent = { type: 'pointerdown' | 'pointermove' | 'pointerup' | 'pointercancel'; x: number; y: number };
+
+/** Schickt Zeigerereignisse an ein Element außerhalb der Schreibfläche. Orte sind Bildschirmkoordinaten. */
+async function sendOn(page: Page, selector: string, kind: Kind, id: number, size: number, events: OnElementEvent[]): Promise<void> {
+  await page.evaluate(
+    ({ selector: sel, kind: pointerType, id: pointerId, size: contact, events: list }) => {
+      const el = document.querySelector(sel);
+      if (!el) throw new Error(`Nichts gefunden für ${sel}.`);
+      for (const ev of list) {
+        el.dispatchEvent(
+          new PointerEvent(ev.type, {
+            pointerId,
+            pointerType,
+            isPrimary: true,
+            pressure: 0.5,
+            width: contact,
+            height: contact,
+            clientX: ev.x,
+            clientY: ev.y,
+            button: ev.type === 'pointermove' ? -1 : 0,
+            buttons: ev.type === 'pointerdown' || ev.type === 'pointermove' ? 1 : 0,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+          }),
+        );
+      }
+    },
+    { selector, kind, id, size, events },
+  );
+}
+
+/** Die Mitte eines Elements in Bildschirmkoordinaten. */
+export function centerOf(page: Page, selector: string): Promise<{ x: number; y: number }> {
+  return page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) throw new Error(`Nichts gefunden für ${sel}.`);
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }, selector);
+}
+
 export type Pointer = {
   /** Zeichnet einen Weg: aufsetzen am ersten Punkt, zu jedem weiteren bewegen, am letzten abheben. */
   stroke(points: [number, number][]): Promise<void>;
@@ -52,62 +99,54 @@ export type Pointer = {
   up(x: number, y: number): Promise<void>;
   /** Tippt in die Mitte eines Elements außerhalb der Schreibfläche (zum Beispiel den Schnellwechsel). */
   tapOn(selector: string): Promise<void>;
-  /** Setzt in der Mitte eines Elements außerhalb der Schreibfläche auf, zieht um `dx` und `dy` Bildschirmpunkte und hebt ab. */
-  dragOn(selector: string, dx: number, dy: number): Promise<void>;
+  /**
+   * Setzt in der Mitte eines Elements außerhalb der Schreibfläche auf, zieht um `dx` und `dy` Bildschirmpunkte und hebt ab
+   * (mit `cancel` bricht das System die Berührung stattdessen ab).
+   */
+  dragOn(selector: string, dx: number, dy: number, o?: { cancel?: boolean }): Promise<void>;
+  /** Einzelne Ereignisse an ein Element außerhalb der Schreibfläche, an Orten in Bildschirmkoordinaten. */
+  downOn(selector: string, x: number, y: number): Promise<void>;
+  moveOn(selector: string, x: number, y: number): Promise<void>;
+  upOn(selector: string, x: number, y: number): Promise<void>;
 };
 
 const BASE_ID: Record<Kind, number> = { mouse: 1, pen: 11, touch: 21 };
 
-function pointer(page: Page, kind: Kind, n: number): Pointer {
+function pointer(page: Page, kind: Kind, n: number, size = FINGER_SIZE): Pointer {
   const id = BASE_ID[kind] + n;
-  const step = (phase: Phase, [x, y]: [number, number]): Step => ({ kind, id, primary: n === 0, phase, x, y });
+  const step = (phase: Phase, [x, y]: [number, number]): Step => ({ kind, id, primary: n === 0, phase, x, y, size });
   const path = (points: [number, number][]): Step[] => [
     step('down', points[0]),
     ...points.slice(1).map((p) => step('move', p)),
     step('up', points[points.length - 1]),
   ];
+  const on = (selector: string, events: OnElementEvent[]) => sendOn(page, selector, kind, id, size, events);
   return {
     stroke: (points) => play(page, path(points)),
     tap: (x, y) => play(page, path([[x, y]])),
     down: (x, y) => play(page, [step('down', [x, y])]),
     move: (x, y) => play(page, [step('move', [x, y])]),
     up: (x, y) => play(page, [step('up', [x, y])]),
-    tapOn: (selector) => dragElement(page, selector, kind, id, 0, 0),
-    dragOn: (selector, dx, dy) => dragElement(page, selector, kind, id, dx, dy),
-  };
-}
-
-/** Zeigerereignisse auf einem Element: aufsetzen in der Mitte, in vier Schritten um (dx, dy) ziehen, abheben. */
-async function dragElement(page: Page, selector: string, kind: Kind, id: number, dx: number, dy: number): Promise<void> {
-  await page.evaluate(
-    ({ selector: sel, kind: pointerType, id: pointerId, dx: moveX, dy: moveY }) => {
-      const el = document.querySelector(sel);
-      if (!el) throw new Error(`Nichts gefunden für ${sel}.`);
-      const r = el.getBoundingClientRect();
-      const x0 = r.left + r.width / 2;
-      const y0 = r.top + r.height / 2;
-      const send = (type: string, f: number, buttons: number) =>
-        el.dispatchEvent(
-          new PointerEvent(type, {
-            pointerId,
-            pointerType,
-            isPrimary: true,
-            pressure: 0.5,
-            clientX: x0 + moveX * f,
-            clientY: y0 + moveY * f,
-            button: type === 'pointermove' ? -1 : 0,
-            buttons,
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-          }),
-        );
-      send('pointerdown', 0, 1);
-      if (moveX || moveY) for (const f of [0.25, 0.5, 0.75, 1]) send('pointermove', f, 1);
-      send('pointerup', 1, 0);
+    async tapOn(selector) {
+      const c = await centerOf(page, selector);
+      await on(selector, [
+        { type: 'pointerdown', ...c },
+        { type: 'pointerup', ...c },
+      ]);
     },
-    { selector, kind, id, dx, dy },
-  );
+    async dragOn(selector, dx, dy, o = {}) {
+      const c = await centerOf(page, selector);
+      const at = (f: number) => ({ x: c.x + dx * f, y: c.y + dy * f });
+      await on(selector, [
+        { type: 'pointerdown', ...c },
+        ...(dx || dy ? [0.25, 0.5, 0.75, 1].map((f): OnElementEvent => ({ type: 'pointermove', ...at(f) })) : []),
+        { type: o.cancel ? 'pointercancel' : 'pointerup', ...at(1) },
+      ]);
+    },
+    downOn: (selector, x, y) => on(selector, [{ type: 'pointerdown', x, y }]),
+    moveOn: (selector, x, y) => on(selector, [{ type: 'pointermove', x, y }]),
+    upOn: (selector, x, y) => on(selector, [{ type: 'pointerup', x, y }]),
+  };
 }
 
 /** Der Apple Pencil. */
@@ -116,8 +155,18 @@ export const pen = (page: Page): Pointer => pointer(page, 'pen', 0);
 export const touch = (page: Page, n = 0): Pointer => pointer(page, 'touch', n);
 /** Die Maus. */
 export const mouse = (page: Page): Pointer => pointer(page, 'mouse', 0);
+/** Ein Handballen: eine Berührung mit sehr großer Auflagefläche (150, erlaubt sind für einen Finger bis 120). */
+export const palm = (page: Page): Pointer => pointer(page, 'touch', 0, PALM_SIZE);
 
-const finger = (n: number, phase: Phase, [x, y]: [number, number]): Step => ({ kind: 'touch', id: BASE_ID.touch + n, primary: n === 0, phase, x, y });
+const finger = (n: number, phase: Phase, [x, y]: [number, number]): Step => ({
+  kind: 'touch',
+  id: BASE_ID.touch + n,
+  primary: n === 0,
+  phase,
+  x,
+  y,
+  size: FINGER_SIZE,
+});
 
 /** Zwei Finger setzen gleichzeitig auf und heben ohne Bewegung wieder ab, alles in einem Zug. */
 export function twoFingerTap(page: Page, a: [number, number], b: [number, number]): Promise<void> {
