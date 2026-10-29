@@ -1,7 +1,9 @@
 // Nur Web-APIs (TextEncoder, TextDecoder, btoa, atob), damit der Code in Safari und Edge läuft, ohne Node-Zusätze.
 // Streng bei ungültigem UTF-8: Ersatzzeichen würden eine Datei beim Speichern still verändern.
+// Aus demselben Grund bleibt ein BOM am Anfang (ignoreBOM) als erstes Zeichen U+FEFF im Text. Sonst fiele es beim
+// Lesen weg und fehlte nach dem nächsten Speichern in der Datei.
 const encoder = new TextEncoder();
-const decoder = new TextDecoder('utf-8', { fatal: true });
+const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 // Soviele Bytes kommen auf einmal in String.fromCharCode. Mehr Argumente auf einmal sprengen in manchen Engines das Limit.
 const CHUNK = 8192;

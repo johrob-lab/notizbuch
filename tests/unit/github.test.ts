@@ -8,6 +8,8 @@ const TOKEN = 'test-zugang-0123456789';
 const REPO = 'johrob-lab/2-gehirn-test';
 const API = `https://api.github.com/repos/${REPO}`;
 const EXPIRY_HEADER = 'github-authentication-token-expiration';
+const ACCEPT_DEFAULT = 'application/vnd.github+json';
+const ACCEPT_OBJECT = 'application/vnd.github.object+json';
 
 type Call = {
   url: string;
@@ -122,7 +124,7 @@ test('reads token expiry', async () => {
 
 test('every method asks the path guard first, nothing is sent for a refused path', async () => {
   const refused = [
-    '00 Kontext/Über mich.md',
+    '00 Beispiel/Notiz.md',
     '02 Projekte/Beispiel.md',
     '05 Daily Notes/../00 Kontext/x.md',
     '07 Anhänge/Notizbuch/Recovery Codes.md',
@@ -275,6 +277,19 @@ test('getFile decodes inline content with the line breaks GitHub inserts', async
   expect(calls).toHaveLength(1);
 });
 
+test('getFile and putFile hand a byte order mark at the start of a file through unchanged', async () => {
+  const text = '\uFEFF## Ergänzungen\n- [ ] Aufgabe\n';
+  const content = Buffer.from(text, 'utf8').toString('base64');
+  expect(content.startsWith('77u/')).toBe(true); // die Bytes EF BB BF am Anfang
+  respond({ type: 'file', encoding: 'base64', size: 40, sha: 's1', content });
+  const file = await client.getFile('05 Daily Notes/2026-10-29.md');
+  expect(file).toEqual({ text, sha: 's1' });
+  // Wer den gelesenen Text wieder schreibt, schickt dieselben Bytes
+  respond({ content: { sha: 's2' } });
+  await client.putFile('05 Daily Notes/2026-10-29.md', file?.text ?? '', file?.sha ?? null, 'm');
+  expect((calls[1].body as { content: string }).content).toBe(content);
+});
+
 test('getFile takes the blob route for big, empty or undelivered content, and the inline route up to 1 MB', async () => {
   const blob = { content: utf8ToBase64('<svg>Ü</svg>'), encoding: 'base64' };
   const path = '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg';
@@ -331,6 +346,106 @@ test('the blob request carries the same headers, decodes line breaks and maps er
   const gone = await errorOf(client.getFile(path));
   expect(gone).not.toBeNull();
   expect(gone?.message).toContain('404');
+});
+
+// So antwortet GitHub auf eine Datei über 1 MB, solange der Standard-Accept gilt: 403 statt 200 mit leerem Inhalt.
+const TOO_LARGE_BODY = JSON.stringify({
+  message:
+    'This API returns blobs up to 1 MB in size. The requested blob is too large to fetch via the API, but you can use the Git Data API to request blobs up to 100 MB in size.',
+  errors: [{ resource: 'Blob', field: 'data', code: 'too_large' }],
+  documentation_url: 'https://docs.github.com/rest/repos/contents#get-repository-content',
+  status: '403',
+});
+const RATE_HEADERS = { 'x-ratelimit-limit': '5000', 'x-ratelimit-remaining': '4990' };
+
+test('getFile: a file over 1 MB answers 403 first, then comes in the object format and via the blob', async () => {
+  const path = '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg';
+  respondStatus(403, TOO_LARGE_BODY, RATE_HEADERS);
+  respond(
+    { type: 'file', encoding: 'none', size: 2_000_000, name: '2026-10-29 Tag.svg', path, content: '', sha: 'big1' },
+    { content: utf8ToBase64('<svg>groß €</svg>'), encoding: 'base64' },
+  );
+  expect(await client.getFile(path)).toEqual({ text: '<svg>groß €</svg>', sha: 'big1' });
+
+  const contents = '/contents/07%20Anh%C3%A4nge/Notizbuch/2026/2026-10-29%20Tag.svg?ref=main';
+  expect(calls.map((c) => [c.method, c.url.replace(API, ''), c.headers.Accept])).toEqual([
+    ['GET', contents, ACCEPT_DEFAULT],
+    ['GET', contents, ACCEPT_OBJECT],
+    ['GET', '/git/blobs/big1', ACCEPT_DEFAULT],
+  ]);
+  // Die Wiederholung trägt dieselben Kopfzeilen und denselben Cache-Modus, nur Accept ist ein anderes.
+  expect(calls[1].headers).toEqual({ ...calls[0].headers, Accept: ACCEPT_OBJECT });
+  expect(calls[1].cache).toBe('no-store');
+});
+
+test('getFile: whatever the retry answers follows the usual route', async () => {
+  const path = '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg';
+  // Inhalt kommt mit: direkt dekodieren, kein Blob
+  respondStatus(403, TOO_LARGE_BODY, RATE_HEADERS);
+  respond({ type: 'file', encoding: 'base64', size: 6, sha: 's1', content: utf8ToBase64('direkt') });
+  expect(await client.getFile(path)).toEqual({ text: 'direkt', sha: 's1' });
+  expect(calls).toHaveLength(2);
+  // Die Datei ist inzwischen weg: 404 heißt weiter "gibt es nicht"
+  respondStatus(403, TOO_LARGE_BODY, RATE_HEADERS);
+  respondStatus(404);
+  expect(await client.getFile(path)).toBeNull();
+  // Eine Antwort, die keine Datei beschreibt, ist keine Datei
+  respondStatus(403, TOO_LARGE_BODY, RATE_HEADERS);
+  respond([{ name: 'x.svg', path: `${path}/x.svg`, sha: 's', type: 'file' }]);
+  await expect(client.getFile(path)).rejects.toThrow('Unerwartete Antwort');
+});
+
+test('getFile: a 403 that stays a 403 is an AuthError, and the retry is made only once', async () => {
+  const body = JSON.stringify({ message: 'Resource not accessible by personal access token' });
+  respondStatus(403, body, RATE_HEADERS);
+  respondStatus(403, body, RATE_HEADERS);
+  await expect(client.getFile('05 Daily Notes/x.md')).rejects.toBeInstanceOf(AuthError);
+  expect(calls.map((c) => c.headers.Accept)).toEqual([ACCEPT_DEFAULT, ACCEPT_OBJECT]);
+  expect(calls).toHaveLength(2);
+});
+
+test('getFile: only a plain 403 is retried, not a rate limit and not any other failure', async () => {
+  const path = '05 Daily Notes/x.md';
+  const limited = '{"message":"You have exceeded a secondary rate limit."}';
+  respondStatus(403, limited, { 'x-ratelimit-remaining': '0' });
+  await expect(client.getFile(path)).rejects.toBeInstanceOf(RateLimitError);
+  respondStatus(403, limited, { 'retry-after': '60' });
+  await expect(client.getFile(path)).rejects.toBeInstanceOf(RateLimitError);
+  respondStatus(429);
+  await expect(client.getFile(path)).rejects.toBeInstanceOf(RateLimitError);
+  respondStatus(401, '', RATE_HEADERS);
+  await expect(client.getFile(path)).rejects.toBeInstanceOf(AuthError);
+  respondStatus(500);
+  await expect(client.getFile(path)).rejects.toThrow('500');
+  respondStatus(404);
+  expect(await client.getFile(path)).toBeNull();
+  expect(calls).toHaveLength(6); // jeweils genau eine Anfrage
+
+  // Das Limit kann auch erst die Wiederholung treffen
+  respondStatus(403, TOO_LARGE_BODY, RATE_HEADERS);
+  respondStatus(403, limited, { 'retry-after': '60' });
+  await expect(client.getFile(path)).rejects.toBeInstanceOf(RateLimitError);
+  respondStatus(403, TOO_LARGE_BODY, RATE_HEADERS);
+  respondStatus(403, limited, { 'x-ratelimit-remaining': '0' });
+  await expect(client.getFile(path)).rejects.toBeInstanceOf(RateLimitError);
+});
+
+test('getFile: the retry goes to the same guarded NFC path, and a refused path sends nothing at all', async () => {
+  // a plus Trema statt ä als einem Zeichen, so wie manche Eingaben es liefern
+  const nfd = '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg'.normalize('NFD');
+  expect(nfd).not.toBe(nfd.normalize('NFC'));
+  respondStatus(403, TOO_LARGE_BODY, RATE_HEADERS);
+  respond({ type: 'file', encoding: 'none', size: 2_000_000, content: '', sha: 'big2' }, { content: utf8ToBase64('x'), encoding: 'base64' });
+  expect(await client.getFile(nfd)).toEqual({ text: 'x', sha: 'big2' });
+  const url = `${API}/contents/07%20Anh%C3%A4nge/Notizbuch/2026/2026-10-29%20Tag.svg?ref=main`;
+  expect(calls.map((c) => c.url)).toEqual([url, url, `${API}/git/blobs/big2`]);
+
+  // Ein gesperrter Pfad kommt gar nicht erst zu einer ersten Anfrage, also auch nicht zu einer Wiederholung
+  calls.length = 0;
+  for (const refused of ['00 Beispiel/Notiz.md', '05 Daily Notes/../00 Beispiel/Notiz.md', '05 Daily Notes/Token.md', '04 Ressourcen/Kalender']) {
+    await expect(client.getFile(refused), refused).rejects.toBeInstanceOf(PathNotAllowedError);
+  }
+  expect(calls).toEqual([]);
 });
 
 test('getFile: 404 is "no such file", every other failure is an error', async () => {
@@ -422,6 +537,12 @@ test('maps status codes and rate limit headers to the right error class', async 
     [429, {}, RateLimitError],
     [429, { 'x-ratelimit-remaining': '0' }, RateLimitError],
     [429, { 'x-ratelimit-remaining': '7' }, RateLimitError],
+    // Sekundäres Ratenlimit: GitHub nennt mit retry-after, wann es weitergeht
+    [403, { 'retry-after': '60' }, RateLimitError],
+    [403, { 'x-ratelimit-remaining': '12', 'retry-after': '60' }, RateLimitError],
+    [429, { 'retry-after': '60' }, RateLimitError],
+    [401, { 'retry-after': '60' }, AuthError],
+    [409, { 'retry-after': '60' }, ConflictError],
     [409, {}, ConflictError],
   ];
   for (const [status, headers, expected] of table) {
@@ -462,6 +583,11 @@ test('any other status is a plain Error that names the status', async () => {
     expect(Object.getPrototypeOf(error), String(status)).toBe(Error.prototype);
     expect(error?.message, String(status)).toContain(String(status));
   }
+  // retry-after bei einem Serverfehler ist kein Ratenlimit
+  respondStatus(503, '', { 'retry-after': '30' });
+  const busy = await errorOf(client.headSha());
+  expect(Object.getPrototypeOf(busy)).toBe(Error.prototype);
+  expect(busy?.message).toContain('503');
 });
 
 test('a lost connection is an OfflineError for every method, also while the answer is being read', async () => {
@@ -480,6 +606,28 @@ test('a lost connection is an OfflineError for every method, also while the answ
     replies.push({ kind: 'bodyFails' });
     await expect(operation()).rejects.toBeInstanceOf(OfflineError);
   }
+});
+
+test('OfflineError keeps the original error as cause, and the cause never lands in the message', async () => {
+  failNetwork();
+  const lost = await errorOf(client.headSha());
+  expect(lost).toBeInstanceOf(OfflineError);
+  expect(lost?.cause).toBeInstanceOf(TypeError);
+  expect((lost?.cause as Error).message).toBe('Failed to fetch');
+  expect(lost?.message).toBe('Keine Verbindung zu GitHub.');
+
+  // Auch wenn die Verbindung erst beim Lesen der Antwort abbricht
+  replies.push({ kind: 'bodyFails' });
+  const cut = await errorOf(client.headSha());
+  expect(cut).toBeInstanceOf(OfflineError);
+  expect((cut?.cause as Error).message).toBe('network error');
+  expect(cut?.message).toBe('Keine Verbindung zu GitHub.');
+
+  // Der Konstruktor nimmt die Ursache getrennt vom Text. Ohne Ursache gibt es keine.
+  const own = new OfflineError('eigener Text', { cause: 'Ursache' });
+  expect(own.message).toBe('eigener Text');
+  expect(own.cause).toBe('Ursache');
+  expect('cause' in new OfflineError()).toBe(false);
 });
 
 test('error classes are Errors with stable names and German messages', () => {
@@ -509,6 +657,7 @@ test('no error message contains the token', async () => {
     [401, {}],
     [403, {}],
     [403, { 'x-ratelimit-remaining': '0' }],
+    [403, { 'retry-after': '60' }],
     [409, {}],
     [422, {}],
     [429, {}],
@@ -647,7 +796,7 @@ test('changedFiles keeps names with blocked word parts away from the caller', as
   respond({
     files: [
       { filename: '05 Daily Notes/2026-10-29.md' },
-      { filename: '00 Kontext/Passwörter.md' },
+      { filename: '00 Beispiel/Passwörter Muster.md' },
       { filename: 'Recovery Codes.md' },
       { filename: '07 Anhänge/Notizbuch/2026/neu.svg', previous_filename: '07 Anhänge/Notizbuch/2026/Token.svg', status: 'renamed' },
       { filename: 'tresor.KEY' },
@@ -738,4 +887,200 @@ test('listDir: 404 is an empty folder, other failures are errors, a file answer 
   await expect(client.listDir('07 Anhänge/Notizbuch/2026')).rejects.toThrow('500');
   respond({ type: 'file', name: 'x.md', path: '05 Daily Notes/x.md', sha: 's', content: '' });
   expect(await client.listDir('05 Daily Notes/x.md')).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// listDir bei großen Ordnern: Die Contents-API liefert höchstens 1000 Einträge, danach schneidet sie ab
+// ---------------------------------------------------------------------------------------------
+
+const BIG_DIR = '07 Anhänge/Notizbuch/2026';
+const BIG_DIR_URL = '/contents/07%20Anh%C3%A4nge/Notizbuch/2026?ref=main';
+const PARENT_URL = '/contents/07%20Anh%C3%A4nge/Notizbuch?ref=main';
+
+function dayName(i: number) {
+  return `2026-${String(i).padStart(4, '0')} Tag.svg`;
+}
+
+/** Eine Ordnerliste der Contents-API mit `count` Dateien. */
+function contentsListing(count: number) {
+  return Array.from({ length: count }, (_, i) => ({ name: dayName(i), path: `${BIG_DIR}/${dayName(i)}`, sha: `c${i}`, type: 'file' }));
+}
+
+/** Die Liste des Elternordners. Darin steht die sha des großen Ordners. */
+const PARENT_LISTING = [
+  { name: '2025', path: '07 Anhänge/Notizbuch/2025', sha: 'tree2025', type: 'dir' },
+  { name: '2026', path: BIG_DIR, sha: 'tree2026', type: 'dir' },
+  { name: 'Deckblatt.svg', path: '07 Anhänge/Notizbuch/Deckblatt.svg', sha: 'dk1', type: 'file' },
+];
+
+test('listDir: at 1000 entries the list may be cut off, so the full list comes from the Git Trees API', async () => {
+  const tree: unknown[] = Array.from({ length: 1250 }, (_, i) => ({
+    path: dayName(i),
+    mode: '100644',
+    type: 'blob',
+    sha: `b${i}`,
+    size: 100,
+    url: `https://api.github.com/repos/${REPO}/git/blobs/b${i}`,
+  }));
+  tree.push(
+    { path: 'Unterordner', mode: '040000', type: 'tree', sha: 'sub1', url: 'https://api.github.com/x' },
+    { path: 'Modul', mode: '160000', type: 'commit', sha: 'mod1' }, // Submodul
+    { path: 'Monkey.svg', mode: '100644', type: 'blob', sha: 'm1' },
+    { path: 'Recovery Codes.md', mode: '100644', type: 'blob', sha: 'x1' },
+    { path: 'Notfall.KEY', mode: '100644', type: 'blob', sha: 'x2' },
+    { path: 'PASSWORT', mode: '040000', type: 'tree', sha: 'x3' },
+    { path: 'api.Token', mode: '100644', type: 'blob', sha: 'x4' },
+    { path: 'ohne Sha', mode: '100644', type: 'blob' },
+    { mode: '100644', type: 'blob', sha: 'ohne Pfad' },
+    { path: 'unbekannt', type: 'link', sha: 'x5' },
+    'kein Objekt',
+    null,
+  );
+  respond(contentsListing(1000));
+  respond(PARENT_LISTING);
+  respond({ sha: 'tree2026', url: 'https://api.github.com/x', tree, truncated: false });
+
+  const entries = await client.listDir(BIG_DIR);
+
+  // mehr als die 1000 der Contents-API, gleiche Form wie dort, ganze Pfade, gesperrte und unbrauchbare Einträge weg
+  expect(entries).toHaveLength(1250 + 2);
+  expect(entries[0]).toEqual({ name: dayName(0), path: `${BIG_DIR}/${dayName(0)}`, sha: 'b0', type: 'file' });
+  expect(entries[1249]).toEqual({ name: dayName(1249), path: `${BIG_DIR}/${dayName(1249)}`, sha: 'b1249', type: 'file' });
+  expect(entries[1250]).toEqual({ name: 'Unterordner', path: `${BIG_DIR}/Unterordner`, sha: 'sub1', type: 'dir' });
+  expect(entries[1251]).toEqual({ name: 'Monkey.svg', path: `${BIG_DIR}/Monkey.svg`, sha: 'm1', type: 'file' });
+  expect(entries.every((e) => Object.keys(e).sort().join() === 'name,path,sha,type')).toBe(true);
+
+  // Reihenfolge der Anfragen: Ordner, dann Elternordner (für die sha), dann Tree. Alle wie üblich gesendet, der Tree ohne Rekursion.
+  expect(calls.map((c) => [c.method, c.url.replace(API, '')])).toEqual([
+    ['GET', BIG_DIR_URL],
+    ['GET', PARENT_URL],
+    ['GET', '/git/trees/tree2026'],
+  ]);
+  for (const call of calls) {
+    expect(call.headers.Accept, call.url).toBe(ACCEPT_DEFAULT);
+    expect(call.headers.Authorization, call.url).toBe(`Bearer ${TOKEN}`);
+    expect(call.cache, call.url).toBe('no-store');
+    expect(call.url, call.url).not.toContain(TOKEN);
+  }
+});
+
+test('listDir: up to 999 entries are the whole folder, only 1000 or more start the second route', async () => {
+  respond(contentsListing(999));
+  const entries = await client.listDir(BIG_DIR);
+  expect(entries).toHaveLength(999);
+  expect(calls).toHaveLength(1);
+
+  respond(contentsListing(1000));
+  respond(PARENT_LISTING);
+  respond({ tree: [{ path: 'a.svg', type: 'blob', sha: 'b1' }], truncated: false });
+  expect(await client.listDir(BIG_DIR)).toHaveLength(1);
+  expect(calls).toHaveLength(4);
+});
+
+test('listDir: the limit counts the entries GitHub sent, not the ones left after filtering', async () => {
+  // 1000 Einträge, davon zwei gesperrte: GitHub hat an der Grenze abgeschnitten, auch wenn danach nur 998 übrig sind.
+  const sent = [
+    ...contentsListing(998),
+    { name: 'Recovery Codes.md', path: `${BIG_DIR}/Recovery Codes.md`, sha: 'r1', type: 'file' },
+    { name: 'Notfall.KEY', path: `${BIG_DIR}/Notfall.KEY`, sha: 'r2', type: 'file' },
+  ];
+  expect(sent).toHaveLength(1000);
+  respond(sent);
+  respond(PARENT_LISTING);
+  respond({ tree: [{ path: 'a.svg', type: 'blob', sha: 'b1' }], truncated: false });
+  expect((await client.listDir(BIG_DIR)).map((e) => e.name)).toEqual(['a.svg']);
+  expect(calls).toHaveLength(3);
+});
+
+test('listDir: a truncated tree answer is returned as far as it goes, an empty one is an empty folder', async () => {
+  respond(contentsListing(1000));
+  respond(PARENT_LISTING);
+  respond({ sha: 'tree2026', truncated: true, tree: [{ path: 'a.svg', type: 'blob', sha: 'b1' }, { path: 'b.svg', type: 'blob', sha: 'b2' }] });
+  expect((await client.listDir(BIG_DIR)).map((e) => e.name)).toEqual(['a.svg', 'b.svg']);
+
+  respond(contentsListing(1000));
+  respond(PARENT_LISTING);
+  respond({ sha: 'tree2026', truncated: false, tree: [] });
+  expect(await client.listDir(BIG_DIR)).toEqual([]);
+});
+
+test('listDir: the Git Trees route works from the NFC path and encodes the sha', async () => {
+  const nfd = BIG_DIR.normalize('NFD');
+  expect(nfd).not.toBe(BIG_DIR);
+  respond(contentsListing(1000));
+  respond([{ name: '2026', path: BIG_DIR, sha: 'a/b?c', type: 'dir' }]);
+  respond({ tree: [{ path: 'x.svg', type: 'blob', sha: 'b1' }], truncated: false });
+  expect(await client.listDir(nfd)).toEqual([{ name: 'x.svg', path: `${BIG_DIR}/x.svg`, sha: 'b1', type: 'file' }]);
+  expect(calls.map((c) => c.url.replace(API, ''))).toEqual([BIG_DIR_URL, PARENT_URL, '/git/trees/a%2Fb%3Fc']);
+});
+
+test('listDir: when the parent folder is big too, its sha comes from the Git Trees API in turn', async () => {
+  const sub = `${BIG_DIR}/Unterordner`;
+  respond(Array.from({ length: 1000 }, (_, i) => ({ name: dayName(i), path: `${sub}/${dayName(i)}`, sha: `u${i}`, type: 'file' })));
+  respond(contentsListing(1000));
+  respond(PARENT_LISTING);
+  respond({ tree: [{ path: 'Unterordner', type: 'tree', sha: 'treeSub' }], truncated: false });
+  respond({ tree: [{ path: 'Seite.svg', type: 'blob', sha: 'bs' }], truncated: false });
+  expect(await client.listDir(sub)).toEqual([{ name: 'Seite.svg', path: `${sub}/Seite.svg`, sha: 'bs', type: 'file' }]);
+  expect(calls.map((c) => c.url.replace(API, ''))).toEqual([
+    '/contents/07%20Anh%C3%A4nge/Notizbuch/2026/Unterordner?ref=main',
+    BIG_DIR_URL,
+    PARENT_URL,
+    '/git/trees/tree2026',
+    '/git/trees/treeSub',
+  ]);
+});
+
+test('listDir: a big folder whose parent the guard does not release is an error, not a silently cut-off list', async () => {
+  // Diese vier Ordner haben keinen freigegebenen Elternordner (Hauptordner des Vaults, 07 Anhänge, 04 Ressourcen).
+  for (const folder of ['05 Daily Notes', '02 Projekte', '07 Anhänge/Notizbuch', '04 Ressourcen/Kalender']) {
+    calls.length = 0;
+    respond(contentsListing(1000));
+    const error = await errorOf(client.listDir(folder));
+    expect(error, folder).not.toBeNull();
+    expect(error, folder).not.toBeInstanceOf(PathNotAllowedError);
+    expect(error?.message, folder).toContain('1000');
+    expect(calls, folder).toHaveLength(1); // nur die Liste des Ordners selbst, nie die des Elternordners
+  }
+});
+
+test('listDir: the Git Trees route refuses answers it cannot trust and reports missing pieces', async () => {
+  // Der Elternordner kennt den Ordner nicht (zwischendurch gelöscht)
+  respond(contentsListing(1000));
+  respond([{ name: '2025', path: '07 Anhänge/Notizbuch/2025', sha: 'tree2025', type: 'dir' }]);
+  await expect(client.listDir(BIG_DIR)).rejects.toThrow('Unerwartete Antwort');
+  // Gleicher Name, aber eine Datei: deren sha ist keine Tree-sha
+  respond(contentsListing(1000));
+  respond([{ name: '2026', path: BIG_DIR, sha: 'file1', type: 'file' }]);
+  await expect(client.listDir(BIG_DIR)).rejects.toThrow('Unerwartete Antwort');
+  // Der Elternordner ist weg (404 ergibt eine leere Liste)
+  respond(contentsListing(1000));
+  respondStatus(404);
+  await expect(client.listDir(BIG_DIR)).rejects.toThrow('Unerwartete Antwort');
+  // Die Antwort der Trees API hat keine Einträge
+  respond(contentsListing(1000));
+  respond(PARENT_LISTING);
+  respond({ sha: 'tree2026', truncated: false });
+  await expect(client.listDir(BIG_DIR)).rejects.toThrow('Unerwartete Antwort');
+  // Der Tree fehlt: ein Fehler mit dem Status, keine leere Liste
+  respond(contentsListing(1000));
+  respond(PARENT_LISTING);
+  respondStatus(404);
+  const gone = await errorOf(client.listDir(BIG_DIR));
+  expect(gone).not.toBeNull();
+  expect(gone?.message).toContain('404');
+});
+
+test('listDir: the extra requests of the Git Trees route map errors like every other request', async () => {
+  respond(contentsListing(1000));
+  respondStatus(401);
+  await expect(client.listDir(BIG_DIR)).rejects.toBeInstanceOf(AuthError);
+  respond(contentsListing(1000));
+  respond(PARENT_LISTING);
+  failNetwork();
+  await expect(client.listDir(BIG_DIR)).rejects.toBeInstanceOf(OfflineError);
+  respond(contentsListing(1000));
+  respond(PARENT_LISTING);
+  respondStatus(403, '', { 'x-ratelimit-remaining': '0' });
+  await expect(client.listDir(BIG_DIR)).rejects.toBeInstanceOf(RateLimitError);
 });

@@ -1,11 +1,16 @@
 import { base64ToUtf8, utf8ToBase64 } from './base64';
-import { assertAllowedPath, hasBlockedWordPart, normalizePath, type Mode } from './paths';
+import { assertAllowedPath, hasBlockedWordPart, normalizePath, PathNotAllowedError, type Mode } from './paths';
 
 const API = 'https://api.github.com';
 const API_VERSION = '2022-11-28';
 const BRANCH = 'main';
-// Die Contents-API liefert Dateien über 1 MB ohne Inhalt. Dann holt die Blob-API sie.
+const ACCEPT = 'application/vnd.github+json';
+// Dateien zwischen 1 und 100 MB liefert die Contents-API nur im Objektformat, und dort ohne Inhalt (`encoding` ist `none`).
+const ACCEPT_OBJECT = 'application/vnd.github.object+json';
+// Die Contents-API liefert Dateien über 1 MB nicht mit Inhalt. Dann holt die Blob-API sie.
 const MAX_INLINE_SIZE = 1_000_000;
+// Die Contents-API liefert höchstens 1000 Einträge je Ordner und sagt nicht, ob sie damit abgeschnitten hat.
+const CONTENTS_DIR_LIMIT = 1000;
 const EXPIRY_HEADER = 'github-authentication-token-expiration';
 
 // Die Namen der Fehlerklassen stehen als Text da, damit sie auch nach dem Verkleinern des Codes stimmen.
@@ -24,8 +29,9 @@ export class ConflictError extends Error {
 }
 
 export class OfflineError extends Error {
-  constructor(message = 'Keine Verbindung zu GitHub.') {
-    super(message);
+  // Der ursprüngliche Fehler von fetch gehört in `options.cause`, nie in die Meldung.
+  constructor(message = 'Keine Verbindung zu GitHub.', options?: ErrorOptions) {
+    super(message, options);
     this.name = 'OfflineError';
   }
 }
@@ -85,23 +91,51 @@ function parseTokenExpiry(value: string): Date | null {
   return new Date(utc - offset);
 }
 
+/**
+ * Anzeichen eines Ratenlimits in den Kopfzeilen: Das Kontingent ist verbraucht (`x-ratelimit-remaining: 0`), oder GitHub
+ * nennt mit `retry-after`, wann es weitergeht (so meldet es das sekundäre Limit).
+ */
+function hasRateLimitSignal(headers: Headers): boolean {
+  return headers.get('x-ratelimit-remaining') === '0' || headers.has('retry-after');
+}
+
+/** 429 ist immer ein Ratenlimit, 403 nur mit einem Anzeichen. Ein 403 ohne Anzeichen heißt: kein Recht. */
+function isRateLimited(status: number, headers: Headers): boolean {
+  return status === 429 || (status === 403 && hasRateLimitSignal(headers));
+}
+
 function errorFor(status: number, headers: Headers, bodyText: string): Error {
   if (status === 401) return new AuthError();
-  const limitReached = headers.get('x-ratelimit-remaining') === '0';
-  if (status === 429 || (status === 403 && limitReached)) return new RateLimitError();
+  if (isRateLimited(status, headers)) return new RateLimitError();
   if (status === 403) return new AuthError();
   if (status === 409 || (status === 422 && /sha/i.test(bodyText))) return new ConflictError();
   return new Error(`GitHub antwortete mit Status ${status}.`);
 }
 
+/** Gesperrte Namen sollen nie bis zur Oberfläche kommen, egal über welche API die Liste kam. */
+function dirEntry(name: string, path: string, sha: string, type: DirEntry['type']): DirEntry | null {
+  if (hasBlockedWordPart(name) || hasBlockedWordPart(path)) return null;
+  return { name, path, sha, type };
+}
+
+/** Ein Eintrag der Contents-API. */
 function toDirEntry(raw: unknown): DirEntry | null {
   if (!isObject(raw)) return null;
   const { name, path, sha, type } = raw;
   if (typeof name !== 'string' || typeof path !== 'string' || typeof sha !== 'string') return null;
-  // Verknüpfungen und Submodule kann die App nicht brauchen, und gesperrte Namen sollen nie bis zur Oberfläche kommen.
+  // Verknüpfungen und Submodule kann die App nicht brauchen.
   if (type !== 'file' && type !== 'dir') return null;
-  if (hasBlockedWordPart(name) || hasBlockedWordPart(path)) return null;
-  return { name, path, sha, type };
+  return dirEntry(name, path, sha, type);
+}
+
+/** Ein Eintrag der Git-Trees-API. Dort ist `path` nur der Name, `blob` eine Datei und `tree` ein Unterordner. */
+function treeEntryToDirEntry(raw: unknown, folder: string): DirEntry | null {
+  if (!isObject(raw)) return null;
+  const { path: name, sha, type } = raw;
+  if (typeof name !== 'string' || typeof sha !== 'string') return null;
+  // Submodule (`commit`) kann die App nicht brauchen.
+  if (type !== 'blob' && type !== 'tree') return null;
+  return dirEntry(name, `${folder}/${name}`, sha, type === 'blob' ? 'file' : 'dir');
 }
 
 export class GitHubClient {
@@ -123,7 +157,13 @@ export class GitHubClient {
   /** Datei lesen. `null`, wenn es sie nicht gibt. */
   async getFile(path: string): Promise<{ text: string; sha: string } | null> {
     const url = `${this.#contentsUrl(path, 'read')}?ref=${BRANCH}`;
-    const { status, data } = await this.#request('GET', url, undefined, [404]);
+    let { status, data } = await this.#request('GET', url, undefined, [403, 404]);
+    if (status === 403) {
+      // Eine Datei über 1 MB beantwortet GitHub mit dem Standard-Accept mit 403 (`too_large`). Im Objektformat kommt sie
+      // ohne Inhalt, den holt dann die Blob-API. Es bleibt bei dieser einen Wiederholung: Ein zweites 403 ist ein echtes
+      // und wird wie sonst abgebildet. Dieselbe URL, also derselbe Pfad, den die Sperre eben freigegeben hat.
+      ({ status, data } = await this.#request('GET', url, undefined, [404], ACCEPT_OBJECT));
+    }
     if (status === 404) return null;
     if (!isObject(data)) throw unexpected();
     const sha = data.sha;
@@ -154,11 +194,15 @@ export class GitHubClient {
     await this.#request('DELETE', url, { message, sha, branch: BRANCH });
   }
 
-  /** Dateien und Unterordner eines Ordners. Einen Ordner, den es nicht gibt, meldet GitHub mit 404, das ergibt `[]`. */
+  /**
+   * Dateien und Unterordner eines Ordners. Einen Ordner, den es nicht gibt, meldet GitHub mit 404, das ergibt `[]`.
+   * Bei 1000 oder mehr Einträgen kommt die Liste aus der Git-Trees-API, weil die Contents-API dann abschneidet.
+   */
   async listDir(path: string): Promise<DirEntry[]> {
     const url = `${this.#contentsUrl(path, 'list')}?ref=${BRANCH}`;
     const { status, data } = await this.#request('GET', url, undefined, [404]);
     if (status === 404 || !Array.isArray(data)) return [];
+    if (data.length >= CONTENTS_DIR_LIMIT) return this.#listDirViaTree(path);
     return data.flatMap((raw) => {
       const entry = toDirEntry(raw);
       return entry ? [entry] : [];
@@ -209,6 +253,38 @@ export class GitHubClient {
     return `${this.#repoUrl}/contents/${encodePath(normalizePath(path))}`;
   }
 
+  /**
+   * Die ganze Liste eines Ordners mit 1000 oder mehr Einträgen, ohne Rekursion. Die sha des Ordners steht in der Liste
+   * seines Elternordners. Gibt die Pfadsperre den nicht frei, gibt es keine vollständige Liste, und das ist ein Fehler
+   * statt einer stillschweigend abgeschnittenen Liste. Ist die Antwort mit `truncated: true` selbst abgeschnitten (über
+   * 100.000 Einträge), gilt, was kam. Die Anfrage an die Trees-API nennt nur diese sha, nie einen Pfad, wie die
+   * Blob-Anfrage. Der Ordner und sein Elternordner sind vorher über `listDir` durch die Pfadsperre gegangen.
+   */
+  async #listDirViaTree(path: string): Promise<DirEntry[]> {
+    const folder = normalizePath(path);
+    const slash = folder.lastIndexOf('/');
+    const parent = slash === -1 ? '' : folder.slice(0, slash);
+    let siblings: DirEntry[];
+    try {
+      siblings = await this.listDir(parent);
+    } catch (error) {
+      if (error instanceof PathNotAllowedError) {
+        throw new Error('Der Ordner hat 1000 oder mehr Einträge, und die vollständige Liste ist nicht freigegeben.', {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+    const self = siblings.find((entry) => entry.type === 'dir' && entry.path === folder);
+    if (!self) throw unexpected();
+    const { data } = await this.#request('GET', `${this.#repoUrl}/git/trees/${encodeURIComponent(self.sha)}`);
+    if (!isObject(data) || !Array.isArray(data.tree)) throw unexpected();
+    return data.tree.flatMap((raw) => {
+      const entry = treeEntryToDirEntry(raw, folder);
+      return entry ? [entry] : [];
+    });
+  }
+
   /** Inhalt einer Datei über die Blob-API, für Dateien, die die Contents-API nicht mitliefert. */
   async #blobText(sha: string): Promise<string> {
     const { data } = await this.#request('GET', `${this.#repoUrl}/git/blobs/${encodeURIComponent(sha)}`);
@@ -219,17 +295,20 @@ export class GitHubClient {
 
   /**
    * Schickt eine Anfrage und bildet Fehler ab. Antworten mit einem Status aus `passStatuses` (bei Dateien 404) gibt
-   * sie ohne Fehler zurück, jeder andere Fehlerstatus wird geworfen. Das Ablaufdatum des Tokens liest sie aus jeder Antwort.
+   * sie ohne Fehler zurück, jeder andere Fehlerstatus wird geworfen. Ein Ratenlimit wird nie durchgereicht, auch wenn
+   * sein Status (403) in der Liste steht. Das Ablaufdatum des Tokens liest sie aus jeder Antwort. `accept` ersetzt nur
+   * den Accept-Header.
    */
   async #request(
     method: 'GET' | 'PUT' | 'DELETE',
     url: string,
     body?: unknown,
     passStatuses: readonly number[] = [],
+    accept = ACCEPT,
   ): Promise<{ status: number; data: unknown }> {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.#token}`,
-      Accept: 'application/vnd.github+json',
+      Accept: accept,
       'X-GitHub-Api-Version': API_VERSION,
     };
     // no-store: Der Browser darf nie einen älteren Stand aus dem Cache liefern, der einen neueren auf GitHub verdeckt.
@@ -245,14 +324,17 @@ export class GitHubClient {
       const send = this.#fetch; // als einfacher Funktionsaufruf, nicht als Methode von this
       response = await send(url, init);
       text = await response.text();
-    } catch {
+    } catch (cause) {
       // fetch lehnt nur bei Netzproblemen ab (kein Netz, Verbindung abgebrochen). HTTP-Fehler kommen als Antwort.
-      throw new OfflineError();
+      // Der ursprüngliche Fehler bleibt als `cause` erhalten und steht nie in der Meldung.
+      throw new OfflineError(undefined, { cause });
     }
 
     this.#noteTokenExpiry(response.headers);
     if (response.ok) return { status: response.status, data: parseJson(text) };
-    if (passStatuses.includes(response.status)) return { status: response.status, data: null };
+    if (passStatuses.includes(response.status) && !isRateLimited(response.status, response.headers)) {
+      return { status: response.status, data: null };
+    }
     throw errorFor(response.status, response.headers, text);
   }
 

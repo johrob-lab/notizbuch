@@ -5,6 +5,21 @@ test('utf8 roundtrip', () => {
   expect(base64ToUtf8(utf8ToBase64('## Ergänzungen äöüß € „x“'))).toBe('## Ergänzungen äöüß € „x“');
 });
 
+test('a byte order mark at the start survives reading and writing', () => {
+  // Manche Editoren setzen ein BOM (U+FEFF, in UTF-8 die Bytes EF BB BF) an den Dateianfang. Geht es beim Lesen verloren,
+  // fehlt es nach dem nächsten Speichern in der Datei, und die Datei hat sich still verändert.
+  const body = '## Ergänzungen\n- [ ] Aufgabe\n';
+  const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(body, 'utf8')]);
+  const base64 = bytes.toString('base64');
+  expect(base64ToUtf8(base64)).toBe('\uFEFF' + body); // lesen: das BOM bleibt das erste Zeichen
+  expect(utf8ToBase64('\uFEFF' + body)).toBe(base64); // schreiben: dieselben Bytes wie beim Lesen
+  expect(base64ToUtf8(utf8ToBase64('\uFEFF' + body))).toBe('\uFEFF' + body);
+  // nur das BOM, ein BOM mitten im Text und zwei BOM hintereinander
+  expect(base64ToUtf8(utf8ToBase64('\uFEFF'))).toBe('\uFEFF');
+  expect(base64ToUtf8(utf8ToBase64('a\uFEFFb'))).toBe('a\uFEFFb');
+  expect(base64ToUtf8(utf8ToBase64('\uFEFF\uFEFFx'))).toBe('\uFEFF\uFEFFx');
+});
+
 test('is plain UTF-8 plus standard Base64, same as Node', () => {
   const samples = [
     '',

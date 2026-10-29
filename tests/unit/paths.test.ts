@@ -26,7 +26,7 @@ test('path guard', () => {
   expect(() => assertAllowedPath('02 Projekte/Beispiel.md', 'read')).toThrow(PathNotAllowedError);
   expect(() => assertAllowedPath('07 Anhänge/Notizbuch/Recovery Codes.md', 'read')).toThrow(PathNotAllowedError);
   expect(() => assertAllowedPath('05 Daily Notes/../00 Kontext/x.md', 'read')).toThrow(PathNotAllowedError);
-  expect(() => assertAllowedPath('00 Kontext/Über mich.md', 'read')).toThrow(PathNotAllowedError);
+  expect(() => assertAllowedPath('00 Beispiel/Notiz.md', 'read')).toThrow(PathNotAllowedError);
 });
 
 test('write: daily notes and everything below the notebook folder, nothing else', () => {
@@ -42,10 +42,10 @@ test('write: daily notes and everything below the notebook folder, nothing else'
   expectDenied('write', [
     '04 Ressourcen/Kalender/Termine.md', // Kalender nur lesen
     '02 Projekte/Beispiel.md',
-    '00 Kontext/Über mich.md',
+    '00 Beispiel/Notiz.md',
     '01 Inbox/Notiz.md',
-    '03 Bereiche/Excel und Automatisierung/Notiz.md',
-    '04 Ressourcen/Excel-Formeln und Vorlagen/Notiz.md',
+    '03 Bereiche/Beispielbereich/Notiz.md',
+    '04 Ressourcen/Beispielthema/Notiz.md',
     '06 Archiv/Notiz.md',
     '07 Anhänge/Bild.png', // Anhänge, aber nicht im Ordner Notizbuch
     '.obsidian/app.json',
@@ -67,10 +67,10 @@ test('read: what write allows plus the calendar folder', () => {
   expectDenied('read', [
     '02 Projekte/Beispiel.md', // von Projekten gibt es nur die Dateiliste
     '02 Projekte/Unterordner/Datei.md',
-    '04 Ressourcen/Excel-Formeln und Vorlagen/Formeln.md',
+    '04 Ressourcen/Beispielthema/Formeln.md',
     '04 Ressourcen/Kalender', // der Ordner selbst
     '04 Ressourcen',
-    '00 Kontext/Über mich.md',
+    '00 Beispiel/Notiz.md',
     '05 Daily Notes',
     '07 Anhänge/Notizbuch',
   ]);
@@ -228,11 +228,11 @@ test('NFD input is normalized to NFC before checking', () => {
   expectAllowed('write', [nfc, nfd]);
   expectAllowed('read', [nfd]);
   expectAllowed('list', ['07 Anha\u0308nge/Notizbuch', '07 Anha\u0308nge/Notizbuch/2026']);
-  expectDenied('write', ['00 Kontext/U\u0308ber mich.md', '07 Anha\u0308nge/Notizbuch/Recovery.md', '07 Anha\u0308nge/Bild.png']);
+  expectDenied('write', ['00 Beispiel/U\u0308bung.md', '07 Anha\u0308nge/Notizbuch/Recovery.md', '07 Anha\u0308nge/Bild.png']);
 });
 
 test('the error names the path and keeps a stable name', () => {
-  const path = '00 Kontext/Über mich.md';
+  const path = '00 Beispiel/Notiz.md';
   let error: unknown;
   try {
     assertAllowedPath(path, 'read');
