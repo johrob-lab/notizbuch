@@ -269,6 +269,19 @@ test('a file deleted on GitHub keeps its local copy while a change is queued, an
   expect(h.conflicts).toEqual([]);
 });
 
+test('a copy that was never on GitHub is not dropped just because the file is missing there', async () => {
+  // Ein Zustand, den die App selbst nicht herstellt: eine Kopie ohne sha und ohne offene Änderung
+  await h.store.put('files', { path: A, text: 'lokal', sha: null, base: null, syncedAt: 0 });
+  fake.head = 'h1';
+  await e.pollRemote();
+  fake.changes = [A];
+  fake.head = 'h2';
+  await e.pollRemote();
+  expect(fake.finished('get')).toBe(1); // die Abfrage hat nachgesehen
+  expect(await h.store.get('files', A)).toMatchObject({ text: 'lokal' });
+  expect(h.remoteChanges).toEqual([]);
+});
+
 test('a page that still shows a file deleted on GitHub can write it back', async () => {
   fake.files[A] = { text: 'a1', sha: 'sa1' };
   fake.head = 'h1';

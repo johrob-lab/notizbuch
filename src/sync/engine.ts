@@ -77,6 +77,12 @@ export class SyncEngine {
    * hat. Nur im Arbeitsspeicher: Nach einem Neustart liest die Seite neu.
    */
   readonly #page = new Map<string, PageVersion>();
+  /**
+   * Der Text, den die Seite dieses Fensters je Datei hält: der zuletzt gelesene (`read`) oder geschriebene (`write`).
+   * Der Ausgang gehört allen Fenstern. Lädt dieses Fenster eine Änderung hoch, die ein anderes schrieb, hält die Seite
+   * hier etwas anderes als das Hochgeladene, und die Fassung in `#page` darf nicht darauf vorrücken.
+   */
+  readonly #pageText = new Map<string, string>();
   #textTimer: Timer | undefined;
   #inkTimer: Timer | undefined;
   #pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -133,19 +139,20 @@ export class SyncEngine {
   // ---------- Lesen und Schreiben ----------
 
   /**
-   * Die lokale Kopie sofort, im Hintergrund wird sie aufgefrischt (nur ohne offene Änderung). Ohne Kopie kommt der Text
-   * von GitHub: `null`, wenn es die Datei nicht gibt oder GitHub nicht erreichbar ist. Ein Lesefehler (zum Beispiel
-   * Text, der kein UTF-8 ist) geht an den Aufrufer und wird nie gemerkt, damit eine kaputte Datei nicht wie eine leere
+   * Die lokale Kopie sofort, im Hintergrund wird sie aufgefrischt (nur ohne offene Änderung, und eine Datei, die es auf
+   * GitHub nicht mehr gibt, lässt die Kopie stehen: Das übernimmt nur die Abfrage). Ohne Kopie kommt der Text von
+   * GitHub: `null`, wenn es die Datei nicht gibt oder GitHub nicht erreichbar ist. Ein Lesefehler (zum Beispiel Text,
+   * der kein UTF-8 ist) geht an den Aufrufer und wird nie gemerkt, damit eine kaputte Datei nicht wie eine leere
    * aussieht und überschrieben wird.
    */
   async read(path: string): Promise<string | null> {
     const local = await this.#store.get('files', path);
     if (local) {
-      this.#page.set(path, { sha: local.sha, baseText: local.base });
+      this.#pageGets(path, local.text, { sha: local.sha, baseText: local.base });
       void this.#refreshInBackground(path);
       return local.text;
     }
-    if ((await this.#store.get('outbox', path))?.deleted) return null; // gelöscht, das Löschen steht noch aus
+    if ((await this.#store.get('outbox', path))?.deleted) return this.#pageGetsNothing(path); // gelöscht, das Löschen steht noch aus
     let remote: Remote | null;
     try {
       remote = await this.#call(() => this.#client.getFile(path));
@@ -156,10 +163,7 @@ export class SyncEngine {
       }
       throw error;
     }
-    if (!remote) {
-      this.#page.delete(path);
-      return null;
-    }
+    if (!remote) return this.#pageGetsNothing(path);
     const fetched = remote;
     // Während der Anfrage kann jemand geschrieben oder gelöscht haben, dann gilt das.
     const kept = await this.#store.transact(['files', 'outbox'], async (tx) => {
@@ -170,9 +174,22 @@ export class SyncEngine {
       await tx.objectStore('files').put(record);
       return record;
     });
-    if (!kept) return null;
-    this.#page.set(path, { sha: kept.sha, baseText: kept.base });
+    if (!kept) return this.#pageGetsNothing(path);
+    this.#pageGets(path, kept.text, { sha: kept.sha, baseText: kept.base });
     return kept.text;
+  }
+
+  /** Die Seite bekommt diesen Text, der auf dieser Fassung beruht. */
+  #pageGets(path: string, text: string, version: PageVersion): void {
+    this.#page.set(path, version);
+    this.#pageText.set(path, text);
+  }
+
+  /** Die Seite bekommt nichts (die Datei gibt es nicht oder nicht mehr) und hält danach keinen Text mehr. */
+  #pageGetsNothing(path: string): null {
+    this.#page.delete(path);
+    this.#pageText.delete(path);
+    return null;
   }
 
   /** Speichert sofort lokal und stellt die Änderung in die Warteschlange. Hochgeladen wird nach 2 s (Text) bzw. 10 s (Handschrift). */
@@ -191,6 +208,7 @@ export class SyncEngine {
         tx.objectStore('files').put({ path, text, sha: from.sha, base: from.baseText, syncedAt: record?.syncedAt ?? 0 }),
       ]);
     });
+    this.#pageText.set(path, text);
     this.#schedule(kind);
     await this.#refreshPending();
   }
@@ -201,7 +219,7 @@ export class SyncEngine {
    * Fassung ist. Alles andere hat dieses Gerät nie gesehen und bleibt.
    */
   async remove(path: string): Promise<void> {
-    this.#page.delete(path);
+    this.#pageGetsNothing(path);
     const alreadyQueued = await this.#store.transact(['files', 'outbox'], async (tx) => {
       const [record, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
       if (queued?.deleted) return true;
@@ -397,25 +415,33 @@ export class SyncEngine {
    */
   async #settle(sent: OutboxEntry, uploaded: Remote): Promise<void> {
     const { path } = sent;
-    const pageChanged = await this.#store.transact(['files', 'outbox'], async (tx) => {
+    const localText = await this.#store.transact(['files', 'outbox'], async (tx) => {
       const [record, current] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
       const writes: Promise<unknown>[] = [];
-      let changed = false;
+      let text = record?.text ?? null; // die lokale Kopie danach
       if (!current || (current.text === sent.text && !current.deleted)) {
         if (current) writes.push(tx.objectStore('outbox').delete(path));
         writes.push(tx.objectStore('files').put(syncedRecord(path, uploaded)));
-        changed = uploaded.text !== sent.text;
+        text = uploaded.text;
       } else if (uploaded.text === sent.text) {
         writes.push(tx.objectStore('outbox').put({ ...current, baseSha: uploaded.sha, baseText: uploaded.text }));
         if (record) writes.push(tx.objectStore('files').put({ ...record, sha: uploaded.sha, base: uploaded.text, syncedAt: Date.now() }));
       }
       await Promise.all(writes);
-      return changed;
+      return text;
     });
-    // Die Seite hält den Text, den sie geschickt hat. Liegt genau er jetzt auf GitHub, ist das ihre neue Grundlage.
+    const held = this.#pageText.get(path);
+    // Hält die Seite genau den Text, den sie geschickt hat, und liegt er jetzt auf GitHub, ist das ihre neue Grundlage.
     // Wurde zusammengeführt, beruht ihr Text weiter auf der alten: Schreibt sie darauf weiter, wird wieder zusammengeführt.
-    this.#page.set(path, uploaded.text === sent.text ? { sha: uploaded.sha, baseText: uploaded.text } : { sha: sent.baseSha, baseText: sent.baseText });
-    if (pageChanged) this.onRemoteChange?.([path]);
+    // Hält sie etwas anderes (ein anderes Fenster hat die Änderung geschrieben), rückt nichts vor: Ihr nächstes Schreiben
+    // trifft auf den 409 und wird zusammengeführt, statt die Änderung des anderen Fensters zu überschreiben.
+    if (held === sent.text) {
+      this.#page.set(path, uploaded.text === sent.text ? { sha: uploaded.sha, baseText: uploaded.text } : { sha: sent.baseSha, baseText: sent.baseText });
+    }
+    // Zeigt die Seite etwas anderes, als die lokale Kopie jetzt ist (zusammengeführt, oder von einem anderen Fenster
+    // hochgeladen), soll sie neu lesen. Hat sie die Datei nie geholt, gibt es nichts zu lesen. Schrieb sie schon weiter,
+    // ist die lokale Kopie ihr Text, und es bleibt still.
+    if (held !== undefined && localText !== null && held !== localText) this.onRemoteChange?.([path]);
   }
 
   // ---------- Gleichzeitige Änderungen ----------
@@ -538,16 +564,21 @@ export class SyncEngine {
     const { path } = sent;
     const remote = known ?? (await this.#call(() => this.#client.getFile(path)));
     if (!remote) return this.#settleDelete(sent);
-    const cancelled = await this.#store.transact(['files', 'outbox'], async (tx) => {
+    const wasBasedOn = await this.#store.transact(['files', 'outbox'], async (tx) => {
       const current = await tx.objectStore('outbox').get(path);
-      if (!current?.deleted) return false;
+      if (!current?.deleted) return null;
       await Promise.all([
         tx.objectStore('outbox').delete(path),
         tx.objectStore('files').put(syncedRecord(path, remote)),
       ]);
-      return true;
+      return { sha: current.baseSha, baseText: current.baseText };
     });
-    if (cancelled) this.onRemoteChange?.([path]);
+    if (wasBasedOn) {
+      // Die Seite hält weiter ihren Text, der auf der alten Fassung beruht. Schreibt sie darauf weiter, trifft der Upload
+      // auf den fremden Stand und wird zusammengeführt, statt ihn mit der lokalen Kopie als Grundlage zu überschreiben.
+      this.#page.set(path, wasBasedOn);
+      this.onRemoteChange?.([path]);
+    }
   }
 
   // ---------- Fremde Änderungen ----------
@@ -579,7 +610,7 @@ export class SyncEngine {
       try {
         for (const path of new Set(changed)) {
           try {
-            if (await this.#refreshCopy(path)) refreshed.push(path);
+            if (await this.#refreshCopy(path, true)) refreshed.push(path);
           } catch (error) {
             if (isStop(error)) throw error;
             this.onError?.({ path, error }); // eine kaputte Datei hält die anderen nicht auf
@@ -597,21 +628,24 @@ export class SyncEngine {
   }
 
   /**
-   * Holt eine Datei, die lokal vorliegt und keine offene Änderung hat, neu. Gibt es sie auf GitHub nicht mehr, geht die
-   * Kopie mit. Wahr, wenn die Kopie dadurch neu ist oder weg.
+   * Holt eine Datei, die lokal vorliegt und keine offene Änderung hat, neu. Wahr, wenn die Kopie dadurch neu ist oder weg.
+   * Dass es die Datei auf GitHub nicht mehr gibt, zählt nur, wenn die Abfrage es beweist (`dropIfGone`): Sie hat vorher
+   * den Stand von `main` geholt, der Zugang geht also. Ohne diesen Beweis kann "nicht gefunden" auch heißen, dass der
+   * Zugang fehlt, GitHub antwortet darauf wie auf eine fehlende Datei. Dann bliebe nach und nach keine Kopie übrig.
    */
-  async #refreshCopy(path: string): Promise<boolean> {
+  async #refreshCopy(path: string, dropIfGone: boolean): Promise<boolean> {
     const record = await this.#store.get('files', path);
     if (!record || (await this.#store.get('outbox', path))) return false;
     const remote = await this.#call(() => this.#client.getFile(path));
+    if (remote === null && !dropIfGone) return false;
     // Gleicher Stand: dieselbe sha, oder keine Seite kennt die Datei. Eine Kopie, die nie auf GitHub war, bleibt also.
     if ((remote?.sha ?? null) === record.sha) return false;
     return this.#adopt(path, record, remote);
   }
 
   /**
-   * Übernimmt den fremden Stand (`null`: die Datei ist gelöscht), wenn in der Zwischenzeit weder geschrieben noch
-   * hochgeladen wurde. Die Fassung, die die Seite hält, bleibt unberührt: Erst `read` ändert sie.
+   * Übernimmt den fremden Stand (`null`: die Datei ist gelöscht, das kommt nur von der Abfrage), wenn in der Zwischenzeit
+   * weder geschrieben noch hochgeladen wurde. Die Fassung, die die Seite hält, bleibt unberührt: Erst `read` ändert sie.
    */
   async #adopt(path: string, seen: FileRecord, remote: Remote | null): Promise<boolean> {
     return this.#store.transact(['files', 'outbox'], async (tx) => {
@@ -627,7 +661,7 @@ export class SyncEngine {
 
   async #refreshInBackground(path: string): Promise<void> {
     try {
-      if (await this.#refreshCopy(path)) this.onRemoteChange?.([path]);
+      if (await this.#refreshCopy(path, false)) this.onRemoteChange?.([path]);
     } catch (error) {
       if (!this.#noteStop(error)) this.onError?.({ path, error });
     }

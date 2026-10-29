@@ -51,17 +51,31 @@ export type StoreTx = IDBPTransaction<NotizbuchDB, Area[], 'readwrite'>;
 
 const VERSION = 1;
 
+function nameOf(error: unknown): unknown {
+  return typeof error === 'object' && error !== null ? (error as { name?: unknown }).name : undefined;
+}
+
 /** Ist die Verbindung zu? Dann wirft jeder Zugriff darauf `InvalidStateError`. */
 function isClosedConnection(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'InvalidStateError';
+  return nameOf(error) === 'InvalidStateError';
 }
+
+/** So bricht der Browser einen laufenden Zugriff ab, wenn er die Verbindung beendet (WebKit meldet `UnknownError`). */
+function isAbort(error: unknown): boolean {
+  return nameOf(error) === 'AbortError' || nameOf(error) === 'UnknownError';
+}
+
+/** Wartet auf die nächste Aufgabe der Ereignisschleife. */
+const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 /**
  * Der lokale Speicher. Safari beendet die Verbindung zur IndexedDB gern, wenn die App im Hintergrund war, und kein
  * Zugriff geht danach mehr. Darum öffnet der Speicher sie neu: sofort, wenn der Browser das Beenden meldet (Ereignis
- * `close`), sonst beim ersten Zugriff, der an einem `InvalidStateError` scheitert. Dieser Zugriff läuft dann noch
- * einmal. Das ist sicher, weil jeder Zugriff der App ganze Werte schreibt oder löscht: Zweimal ausgeführt ergibt er
- * dasselbe wie einmal. Wer den Speicher mit `close()` selbst schließt, will ihn zu haben und bekommt ihn nicht neu geöffnet.
+ * `close`), sonst beim ersten Zugriff, der an einem `InvalidStateError` scheitert. Ein Zugriff, den der Browser beim
+ * Beenden mitten im Lauf abbricht (`AbortError`, in WebKit `UnknownError`), wartet noch die Meldung ab, die erst
+ * danach kommt. Der Zugriff läuft dann noch einmal. Das ist sicher, weil jeder Zugriff der App ganze Werte schreibt oder
+ * löscht: Zweimal ausgeführt ergibt er dasselbe wie einmal. Wer den Speicher mit `close()` selbst schließt, will ihn zu
+ * haben und bekommt ihn nicht neu geöffnet, auch nicht, wenn das Schließen mitten in ein Neuöffnen fällt.
  */
 export class Store {
   readonly #name: string;
@@ -87,17 +101,23 @@ export class Store {
     const generation = ++this.#generation;
     this.#lost = false;
     const previous = this.#db as Db | undefined;
-    this.#db = await openDB<NotizbuchDB>(this.#name, VERSION, {
-      upgrade(db) {
-        db.createObjectStore('files', { keyPath: 'path' });
-        db.createObjectStore('outbox', { keyPath: 'path' });
-        db.createObjectStore('settings');
-        db.createObjectStore('meta');
+    const db = await openDB<NotizbuchDB>(this.#name, VERSION, {
+      upgrade(upgrading) {
+        upgrading.createObjectStore('files', { keyPath: 'path' });
+        upgrading.createObjectStore('outbox', { keyPath: 'path' });
+        upgrading.createObjectStore('settings');
+        upgrading.createObjectStore('meta');
       },
       terminated: () => {
         if (generation === this.#generation) this.#lost = true;
       },
     });
+    if (this.#closed) {
+      // `close()` kam, während geöffnet wurde: Die neue Verbindung darf nicht offen bleiben, und der Zugriff scheitert wie jeder andere.
+      db.close();
+      throw new DOMException('Der Speicher wurde geschlossen.', 'InvalidStateError');
+    }
+    this.#db = db;
     // Die ersetzte Verbindung darf nicht offen bleiben, sonst hielte sie spätere Änderungen an der Datenbank auf.
     try {
       previous?.close();
@@ -122,11 +142,21 @@ export class Store {
   async run<T>(work: (db: Db) => Promise<T>): Promise<T> {
     if (this.#lost && !this.#closed) await this.#reconnect(this.#db);
     const db = this.#db;
+    const generation = this.#generation;
     try {
       return await work(db);
     } catch (error) {
-      const connectionLost = isClosedConnection(error) || (this.#lost && this.#db === db);
-      if (this.#closed || !connectionLost) throw error;
+      if (this.#closed) throw error;
+      let connectionLost = isClosedConnection(error) || (this.#lost && this.#db === db);
+      if (!connectionLost && isAbort(error)) {
+        // Beendet der Browser die Verbindung, bricht er zuerst die laufenden Zugriffe ab und meldet das Ende (`close`) erst
+        // danach. Der Abbruch ist hier also früher als die Meldung: Eine Aufgabe abzuwarten, schafft die Reihenfolge.
+        // Hat ein anderer Zugriff die Meldung inzwischen gesehen und schon neu geöffnet, steht `#lost` wieder auf falsch.
+        // Dass die Zählung der Verbindungen weitergerückt ist, zeigt dasselbe.
+        await nextTask();
+        connectionLost = !this.#closed && (this.#generation !== generation || this.#lost);
+      }
+      if (!connectionLost) throw error;
       await this.#reconnect(db);
       return work(this.#db);
     }

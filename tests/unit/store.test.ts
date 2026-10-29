@@ -149,6 +149,123 @@ test('an access that fails while the browser is terminating the connection is re
   expect(open).toHaveBeenCalledTimes(1);
 });
 
+test('an access that fails with any other error after the browser reported the end of the connection is repeated too', async () => {
+  const open = vi.spyOn(indexedDB, 'open');
+  let runs = 0;
+  const result = await store.run(async (db) => {
+    runs++;
+    if (runs === 1) {
+      await forceClose(unwrap(db)); // das Ende der Verbindung ist gemeldet
+      throw new Error('Folgefehler'); // und der Zugriff scheitert an etwas, das weder InvalidStateError noch Abbruch heißt
+    }
+    return db.count('files');
+  });
+  expect(result).toBe(0);
+  expect(runs).toBe(2);
+  expect(open).toHaveBeenCalledTimes(1);
+});
+
+test.each(['AbortError', 'UnknownError'])(
+  'an access the browser aborts before it reports the end of the connection (%s) is repeated on a new connection',
+  async (name) => {
+    const open = vi.spyOn(indexedDB, 'open');
+    let runs = 0;
+    const result = await store.run(async (db) => {
+      runs++;
+      if (runs === 1) {
+        const raw = unwrap(db);
+        // Der Browser bricht den Zugriff ab und meldet das Ende der Verbindung (`close`) erst danach, in einer späteren Aufgabe.
+        setTimeout(() => forceCloseDatabase(raw as never), 0);
+        throw new DOMException('abgebrochen', name);
+      }
+      return db.count('files');
+    });
+    expect(result).toBe(0);
+    expect(runs).toBe(2);
+    expect(open).toHaveBeenCalledTimes(1);
+  },
+);
+
+test('an abort of a transaction when the connection ends is repeated with the whole function', async () => {
+  await store.put('files', record('a.md', 'eins'));
+  let runs = 0;
+  const result = await store.transact(['files'], async (tx) => {
+    runs++;
+    const raw = unwrap(tx.db);
+    if (runs === 1) {
+      setTimeout(() => forceCloseDatabase(raw as never), 0);
+      throw new DOMException('abgebrochen', 'AbortError');
+    }
+    await tx.objectStore('files').put(record('b.md', 'zwei'));
+    return runs;
+  });
+  expect(result).toBe(2);
+  expect((await store.getAll('files')).map((r) => r.path)).toEqual(['a.md', 'b.md']);
+});
+
+test('an aborted access is repeated too when another access has already started to replace the connection by then', async () => {
+  const open = vi.spyOn(indexedDB, 'open');
+  let other: Promise<unknown> | undefined;
+  let runs = 0;
+  const result = await store.run(async (db) => {
+    runs++;
+    if (runs === 1) {
+      const raw = unwrap(db);
+      // Das Ende der Verbindung wird erst nach dem Abbruch gemeldet. Ein anderer Zugriff, der gleich danach kommt, sieht die
+      // Meldung und öffnet schon neu, bevor dieser hier zu Ende gewartet hat.
+      setTimeout(() => {
+        forceCloseDatabase(raw as never);
+        other = store.get('meta', 'lastHead');
+      }, 0);
+      throw new DOMException('abgebrochen', 'AbortError');
+    }
+    return db.count('files');
+  });
+  await other;
+  expect(result).toBe(0);
+  expect(runs).toBe(2);
+  expect(open).toHaveBeenCalledTimes(1); // beide teilen den einen neuen Versuch
+});
+
+test('an aborted access that began before another one replaced the connection is repeated on the new one', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let runs = 0;
+  const slow = store.run(async (db) => {
+    runs++;
+    if (runs === 1) {
+      await gate; // arbeitet noch an der alten Verbindung, während ein anderer Zugriff sie schon ersetzt
+      throw new DOMException('abgebrochen', 'AbortError');
+    }
+    return db.count('files');
+  });
+  await closeBehindTheBack(store);
+  await store.put('meta', 'h1', 'lastHead'); // scheitert an der geschlossenen Verbindung und öffnet neu
+  const open = vi.spyOn(indexedDB, 'open');
+  release();
+  expect(await slow).toBe(0);
+  expect(runs).toBe(2);
+  expect(open).not.toHaveBeenCalled(); // der späte Zugriff nimmt die neue Verbindung, statt noch einmal zu öffnen
+});
+
+test('an aborted access of a store that is closed in the meantime is not repeated', async () => {
+  const open = vi.spyOn(indexedDB, 'open');
+  let runs = 0;
+  await expect(
+    store.run(async (db) => {
+      runs++;
+      const raw = unwrap(db);
+      setTimeout(() => {
+        forceCloseDatabase(raw as never);
+        store.close();
+      }, 0);
+      throw new DOMException('abgebrochen', 'AbortError');
+    }),
+  ).rejects.toMatchObject({ name: 'AbortError' });
+  expect(runs).toBe(1);
+  expect(open).not.toHaveBeenCalled();
+});
+
 test('the same kind of failure on a healthy connection is passed on and not repeated', async () => {
   const open = vi.spyOn(indexedDB, 'open');
   let runs = 0;
@@ -246,6 +363,25 @@ test('reopening closes the connection it replaces', async () => {
     return db.count('files');
   });
   store.close();
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.deleteDatabase('notizbuch');
+    request.onsuccess = () => resolve();
+    request.onblocked = () => reject(new Error('Es ist noch eine Verbindung offen.'));
+    request.onerror = () => reject(request.error);
+  });
+});
+
+test('closing the store while it reopens closes the new connection as well and rejects the access', async () => {
+  await closeBehindTheBack(store);
+  const original = indexedDB.open.bind(indexedDB);
+  vi.spyOn(indexedDB, 'open').mockImplementation(((...args: Parameters<IDBFactory['open']>) => {
+    store.close(); // close() kommt, während das Neuöffnen unterwegs ist
+    return original(...args);
+  }) as never);
+  await expect(store.get('meta', 'lastHead')).rejects.toMatchObject({ name: 'InvalidStateError' });
+  await expect(store.get('meta', 'lastHead')).rejects.toMatchObject({ name: 'InvalidStateError' }); // und es bleibt zu
+
+  // Keine Verbindung bleibt offen: Die Datenbank lässt sich löschen.
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase('notizbuch');
     request.onsuccess = () => resolve();

@@ -144,40 +144,16 @@ test('an old answer to a refresh does not replace a newer copy that was adopted 
   expect(h.remoteChanges).toEqual([[A]]);
 });
 
-test('a local copy whose file was deleted on GitHub is dropped by the refresh, and the page is told', async () => {
+test('a refresh on reading keeps the local copy when GitHub says the file is not there, a lost access looks the same', async () => {
   fake.files[A] = { text: base, sha: 's1' };
   await e.read(A);
-  delete fake.files[A];
+  delete fake.files[A]; // gelöscht, oder der Zugang ist weg: GitHub antwortet in beiden Fällen mit "nicht gefunden"
   expect(await e.read(A)).toBe(base); // sofort die Kopie
-  await until(() => h.remoteChanges.length === 1);
-  expect(h.remoteChanges).toEqual([[A]]);
-  expect(await h.store.get('files', A)).toBeUndefined();
-  expect(await e.read(A)).toBeNull();
-});
-
-test('a local copy with a queued change survives the deletion on GitHub', async () => {
-  fake.files[A] = { text: base, sha: 's1' };
-  fake.files[B] = { text: 'b1', sha: 'sb1' };
-  await e.read(A);
-  await e.read(B);
-  await e.write(A, 'lokal', 'md');
-  delete fake.files[A];
-  delete fake.files[B];
-  await e.read(A);
-  await e.read(B); // Zeuge, siehe oben: Er wird gelöscht, A mit der offenen Änderung nicht
-  await until(() => h.remoteChanges.length === 1);
-  expect(h.remoteChanges).toEqual([[B]]);
-  expect(await h.store.get('files', A)).toMatchObject({ text: 'lokal' });
-});
-
-test('a copy that was never on GitHub is not dropped just because the file is missing there', async () => {
-  // Ein Zustand, den die App selbst nicht herstellt: eine Kopie ohne sha und ohne offene Änderung
-  await h.store.put('files', { path: A, text: 'lokal', sha: null, base: null, syncedAt: 0 });
-  expect(await e.read(A)).toBe('lokal');
-  await until(() => fake.finished('get') === 1);
+  await until(() => fake.finished('get') === 2);
   await h.store.get('files', A); // diese Abfrage kommt erst, wenn die Übernahme (falls sie liefe) durch ist
-  expect(await h.store.get('files', A)).toMatchObject({ text: 'lokal' });
+  expect(await h.store.get('files', A)).toMatchObject({ text: base, sha: 's1', base });
   expect(h.remoteChanges).toEqual([]);
+  expect(await e.read(A)).toBe(base);
 });
 
 test('a page removed while its first read is still fetching does not come back as a local copy', async () => {
@@ -254,6 +230,34 @@ test('a delete that meets a changed file which is gone by the time it looks is d
   expect(h.errors).toEqual([]);
   expect(h.remoteChanges).toEqual([]);
   expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+});
+
+test('a page that is still shown after its delete was cancelled writes on its own version, so the stroke of the other device stays', async () => {
+  fake.files[S] = { text: svgPage('a'), sha: 's1' };
+  await e.read(S);
+  fake.files[S] = { text: svgPage('a', 'r'), sha: 's2' }; // ein anderes Gerät hat den Strich r dazugemalt
+  await e.remove(S);
+  await e.flush(); // das Löschen trifft auf den fremden Stand und wird abgebrochen
+  expect(h.remoteChanges).toEqual([[S]]);
+
+  await e.write(S, svgPage('a', 'b'), 'svg'); // die Seite hat noch nicht neu gelesen
+  await e.flush();
+  expect(parsePage(fake.files[S].text).strokes.map((stroke) => stroke.id).sort()).toEqual(['a', 'b', 'r']);
+  expect(fake.log.filter((line) => line.startsWith(`put ${S} `))).toEqual([`put ${S} s1`, `put ${S} s2`]); // 409, dann zusammengeführt
+  expect(h.conflicts).toEqual([]);
+});
+
+test('a page that read the remote version after its delete was cancelled writes on top of it without a conflict', async () => {
+  fake.files[S] = { text: svgPage('a'), sha: 's1' };
+  await e.read(S);
+  fake.files[S] = { text: svgPage('a', 'r'), sha: 's2' };
+  await e.remove(S);
+  await e.flush();
+  expect(await e.read(S)).toBe(svgPage('a', 'r')); // die Seite liest nach dem Hinweis neu
+  await e.write(S, svgPage('a', 'r', 'b'), 'svg');
+  await e.flush();
+  expect(fake.log.filter((line) => line.startsWith(`put ${S} `))).toEqual([`put ${S} s2`]);
+  expect(parsePage(fake.files[S].text).strokes.map((stroke) => stroke.id).sort()).toEqual(['a', 'b', 'r']);
 });
 
 test('a page written again while its delete is being cancelled keeps the new ink', async () => {
