@@ -1,25 +1,17 @@
 import { signal, type Signal } from '@preact/signals';
-import { mergePages } from '../ink/svg';
-import { conflictPath } from '../lib/filenames';
-import { mergeText } from '../lib/merge';
-import { AuthError, ConflictError, OfflineError, RateLimitError, type GitHubClient } from './github';
+import { copyPathFor, mergeByKind } from './conflicts';
+import { AuthError, ConflictError, OfflineError, RateLimitError, statusOf, type GitHubClient } from './github';
 import { PathNotAllowedError } from './paths';
-import type { FileRecord, OutboxEntry, Store } from './store';
+import type { SyncState, SyncStatus } from './status';
+import { syncedRecord, type FileRecord, type OutboxEntry, type Store } from './store';
+
+export { statusLabel, type SyncState, type SyncStatus } from './status';
 
 /**
  * Was die Engine vom Client braucht. `GitHubClient` hat private Felder, ein Fake kann die Klasse selbst darum nicht
  * erfüllen, ihre öffentlichen Methoden schon.
  */
 export type SyncClient = Pick<GitHubClient, 'getFile' | 'putFile' | 'deleteFile' | 'listDir' | 'headSha' | 'changedFiles'>;
-
-export type SyncState = 'gesichert' | 'wartet' | 'zugang';
-export type SyncStatus = { state: SyncState; pending: number };
-
-export function statusLabel(s: SyncStatus): string {
-  if (s.state === 'gesichert') return 'Gesichert';
-  if (s.state === 'zugang') return 'Zugang erneuern';
-  return `Wartet auf Netz · ${s.pending} ${s.pending === 1 ? 'Änderung' : 'Änderungen'}`;
-}
 
 const TEXT_DELAY_MS = 2000;
 const INK_DELAY_MS = 10_000;
@@ -28,13 +20,31 @@ const CALL_TIMEOUT_MS = 30_000;
 /** So oft versucht ein Abgleich eine Datei zusammenzuführen, die sich währenddessen schon wieder geändert hat. */
 const CONFLICT_ATTEMPTS = 3;
 const MAX_COPY_NUMBER = 99;
+/** Alle Tabs einer Origin teilen sich die Datenbank, darum gleicht immer nur einer von ihnen ab. */
+const LOCK_NAME = 'notizbuch-sync';
 
 type Remote = { text: string; sha: string };
+/** Die Fassung auf GitHub, aus der der Text entstand, den die Seite gerade hält. */
+type PageVersion = { sha: string | null; baseText: string | null };
 type Timer = ReturnType<typeof setTimeout>;
 
 /** Fehler, bei denen der Abgleich anhält und alles in der Warteschlange bleibt: kein Netz, Ratenlimit, kein Zugang. */
 function isStop(error: unknown): boolean {
   return error instanceof AuthError || error instanceof OfflineError || error instanceof RateLimitError;
+}
+
+/** Kennt GitHub den alten Commit nicht mehr, kann der Vergleich nichts liefern: 404, bei einer unbekannten sha auch 422. */
+function isUnknownCommit(error: unknown): boolean {
+  const status = statusOf(error);
+  return status === 404 || status === 422;
+}
+
+/**
+ * Der Upload beruhte auf einem Stand, den es so nicht mehr gibt: Die Datei hat sich geändert (Konflikt) oder ist weg
+ * (404 auf eine sha). Ohne sha ist ein 404 nichts davon, dann stimmt etwas anderes nicht, zum Beispiel der Repo-Name.
+ */
+function isStaleBase(error: unknown, sentSha: string | null): boolean {
+  return error instanceof ConflictError || (sentSha !== null && statusOf(error) === 404);
 }
 
 const byQueueTime = (a: OutboxEntry, b: OutboxEntry) => a.queuedAt - b.queuedAt || (a.path < b.path ? -1 : 1);
@@ -62,11 +72,18 @@ export class SyncEngine {
   #flushAgain = false;
   /** Pfad der Änderung, die gerade hochgeladen wird. */
   #current: string | null = null;
+  /**
+   * Die Fassung, aus der der Text entstand, den die Seite je Datei zuletzt bekommen hat (durch `read`) oder hochgeladen
+   * hat. Nur im Arbeitsspeicher: Nach einem Neustart liest die Seite neu.
+   */
+  readonly #page = new Map<string, PageVersion>();
   #textTimer: Timer | undefined;
   #inkTimer: Timer | undefined;
   #pollTimer: ReturnType<typeof setInterval> | undefined;
   #stopListening: (() => void) | undefined;
   #started = false;
+  /** Zählt die Starts: Ein `stop()` während `start()` wartet, macht diesen Start ungültig. */
+  #session = 0;
 
   constructor(o: { client: SyncClient; store: Store; device: string }) {
     this.#client = o.client;
@@ -80,7 +97,9 @@ export class SyncEngine {
   async start(): Promise<void> {
     if (this.#started) return;
     this.#started = true;
+    const session = ++this.#session;
     await this.#refreshPending();
+    if (session !== this.#session) return; // `stop()` kam dazwischen: nichts einrichten, ein späteres `start()` tut es einmal
     // Nicht abwarten: Safari fragt unter Umständen nach, die App läuft auch ohne Antwort.
     Promise.resolve(navigator.storage?.persist?.()).catch(() => undefined);
 
@@ -102,6 +121,7 @@ export class SyncEngine {
   }
 
   stop(): void {
+    this.#session++;
     this.#stopListening?.();
     this.#stopListening = undefined;
     clearInterval(this.#pollTimer);
@@ -121,6 +141,7 @@ export class SyncEngine {
   async read(path: string): Promise<string | null> {
     const local = await this.#store.get('files', path);
     if (local) {
+      this.#page.set(path, { sha: local.sha, baseText: local.base });
       void this.#refreshInBackground(path);
       return local.text;
     }
@@ -135,53 +156,74 @@ export class SyncEngine {
       }
       throw error;
     }
-    if (!remote) return null;
-    // Während der Anfrage kann jemand geschrieben haben, dann gilt dessen Fassung.
-    const tx = this.#store.transaction('files', 'readwrite');
-    const existing = await tx.store.get(path);
-    if (!existing) await tx.store.put({ path, text: remote.text, sha: remote.sha, base: remote.text, syncedAt: Date.now() });
-    await tx.done;
-    return existing ? existing.text : remote.text;
+    if (!remote) {
+      this.#page.delete(path);
+      return null;
+    }
+    const fetched = remote;
+    // Während der Anfrage kann jemand geschrieben oder gelöscht haben, dann gilt das.
+    const kept = await this.#store.transact(['files', 'outbox'], async (tx) => {
+      const [existing, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
+      if (existing) return existing;
+      if (queued?.deleted) return null;
+      const record = syncedRecord(path, fetched);
+      await tx.objectStore('files').put(record);
+      return record;
+    });
+    if (!kept) return null;
+    this.#page.set(path, { sha: kept.sha, baseText: kept.base });
+    return kept.text;
   }
 
   /** Speichert sofort lokal und stellt die Änderung in die Warteschlange. Hochgeladen wird nach 2 s (Text) bzw. 10 s (Handschrift). */
   async write(path: string, text: string, kind: 'md' | 'svg'): Promise<void> {
-    const tx = this.#store.transaction(['files', 'outbox'], 'readwrite');
-    const [record, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
-    // Die erste Grundlage bleibt: Bei mehreren Änderungen vor dem Hochladen zählt der Stand, den GitHub zuletzt hatte.
-    const baseSha = queued ? queued.baseSha : (record?.sha ?? null);
-    const baseText = queued ? queued.baseText : (record?.base ?? null);
-    await Promise.all([
-      tx.objectStore('outbox').put({ path, text, kind, baseSha, baseText, queuedAt: queued?.queuedAt ?? Date.now() }),
-      tx.objectStore('files').put({ path, text, sha: baseSha, base: baseText, syncedAt: record?.syncedAt ?? 0 }),
-      tx.done,
-    ]);
+    await this.#store.transact(['files', 'outbox'], async (tx) => {
+      const [record, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
+      // Die erste Grundlage bleibt: Bei mehreren Änderungen vor dem Hochladen zählt der Stand, den GitHub zuletzt hatte.
+      // Ohne offene Änderung zählt die Fassung, aus der der Text der Seite entstand. Das ist nicht unbedingt die lokale
+      // Kopie: Hat sie sich seit dem Lesen geändert (fremde Änderung, Konflikt), muss der Upload das merken und
+      // zusammenführen, statt die fremde Änderung mit dem Stand der Kopie still zu überschreiben.
+      const from: PageVersion = queued
+        ? { sha: queued.baseSha, baseText: queued.baseText }
+        : (this.#page.get(path) ?? { sha: record?.sha ?? null, baseText: record?.base ?? null });
+      await Promise.all([
+        tx.objectStore('outbox').put({ path, text, kind, baseSha: from.sha, baseText: from.baseText, queuedAt: queued?.queuedAt ?? Date.now() }),
+        tx.objectStore('files').put({ path, text, sha: from.sha, base: from.baseText, syncedAt: record?.syncedAt ?? 0 }),
+      ]);
+    });
     this.#schedule(kind);
     await this.#refreshPending();
   }
 
-  /** Löscht die Datei: lokal sofort, auf GitHub beim nächsten Abgleich. Eine Datei, die nie hochgeladen war, verschwindet einfach. */
+  /**
+   * Löscht die Datei: lokal sofort, auf GitHub beim nächsten Abgleich. Eine Datei, die nie hochgeladen war, verschwindet
+   * einfach. Kennt dieses Gerät die Fassung auf GitHub nicht, löscht der Abgleich nur, was genau die letzte lokale
+   * Fassung ist. Alles andere hat dieses Gerät nie gesehen und bleibt.
+   */
   async remove(path: string): Promise<void> {
-    const tx = this.#store.transaction(['files', 'outbox'], 'readwrite');
-    const [record, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
-    if (queued?.deleted) return;
-    const baseSha = queued ? queued.baseSha : (record?.sha ?? null);
-    // Kennt GitHub die Datei nicht und läuft gerade kein Upload von ihr, gibt es dort nichts zu löschen.
-    const neverSent = (queued || record) && baseSha === null && this.#current !== path;
-    const entry: OutboxEntry = {
-      path,
-      text: '',
-      kind: queued?.kind ?? (path.endsWith('.svg') ? 'svg' : 'md'),
-      baseSha, // `null` heißt: beim Abgleich erst nachsehen, welche Fassung auf GitHub liegt
-      baseText: queued ? queued.baseText : (record?.base ?? null),
-      queuedAt: queued?.queuedAt ?? Date.now(),
-      deleted: true,
-    };
-    await Promise.all([
-      tx.objectStore('files').delete(path),
-      neverSent ? tx.objectStore('outbox').delete(path) : tx.objectStore('outbox').put(entry),
-      tx.done,
-    ]);
+    this.#page.delete(path);
+    const alreadyQueued = await this.#store.transact(['files', 'outbox'], async (tx) => {
+      const [record, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
+      if (queued?.deleted) return true;
+      const baseSha = queued ? queued.baseSha : (record?.sha ?? null);
+      // Kennt GitHub die Datei nicht und läuft gerade kein Upload von ihr, gibt es dort nichts zu löschen.
+      const neverSent = (queued || record) && baseSha === null && this.#current !== path;
+      const entry: OutboxEntry = {
+        path,
+        text: queued?.text ?? record?.text ?? '', // die letzte lokale Fassung, siehe oben
+        kind: queued?.kind ?? (path.endsWith('.svg') ? 'svg' : 'md'),
+        baseSha, // `null` heißt: beim Abgleich erst nachsehen, welche Fassung auf GitHub liegt
+        baseText: queued ? queued.baseText : (record?.base ?? null),
+        queuedAt: queued?.queuedAt ?? Date.now(),
+        deleted: true,
+      };
+      await Promise.all([
+        tx.objectStore('files').delete(path),
+        neverSent ? tx.objectStore('outbox').delete(path) : tx.objectStore('outbox').put(entry),
+      ]);
+      return false;
+    });
+    if (alreadyQueued) return;
     this.#schedule('md');
     await this.#refreshPending();
   }
@@ -262,10 +304,10 @@ export class SyncEngine {
   }
 
   /**
-   * Lädt die Warteschlange hoch, eine Datei nach der anderen. Es läuft immer nur ein Abgleich. Wer währenddessen
-   * `flush` aufruft (die Wartezeit ist abgelaufen, das Netz ist zurück), bekommt einen weiteren Durchgang danach,
-   * auch wenn der laufende am Netz scheiterte. Der Aufruf endet erst, wenn alle Durchgänge fertig sind, und
-   * wirft nie.
+   * Lädt die Warteschlange hoch, eine Datei nach der anderen. Es läuft immer nur ein Abgleich, auch über Tabs hinweg
+   * (Schloss). Wer währenddessen `flush` aufruft (die Wartezeit ist abgelaufen, das Netz ist zurück), bekommt einen
+   * weiteren Durchgang danach, auch wenn der laufende am Netz scheiterte. Der Aufruf endet erst, wenn alle Durchgänge
+   * fertig sind, und wirft nie.
    */
   flush(): Promise<void> {
     if (this.#flushing) {
@@ -275,10 +317,7 @@ export class SyncEngine {
     const run = (async () => {
       try {
         do {
-          this.#flushAgain = false;
-          await this.#refreshPending(); // die Warteschlange kann aus einer früheren Sitzung stammen
-          await this.#flushOnce();
-          await this.#refreshPending();
+          await this.#exclusive(() => this.#flushPass());
           // Zwischen dieser Prüfung und `#flushing = null` gibt es kein await: Ein Aufruf geht nie verloren.
         } while (this.#flushAgain);
       } catch (error) {
@@ -289,6 +328,19 @@ export class SyncEngine {
     })();
     this.#flushing = run;
     return run;
+  }
+
+  /** Nur ein Tab gleichzeitig: Zwei Tabs hätten dieselbe Warteschlange und würden jede Änderung doppelt hochladen. */
+  #exclusive<T>(work: () => Promise<T>): Promise<T> {
+    return navigator.locks ? navigator.locks.request(LOCK_NAME, work) : work();
+  }
+
+  /** Ein Durchgang unter dem Schloss. Wer ab jetzt `flush` ruft, bekommt einen weiteren. */
+  async #flushPass(): Promise<void> {
+    this.#flushAgain = false;
+    await this.#refreshPending(); // die Warteschlange kann aus einer früheren Sitzung oder einem anderen Tab stammen
+    await this.#flushOnce();
+    await this.#refreshPending();
   }
 
   /** Ein Durchgang über die Warteschlange. */
@@ -332,7 +384,7 @@ export class SyncEngine {
       const { sha } = await this.#call(() => this.#client.putFile(entry.path, entry.text, entry.baseSha, this.#message(entry.path)));
       await this.#settle(entry, { sha, text: entry.text });
     } catch (error) {
-      if (!(error instanceof ConflictError)) throw error;
+      if (!isStaleBase(error, entry.baseSha)) throw error;
       await this.#resolveConflict(entry.path);
     }
   }
@@ -345,19 +397,24 @@ export class SyncEngine {
    */
   async #settle(sent: OutboxEntry, uploaded: Remote): Promise<void> {
     const { path } = sent;
-    const tx = this.#store.transaction(['files', 'outbox'], 'readwrite');
-    const [record, current] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
-    const writes: Promise<unknown>[] = [];
-    let pageChanged = false;
-    if (!current || (current.text === sent.text && !current.deleted)) {
-      if (current) writes.push(tx.objectStore('outbox').delete(path));
-      writes.push(tx.objectStore('files').put({ path, text: uploaded.text, sha: uploaded.sha, base: uploaded.text, syncedAt: Date.now() }));
-      pageChanged = uploaded.text !== sent.text;
-    } else if (uploaded.text === sent.text) {
-      writes.push(tx.objectStore('outbox').put({ ...current, baseSha: uploaded.sha, baseText: uploaded.text }));
-      if (record) writes.push(tx.objectStore('files').put({ ...record, sha: uploaded.sha, base: uploaded.text, syncedAt: Date.now() }));
-    }
-    await Promise.all([...writes, tx.done]);
+    const pageChanged = await this.#store.transact(['files', 'outbox'], async (tx) => {
+      const [record, current] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
+      const writes: Promise<unknown>[] = [];
+      let changed = false;
+      if (!current || (current.text === sent.text && !current.deleted)) {
+        if (current) writes.push(tx.objectStore('outbox').delete(path));
+        writes.push(tx.objectStore('files').put(syncedRecord(path, uploaded)));
+        changed = uploaded.text !== sent.text;
+      } else if (uploaded.text === sent.text) {
+        writes.push(tx.objectStore('outbox').put({ ...current, baseSha: uploaded.sha, baseText: uploaded.text }));
+        if (record) writes.push(tx.objectStore('files').put({ ...record, sha: uploaded.sha, base: uploaded.text, syncedAt: Date.now() }));
+      }
+      await Promise.all(writes);
+      return changed;
+    });
+    // Die Seite hält den Text, den sie geschickt hat. Liegt genau er jetzt auf GitHub, ist das ihre neue Grundlage.
+    // Wurde zusammengeführt, beruht ihr Text weiter auf der alten: Schreibt sie darauf weiter, wird wieder zusammengeführt.
+    this.#page.set(path, uploaded.text === sent.text ? { sha: uploaded.sha, baseText: uploaded.text } : { sha: sent.baseSha, baseText: sent.baseText });
     if (pageChanged) this.onRemoteChange?.([path]);
   }
 
@@ -372,7 +429,7 @@ export class SyncEngine {
       let text = entry.text;
       let baseSha: string | null = null; // Ist die Datei auf GitHub weg, wird die eigene als neue Datei hochgeladen.
       if (remote) {
-        const merged = this.#merge(entry, remote.text);
+        const merged = mergeByKind(entry.kind, entry.baseText, entry.text, remote.text);
         if (merged === null) return this.#keepRemote(entry, remote);
         if (merged === remote.text) return this.#settle(entry, remote); // GitHub hat schon alles, nichts hochzuladen
         text = merged;
@@ -382,24 +439,10 @@ export class SyncEngine {
         const { sha } = await this.#call(() => this.#client.putFile(path, text, baseSha, this.#message(path)));
         return await this.#settle(entry, { sha, text });
       } catch (error) {
-        if (!(error instanceof ConflictError)) throw error; // sonst hat sich die Datei schon wieder geändert: noch einmal
+        if (!isStaleBase(error, baseSha)) throw error; // sonst hat sich die Datei schon wieder geändert: noch einmal
       }
     }
     throw new Error('Die Datei auf GitHub ändert sich laufend. Der Abgleich versucht es später noch einmal.');
-  }
-
-  /** Der zusammengeführte Text, oder `null`, wenn sich beide Fassungen nicht sicher vereinen lassen. */
-  #merge(entry: OutboxEntry, remoteText: string): string | null {
-    if (entry.text === remoteText) return remoteText;
-    if (entry.kind === 'md') {
-      const result = mergeText(entry.baseText ?? '', entry.text, remoteText);
-      return result.ok ? result.text : null;
-    }
-    try {
-      return mergePages(entry.text, remoteText);
-    } catch {
-      return null; // eine der beiden Seiten ist nicht lesbar
-    }
   }
 
   /**
@@ -409,32 +452,34 @@ export class SyncEngine {
   async #keepRemote(entry: OutboxEntry, remote: Remote): Promise<void> {
     const { path } = entry;
     const copyPath = await this.#freeCopyPath(path);
-    const tx = this.#store.transaction(['files', 'outbox'], 'readwrite');
-    const current = await tx.objectStore('outbox').get(path);
-    const wantsCopy = !current?.deleted; // wer die Seite inzwischen gelöscht hat, braucht keine Kopie
-    const ours = current && !current.deleted ? current.text : entry.text;
-    const writes: Promise<unknown>[] = [
-      tx.objectStore('files').put({ path, text: remote.text, sha: remote.sha, base: remote.text, syncedAt: Date.now() }),
-      tx.objectStore('outbox').delete(path),
-    ];
-    if (wantsCopy) {
-      writes.push(
-        tx.objectStore('outbox').put({ path: copyPath, text: ours, kind: entry.kind, baseSha: null, baseText: null, queuedAt: Date.now() }),
-        tx.objectStore('files').put({ path: copyPath, text: ours, sha: null, base: null, syncedAt: 0 }),
-      );
-    }
-    await Promise.all([...writes, tx.done]);
+    const wantsCopy = await this.#store.transact(['files', 'outbox'], async (tx) => {
+      const current = await tx.objectStore('outbox').get(path);
+      const wants = !current?.deleted; // wer die Seite inzwischen gelöscht hat, braucht keine Kopie
+      const ours = current && !current.deleted ? current.text : entry.text;
+      const writes: Promise<unknown>[] = [
+        tx.objectStore('files').put(syncedRecord(path, remote)),
+        tx.objectStore('outbox').delete(path),
+      ];
+      if (wants) {
+        writes.push(
+          tx.objectStore('outbox').put({ path: copyPath, text: ours, kind: entry.kind, baseSha: null, baseText: null, queuedAt: Date.now() }),
+          tx.objectStore('files').put({ path: copyPath, text: ours, sha: null, base: null, syncedAt: 0 }),
+        );
+      }
+      await Promise.all(writes);
+      return wants;
+    });
+    // Die Seite hält weiter ihren Text, der auf dem alten Stand beruht. Schreibt sie darauf weiter, trifft der Upload auf
+    // den fremden Stand und wird zusammengeführt oder wieder zur Kopie, statt ihn zu überschreiben.
+    this.#page.set(path, { sha: entry.baseSha, baseText: entry.baseText });
     if (wantsCopy) this.onConflict?.({ path, copyPath });
     this.onRemoteChange?.([path]);
   }
 
   /** Name für die Konfliktkopie: `(Konflikt)`, dann `(Konflikt 2)` und so weiter. Eine ältere Kopie wird nie überschrieben. */
   async #freeCopyPath(path: string): Promise<string> {
-    const first = conflictPath(path);
-    const marker = ' (Konflikt)';
-    const at = first.lastIndexOf(marker);
     for (let n = 1; n <= MAX_COPY_NUMBER; n++) {
-      const candidate = n === 1 ? first : `${first.slice(0, at)} (Konflikt ${n})${first.slice(at + marker.length)}`;
+      const candidate = copyPathFor(path, n);
       if (!(await this.#exists(candidate))) return candidate;
     }
     throw new Error('Zu viele Konfliktkopien für diese Datei.');
@@ -454,6 +499,8 @@ export class SyncEngine {
       if (sha === null) {
         const remote = await this.#call(() => this.#client.getFile(path));
         if (!remote) return await this.#settleDelete(entry);
+        // Ohne bekannte Fassung wird nur gelöscht, was genau unsere letzte Fassung ist. Alles andere hat dieses Gerät nie gesehen.
+        if (remote.text !== entry.text) return await this.#cancelDelete(entry, remote);
         sha = remote.sha;
       }
       const version = sha;
@@ -471,40 +518,45 @@ export class SyncEngine {
   /** Die Datei ist auf GitHub weg. Wurde danach wieder geschrieben, ist das jetzt eine neue Datei. */
   async #settleDelete(sent: OutboxEntry): Promise<void> {
     const { path } = sent;
-    const tx = this.#store.transaction(['files', 'outbox'], 'readwrite');
-    const [record, current] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
-    const writes: Promise<unknown>[] = [];
-    if (current?.deleted) writes.push(tx.objectStore('outbox').delete(path));
-    else if (current) {
-      writes.push(tx.objectStore('outbox').put({ ...current, baseSha: null, baseText: null }));
-      if (record) writes.push(tx.objectStore('files').put({ ...record, sha: null, base: null }));
-    }
-    await Promise.all([...writes, tx.done]);
+    await this.#store.transact(['files', 'outbox'], async (tx) => {
+      const [record, current] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
+      const writes: Promise<unknown>[] = [];
+      if (current?.deleted) writes.push(tx.objectStore('outbox').delete(path));
+      else if (current) {
+        writes.push(tx.objectStore('outbox').put({ ...current, baseSha: null, baseText: null }));
+        if (record) writes.push(tx.objectStore('files').put({ ...record, sha: null, base: null }));
+      }
+      await Promise.all(writes);
+    });
   }
 
-  /** Die Datei hat sich auf GitHub geändert, seit das Löschen vorgemerkt wurde: Das Löschen entfällt, der neue Stand bleibt. */
-  async #cancelDelete(sent: OutboxEntry): Promise<void> {
+  /**
+   * Die Datei hat sich auf GitHub geändert, seit das Löschen vorgemerkt wurde, oder sie war nie bei diesem Gerät: Das
+   * Löschen entfällt, der Stand von GitHub bleibt (`known`, sonst wird er geholt).
+   */
+  async #cancelDelete(sent: OutboxEntry, known?: Remote): Promise<void> {
     const { path } = sent;
-    const remote = await this.#call(() => this.#client.getFile(path));
+    const remote = known ?? (await this.#call(() => this.#client.getFile(path)));
     if (!remote) return this.#settleDelete(sent);
-    const tx = this.#store.transaction(['files', 'outbox'], 'readwrite');
-    const current = await tx.objectStore('outbox').get(path);
-    const writes: Promise<unknown>[] = [];
-    if (current?.deleted) {
-      writes.push(
+    const cancelled = await this.#store.transact(['files', 'outbox'], async (tx) => {
+      const current = await tx.objectStore('outbox').get(path);
+      if (!current?.deleted) return false;
+      await Promise.all([
         tx.objectStore('outbox').delete(path),
-        tx.objectStore('files').put({ path, text: remote.text, sha: remote.sha, base: remote.text, syncedAt: Date.now() }),
-      );
-    }
-    await Promise.all([...writes, tx.done]);
-    if (current?.deleted) this.onRemoteChange?.([path]);
+        tx.objectStore('files').put(syncedRecord(path, remote)),
+      ]);
+      return true;
+    });
+    if (cancelled) this.onRemoteChange?.([path]);
   }
 
   // ---------- Fremde Änderungen ----------
 
   /**
    * Fragt GitHub, ob sich seit der letzten Abfrage etwas geändert hat, und frischt die Kopien auf, die keine offene
-   * Änderung haben. Beim ersten Mal merkt sie sich nur den Stand. Fehler kommen nie nach außen.
+   * Änderung haben. Beim ersten Mal merkt sie sich nur den Stand. Der neue Stand wird erst gemerkt, wenn alles
+   * durch ist: Scheitert etwas, fragt die nächste Abfrage noch einmal, und was schon übernommen ist, erfährt die Seite
+   * trotzdem sofort. Fehler kommen nie nach außen.
    */
   async pollRemote(): Promise<void> {
     try {
@@ -519,42 +571,58 @@ export class SyncEngine {
       try {
         changed = await this.#call(() => this.#client.changedFiles(last, head));
       } catch (error) {
-        // Kennt GitHub den alten Stand nicht mehr, soll die Abfrage nicht für immer hängen. Geöffnete Dateien frischt `read` auf.
-        if (isStop(error)) throw error;
+        // Kennt GitHub den alten Stand nicht mehr, soll die Abfrage nicht für immer hängen. Geöffnete Dateien frischt
+        // `read` auf. Jeder andere Fehler lässt den Stand stehen, die nächste Abfrage versucht es wieder.
+        if (!isUnknownCommit(error)) throw error;
       }
       const refreshed: string[] = [];
-      for (const path of new Set(changed)) {
-        try {
-          if (await this.#refreshCopy(path)) refreshed.push(path);
-        } catch (error) {
-          if (isStop(error)) throw error;
-          this.onError?.({ path, error }); // eine kaputte Datei hält die anderen nicht auf
+      try {
+        for (const path of new Set(changed)) {
+          try {
+            if (await this.#refreshCopy(path)) refreshed.push(path);
+          } catch (error) {
+            if (isStop(error)) throw error;
+            this.onError?.({ path, error }); // eine kaputte Datei hält die anderen nicht auf
+          }
         }
+      } finally {
+        // Was schon übernommen ist, muss die Seite erfahren, auch wenn ein späterer Pfad die Abfrage anhält. Sonst
+        // schriebe sie weiter auf den alten Text, und der Upload überschriebe die fremde Änderung.
+        if (refreshed.length > 0) this.onRemoteChange?.(refreshed);
       }
-      if (refreshed.length > 0) this.onRemoteChange?.(refreshed);
       await this.#store.put('meta', head, 'lastHead');
     } catch (error) {
       if (!this.#noteStop(error)) this.onError?.({ path: '', error });
     }
   }
 
-  /** Holt eine Datei, die lokal vorliegt und keine offene Änderung hat, neu. Wahr, wenn die Kopie dadurch neu ist. */
+  /**
+   * Holt eine Datei, die lokal vorliegt und keine offene Änderung hat, neu. Gibt es sie auf GitHub nicht mehr, geht die
+   * Kopie mit. Wahr, wenn die Kopie dadurch neu ist oder weg.
+   */
   async #refreshCopy(path: string): Promise<boolean> {
     const record = await this.#store.get('files', path);
     if (!record || (await this.#store.get('outbox', path))) return false;
     const remote = await this.#call(() => this.#client.getFile(path));
-    if (!remote || remote.sha === record.sha) return false;
+    // Gleicher Stand: dieselbe sha, oder keine Seite kennt die Datei. Eine Kopie, die nie auf GitHub war, bleibt also.
+    if ((remote?.sha ?? null) === record.sha) return false;
     return this.#adopt(path, record, remote);
   }
 
-  /** Übernimmt den fremden Stand, wenn in der Zwischenzeit weder geschrieben noch hochgeladen wurde. */
-  async #adopt(path: string, seen: FileRecord, remote: Remote): Promise<boolean> {
-    const tx = this.#store.transaction(['files', 'outbox'], 'readwrite');
-    const [record, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
-    const fresh = !queued && record !== undefined && record.sha === seen.sha;
-    if (fresh) await tx.objectStore('files').put({ path, text: remote.text, sha: remote.sha, base: remote.text, syncedAt: Date.now() });
-    await tx.done;
-    return fresh;
+  /**
+   * Übernimmt den fremden Stand (`null`: die Datei ist gelöscht), wenn in der Zwischenzeit weder geschrieben noch
+   * hochgeladen wurde. Die Fassung, die die Seite hält, bleibt unberührt: Erst `read` ändert sie.
+   */
+  async #adopt(path: string, seen: FileRecord, remote: Remote | null): Promise<boolean> {
+    return this.#store.transact(['files', 'outbox'], async (tx) => {
+      const [record, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
+      const fresh = !queued && record !== undefined && record.sha === seen.sha;
+      if (fresh) {
+        if (remote) await tx.objectStore('files').put(syncedRecord(path, remote));
+        else await tx.objectStore('files').delete(path);
+      }
+      return fresh;
+    });
   }
 
   async #refreshInBackground(path: string): Promise<void> {

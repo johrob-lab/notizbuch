@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { utf8ToBase64 } from '../../src/sync/base64';
-import { AuthError, ConflictError, GitHubClient, OfflineError, RateLimitError } from '../../src/sync/github';
+import { AuthError, ConflictError, errorFor, GitHubClient, OfflineError, RateLimitError, statusOf } from '../../src/sync/github';
 import { PathNotAllowedError } from '../../src/sync/paths';
 
 // Alles hier ist erfunden: Token, Repo und Dateien. Es geht keine Anfrage ins Netz, fetch ist ein Fake.
@@ -588,6 +588,45 @@ test('any other status is a plain Error that names the status', async () => {
   const busy = await errorOf(client.headSha());
   expect(Object.getPrototypeOf(busy)).toBe(Error.prototype);
   expect(busy?.message).toContain('503');
+});
+
+test('errors that come from an answer carry its status, so callers need not parse the message', async () => {
+  for (const status of [400, 404, 422, 500, 503]) {
+    respondStatus(status, '{"message":"x"}');
+    expect(statusOf(await errorOf(client.headSha())), String(status)).toBe(status);
+  }
+  respondStatus(409);
+  const conflict = await errorOf(client.headSha());
+  expect(conflict).toBeInstanceOf(ConflictError);
+  expect(statusOf(conflict)).toBe(409);
+  // Auch ein 422 über die sha ist ein Konflikt und behält seinen Status
+  respondStatus(422, JSON.stringify({ message: 'Invalid request.\n\n"sha" wasn\'t supplied.' }));
+  const shaless = await errorOf(client.headSha());
+  expect(shaless).toBeInstanceOf(ConflictError);
+  expect(statusOf(shaless)).toBe(422);
+  // Der Fehler bleibt ein einfacher Error mit dem Text, der den Status nennt
+  respondStatus(500);
+  const plain = await errorOf(client.headSha());
+  expect(Object.getPrototypeOf(plain)).toBe(Error.prototype);
+  expect(plain?.message).toBe('GitHub antwortete mit Status 500.');
+});
+
+test('statusOf is undefined for everything that has no status', () => {
+  expect(statusOf(new OfflineError())).toBeUndefined();
+  expect(statusOf(new AuthError())).toBeUndefined();
+  expect(statusOf(new RateLimitError())).toBeUndefined();
+  expect(statusOf(new Error('x'))).toBeUndefined();
+  expect(statusOf(Object.assign(new Error('x'), { status: '404' }))).toBeUndefined();
+  expect(statusOf(null)).toBeUndefined();
+  expect(statusOf(undefined)).toBeUndefined();
+  expect(statusOf('404')).toBeUndefined();
+});
+
+test('errorFor gives tests the very error the client throws for an answer', () => {
+  expect(statusOf(errorFor(404, new Headers(), ''))).toBe(404);
+  expect(errorFor(409, new Headers(), '')).toBeInstanceOf(ConflictError);
+  expect(errorFor(401, new Headers(), '')).toBeInstanceOf(AuthError);
+  expect(errorFor(429, new Headers(), '')).toBeInstanceOf(RateLimitError);
 });
 
 test('a lost connection is an OfflineError for every method, also while the answer is being read', async () => {

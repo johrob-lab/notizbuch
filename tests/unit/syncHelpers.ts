@@ -3,7 +3,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import { vi } from 'vitest';
 import { serializePage } from '../../src/ink/svg';
 import type { Stroke } from '../../src/ink/types';
-import { AuthError, ConflictError, OfflineError, RateLimitError } from '../../src/sync/github';
+import { AuthError, ConflictError, errorFor, OfflineError, RateLimitError } from '../../src/sync/github';
 import { PathNotAllowedError } from '../../src/sync/paths';
 import { SyncEngine, type SyncClient } from '../../src/sync/engine';
 import { openStore, type Store } from '../../src/sync/store';
@@ -15,6 +15,9 @@ export const B = '05 Daily Notes/2026-10-30.md';
 export const S = '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg';
 
 type Op = 'get' | 'put' | 'delete' | 'head' | 'changed';
+
+/** Der Fehler, den der echte Client für eine Antwort mit diesem Status wirft (zum Beispiel 404 oder 500). */
+export const httpError = (status: number, body = ''): Error => errorFor(status, new Headers(), body);
 
 /** Echte Ereignisschleife: setImmediate gehört nicht zu den gefälschten Timern, fake-indexeddb läuft damit weiter. */
 export const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -60,6 +63,8 @@ export class FakeClient implements SyncClient {
   changedError?: Error;
   /** Alle Anfragen in der Reihenfolge, zum Beispiel `put 05 Daily Notes/2026-10-29.md s1`. */
   log: string[] = [];
+  /** Die Anfragen, die zu Ende sind (beantwortet oder gescheitert), in der Reihenfolge ihres Endes. */
+  done: string[] = [];
   messages: string[] = [];
   changedArgs: [string, string][] = [];
   maxActive = 0;
@@ -67,6 +72,7 @@ export class FakeClient implements SyncClient {
   private active = 0;
   private counter = 0;
   private holds = new Map<Op, { reached: () => void; gate: Promise<void> }>();
+  private pauses = new Map<Op, { reached: () => void; gate: Promise<void> }>();
 
   /** Hält die nächste Anfrage dieser Art nach getaner Arbeit an, bis `release()` aufgerufen wird. */
   hold(op: Op): { reached: Promise<void>; release: () => void } {
@@ -78,8 +84,26 @@ export class FakeClient implements SyncClient {
     return { reached: reachedPromise, release };
   }
 
+  /**
+   * Hält die nächste Anfrage dieser Art an, noch bevor sie ankommt: Sie ist unterwegs, und was dann gilt, entscheidet
+   * sich erst nach `release()`. (`hold` dagegen hält an, nachdem GitHub die Anfrage schon bearbeitet hat.)
+   */
+  pause(op: Op): { reached: Promise<void>; release: () => void } {
+    let release!: () => void;
+    let reached!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const reachedPromise = new Promise<void>((resolve) => (reached = resolve));
+    this.pauses.set(op, { reached, gate });
+    return { reached: reachedPromise, release };
+  }
+
   count(op: Op): number {
     return this.log.filter((line) => line === op || line.startsWith(`${op} `)).length;
+  }
+
+  /** Wie viele Anfragen dieser Art zu Ende sind. Wer auf Abwesenheit prüft, wartet erst, bis die Arbeit sicher durch ist. */
+  finished(op: Op): number {
+    return this.done.filter((line) => line === op || line.startsWith(`${op} `)).length;
   }
 
   private async run<T>(op: Op, path: string | undefined, work: () => T, detail = ''): Promise<T> {
@@ -90,6 +114,12 @@ export class FakeClient implements SyncClient {
     try {
       await Promise.resolve();
       this.before?.(line);
+      const pause = this.pauses.get(op);
+      if (pause) {
+        this.pauses.delete(op);
+        pause.reached();
+        await pause.gate;
+      }
       if (this.offline) throw new OfflineError();
       if (!this.auth) throw new AuthError();
       if (this.rateLimit) throw new RateLimitError();
@@ -105,6 +135,7 @@ export class FakeClient implements SyncClient {
       return result;
     } finally {
       this.active--;
+      this.done.push(line);
     }
   }
 
@@ -125,6 +156,8 @@ export class FakeClient implements SyncClient {
       }
       const error = this.putErrors.get(path);
       if (error) throw error;
+      // Wie GitHub: Eine Datei, die es nicht gibt, lässt sich mit einer sha nicht ändern (404). Ohne sha wird sie angelegt.
+      if (sha !== null && !this.files[path]) throw httpError(404);
       if ((this.files[path]?.sha ?? null) !== sha) throw new ConflictError();
       const next = `s${++this.counter + 100}`;
       this.files[path] = { text, sha: next };
@@ -137,7 +170,7 @@ export class FakeClient implements SyncClient {
     return this.run('delete', path, () => {
       const file = this.files[path];
       // Wie der echte Client: Eine fehlende Datei ist ein allgemeiner Fehler mit Status 404.
-      if (!file) throw new Error('GitHub antwortete mit Status 404.');
+      if (!file) throw httpError(404);
       if (file.sha !== sha) throw new ConflictError();
       delete this.files[path];
       this.messages.push(message);
@@ -190,7 +223,7 @@ export type Harness = {
   conflicts: { path: string; copyPath: string }[];
   remoteChanges: string[][];
   errors: { path: string; error: unknown }[];
-  /** Zweite Engine auf demselben Speicher, wie nach einem Neustart der App. */
+  /** Zweite Engine auf derselben Datenbank, wie nach einem Neustart der App oder in einem zweiten Tab. */
   restart(): Promise<SyncEngine>;
   dispose(): Promise<void>;
 };
@@ -216,6 +249,7 @@ export async function setupHarness(): Promise<Harness> {
   };
   wire(e);
   const engines = [e];
+  const stores = [store];
   return {
     fake,
     store,
@@ -224,7 +258,9 @@ export async function setupHarness(): Promise<Harness> {
     remoteChanges,
     errors,
     async restart() {
-      const next = new SyncEngine({ client: fake, store: await openStore(), device: 'iPad' });
+      const opened = await openStore();
+      stores.push(opened);
+      const next = new SyncEngine({ client: fake, store: opened, device: 'iPad' });
       wire(next);
       engines.push(next);
       return next;
@@ -232,7 +268,7 @@ export async function setupHarness(): Promise<Harness> {
     async dispose() {
       for (const engine of engines) engine.stop();
       await quiet(20); // Abgleiche im Hintergrund laufen noch aus, bevor die Datenbank schließt
-      store.close();
+      for (const opened of stores) opened.close();
       vi.useRealTimers();
     },
   };

@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { toggleTask } from '../../src/lib/dailyNote';
 import { GitHubClient } from '../../src/sync/github';
+import { openStore } from '../../src/sync/store';
+import { forceCloseDatabase } from 'fake-indexeddb';
+import { unwrap } from 'idb';
 import { PathNotAllowedError } from '../../src/sync/paths';
 import { SyncEngine, statusLabel } from '../../src/sync/engine';
 import { fixture, lineOf } from './helpers';
-import { A, B, S, quiet, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
+import { A, B, S, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
 
 const base = fixture('05 Daily Notes/2026-10-29.md');
 
@@ -17,7 +20,10 @@ beforeEach(async () => {
   h = await setupHarness();
   ({ fake, e, conflicts } = h);
 });
-afterEach(() => h.dispose());
+afterEach(() => {
+  delete (navigator as { locks?: unknown }).locks;
+  return h.dispose();
+});
 
 /** Navigator-Wert für die Dauer eines Tests ändern. */
 function setOnLine(value: boolean) {
@@ -108,7 +114,7 @@ test('text goes up 2 s and ink 10 s after the last change', async () => {
   await vi.advanceTimersByTimeAsync(1);
   await until(() => fake.files[A]?.text === 'xy');
   await until(() => e.status.value.pending === 0);
-  await quiet(); // der Abgleich von eben ist ganz durch, sonst nähme er die Handschrift gleich mit
+  await e.flush(); // kehrt erst zurück, wenn der Abgleich von eben ganz durch ist, sonst nähme er die Handschrift gleich mit
   expect(fake.count('put')).toBe(1);
 
   const page = svgPage('a');
@@ -220,6 +226,32 @@ test('uploads run one at a time and a flush during a flush runs once more', asyn
   expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
 });
 
+test('a flush requested while a pass fails on the network gets a pass of its own', async () => {
+  fake.offline = true;
+  await e.write(A, 'x', 'md');
+  fake.before = (line) => {
+    if (!line.startsWith('put ')) return;
+    fake.before = undefined;
+    void e.flush(); // das Netz ist zurück, und jemand ruft den Abgleich auf, während der laufende noch scheitert
+    queueMicrotask(() => (fake.offline = false)); // erst nach dieser Anfrage, sie scheitert noch
+  };
+  await e.flush();
+  expect(fake.files[A].text).toBe('x');
+  expect(fake.count('put')).toBe(2);
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+});
+
+test('changes go up in the order in which their files were first changed, a later edit does not move a file back', async () => {
+  await e.write(A, '1', 'md');
+  vi.setSystemTime(Date.now() + 1000);
+  await e.write(B, '2', 'md');
+  vi.setSystemTime(Date.now() + 1000);
+  await e.write(A, '3', 'md'); // A war zuerst dran und bleibt es
+  await e.flush();
+  expect(fake.log.filter((line) => line.startsWith('put '))).toEqual([`put ${A} null`, `put ${B} null`]);
+  expect(fake.files[A].text).toBe('3');
+});
+
 test('unchanged text is not uploaded', async () => {
   fake.files[A] = { text: base, sha: 's1' };
   await e.read(A);
@@ -328,6 +360,111 @@ test('any other error leaves the entry queued and goes on with the next one', as
   expect(h.errors.map((i) => i.path)).toEqual([A]);
   expect(e.status.value.pending).toBe(1);
   fake.putErrors.clear();
+  await e.flush();
+  expect(fake.files[A].text).toBe('x');
+});
+
+// ---------- Speicher, der vom Browser geschlossen wird ----------
+
+test('after the browser closed the connection in the background, writing still works and the data is kept', async () => {
+  await e.write(A, 'eins', 'md');
+  await h.store.run(async (db) => db.close()); // Safari im Hintergrund
+  await e.write(A, 'zwei', 'md');
+  await e.flush();
+  expect(fake.files[A].text).toBe('zwei');
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+
+  const second = await openStore(); // ein zweites Öffnen der Datenbank sieht alles
+  expect(await second.get('files', A)).toMatchObject({ text: 'zwei', sha: fake.files[A].sha });
+  expect(await second.getAll('outbox')).toEqual([]);
+  second.close();
+});
+
+test('a connection the browser terminated while changes were queued does not strand them', async () => {
+  fake.offline = true;
+  await e.write(A, 'x', 'md');
+  await e.flush();
+  expect(e.status.value).toEqual({ state: 'wartet', pending: 1 });
+  await h.store.run(async (db) => forceCloseDatabase(unwrap(db) as never));
+  fake.offline = false;
+  await e.flush();
+  expect(fake.files[A].text).toBe('x');
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+});
+
+test('polling and reading survive a closed connection too', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  fake.head = 'h1';
+  await h.store.run(async (db) => db.close());
+  expect(await e.read(A)).toBe(base);
+  await h.store.run(async (db) => db.close());
+  await e.pollRemote();
+  expect(await h.store.get('meta', 'lastHead')).toBe('h1');
+  expect(h.errors).toEqual([]);
+});
+
+// ---------- Zwei Tabs auf derselben Datenbank ----------
+
+/** Ein Schloss wie `navigator.locks`: Wer es hat, hält alle anderen Anfragen mit demselben Namen auf. */
+function installLocks() {
+  const queues = new Map<string, Promise<unknown>>();
+  const request = vi.fn(async (name: string, callback: () => Promise<unknown>) => {
+    const before = queues.get(name) ?? Promise.resolve();
+    const run = before.then(callback);
+    queues.set(name, run.catch(() => undefined));
+    return run;
+  });
+  Object.defineProperty(navigator, 'locks', { value: { request }, configurable: true });
+  return request;
+}
+
+test('the flush runs inside the lock "notizbuch-sync" when the browser has locks', async () => {
+  const request = installLocks();
+  await e.write(A, 'x', 'md');
+  await e.flush();
+  expect(request).toHaveBeenCalledWith('notizbuch-sync', expect.any(Function));
+  expect(fake.files[A].text).toBe('x');
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+});
+
+test('two tabs sharing one database never send the same change twice, and never at the same time', async () => {
+  installLocks();
+  const second = await h.restart(); // der zweite Tab
+  await e.write(A, 'x', 'md');
+  await e.write(B, 'y', 'md');
+  await Promise.all([e.flush(), second.flush()]);
+  expect(fake.log.filter((line) => line.startsWith('put '))).toEqual([`put ${A} null`, `put ${B} null`]);
+  expect(fake.maxActive).toBe(1);
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+  expect(second.status.value).toEqual({ state: 'gesichert', pending: 0 });
+});
+
+test('a flush requested while the lock is being released still runs once more', async () => {
+  let release: (() => void) | undefined;
+  const request = vi.fn(async (_name: string, callback: () => Promise<unknown>) => {
+    const result = await callback();
+    // Beim ersten Mal wird das Schloss erst frei, wenn der Test es erlaubt: Der Durchgang ist dann schon fertig.
+    if (request.mock.calls.length === 1) await new Promise<void>((resolve) => (release = resolve));
+    return result;
+  });
+  Object.defineProperty(navigator, 'locks', { value: { request }, configurable: true });
+  await e.write(A, 'x', 'md');
+  const first = e.flush();
+  await until(() => release !== undefined);
+  expect(fake.files[A].text).toBe('x');
+
+  await e.write(B, 'y', 'md');
+  const second = e.flush(); // zu spät für den Durchgang, der gerade das Schloss abgibt
+  release?.();
+  await Promise.all([first, second]);
+  expect(fake.files[B].text).toBe('y');
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+});
+
+test('without locks in the browser the flush works as before', async () => {
+  expect((navigator as { locks?: unknown }).locks).toBeFalsy(); // happy-dom kennt keine Schlösser
+  await e.write(A, 'x', 'md');
   await e.flush();
   expect(fake.files[A].text).toBe('x');
 });

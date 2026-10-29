@@ -104,12 +104,22 @@ function isRateLimited(status: number, headers: Headers): boolean {
   return status === 429 || (status === 403 && hasRateLimitSignal(headers));
 }
 
-function errorFor(status: number, headers: Headers, bodyText: string): Error {
+/**
+ * Der HTTP-Status hinter einem Fehler, soweit er aus einer Antwort von GitHub stammt: Konflikte (409, 422) und alle
+ * Status ohne eigene Fehlerklasse. Wer wissen muss, ob es ein 404 war, liest ihn hier, statt die Meldung zu zerlegen.
+ */
+export function statusOf(error: unknown): number | undefined {
+  const status = (error as { status?: unknown } | null | undefined)?.status;
+  return typeof status === 'number' ? status : undefined;
+}
+
+/** Der Fehler zu einer Fehlerantwort. Auch die Tests bauen ihre Fakes damit, damit sie genau so scheitern wie der Client. */
+export function errorFor(status: number, headers: Headers, bodyText: string): Error {
   if (status === 401) return new AuthError();
   if (isRateLimited(status, headers)) return new RateLimitError();
   if (status === 403) return new AuthError();
-  if (status === 409 || (status === 422 && /sha/i.test(bodyText))) return new ConflictError();
-  return new Error(`GitHub antwortete mit Status ${status}.`);
+  if (status === 409 || (status === 422 && /sha/i.test(bodyText))) return Object.assign(new ConflictError(), { status });
+  return Object.assign(new Error(`GitHub antwortete mit Status ${status}.`), { status });
 }
 
 /** Gesperrte Namen sollen nie bis zur Oberfläche kommen, egal über welche API die Liste kam. */

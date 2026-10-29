@@ -4,7 +4,7 @@ import { parsePage } from '../../src/ink/svg';
 import { ConflictError, OfflineError } from '../../src/sync/github';
 import type { SyncEngine } from '../../src/sync/engine';
 import { fixture, lineOf } from './helpers';
-import { A, B, S, svgPage, type FakeClient, type Harness, setupHarness } from './syncHelpers';
+import { A, B, S, httpError, svgPage, type FakeClient, type Harness, setupHarness } from './syncHelpers';
 
 const base = fixture('05 Daily Notes/2026-10-29.md');
 const COPY1 = '05 Daily Notes/2026-10-29 (Konflikt).md';
@@ -153,6 +153,65 @@ test('a spurious 409 while the file did not change is retried', async () => {
   expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
 });
 
+test('a file that changes again while the merged text goes up is merged once more', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  const ours = toggleTask(base, lineOf(base, 'Liste Planobjekte'));
+  fake.files[A] = { text: base.replace('todo:AAMkTEST2%%', 'todo:AAMkTEST2 gemeldet%%'), sha: 's2' };
+  fake.before = (line) => {
+    if (line !== `put ${A} s2`) return;
+    fake.before = undefined;
+    // Ein drittes Gerät war schneller: Das Zusammengeführte trifft auf einen Stand, den es noch nicht kennt.
+    fake.files[A] = { text: fake.files[A].text.replace('bittet um Rückmeldung', 'hat sich gemeldet'), sha: 's3' };
+  };
+  await e.write(A, ours, 'md');
+  await e.flush();
+  expect(fake.log.filter((line) => line.startsWith(`put ${A} `))).toEqual([`put ${A} s1`, `put ${A} s2`, `put ${A} s3`]);
+  const text = fake.files[A].text;
+  expect(text).toContain('- [x] Liste Planobjekte');
+  expect(text).toContain('todo:AAMkTEST2 gemeldet');
+  expect(text).toContain('hat sich gemeldet');
+  expect(h.conflicts).toEqual([]);
+  expect(h.errors).toEqual([]);
+  expect(await h.store.getAll('outbox')).toEqual([]);
+});
+
+test('a file that disappears while the merged text goes up is uploaded as a new file in the same run', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  const ours = toggleTask(base, lineOf(base, 'Liste Planobjekte'));
+  fake.files[A] = { text: base.replace('todo:AAMkTEST2%%', 'todo:AAMkTEST2 gemeldet%%'), sha: 's2' };
+  fake.before = (line) => {
+    if (line !== `put ${A} s2`) return;
+    delete fake.files[A]; // gelöscht, bevor das Zusammengeführte ankommt (404 auf die sha)
+  };
+  await e.write(A, ours, 'md');
+  await e.flush();
+  expect(fake.log.filter((line) => line.startsWith(`put ${A} `))).toEqual([`put ${A} s1`, `put ${A} s2`, `put ${A} null`]);
+  expect(fake.files[A].text).toBe(ours);
+  expect(h.errors).toEqual([]);
+  expect(await h.store.getAll('outbox')).toEqual([]);
+});
+
+test('removing the page while the clash is being looked at keeps the remote text and makes no copy', async () => {
+  const theirs = 'von Obsidian angelegt';
+  fake.files[A] = { text: theirs, sha: 's9' };
+  const pause = fake.pause('get');
+  await e.write(A, 'meine Fassung', 'md'); // blind, der Upload trifft auf die Datei des anderen Geräts
+  const flushing = e.flush();
+  await pause.reached; // der Abgleich holt gerade den fremden Stand
+  await e.remove(A);
+  pause.release();
+  await flushing;
+  expect(Object.keys(fake.files)).toEqual([A]); // keine Kopie
+  expect(fake.files[A]).toEqual({ text: theirs, sha: 's9' });
+  expect(fake.count('delete')).toBe(0);
+  expect(h.conflicts).toEqual([]);
+  expect(await h.store.get('files', A)).toMatchObject({ text: theirs, sha: 's9', base: theirs });
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(h.remoteChanges).toEqual([[A]]);
+});
+
 test('a new file that appeared on GitHub meanwhile is not overwritten', async () => {
   fake.files[B] = { text: 'von Obsidian', sha: 's9' };
   await e.write(B, 'von der App', 'md');
@@ -172,6 +231,56 @@ test('a file that is gone from GitHub is uploaded again as a new file', async ()
   expect(fake.files[A].text).toBe(ours);
   expect(fake.log).toContain(`put ${A} null`);
   expect(h.conflicts).toEqual([]);
+});
+
+test('a file that is gone is also recognised when GitHub answers the upload with a conflict', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  delete fake.files[A];
+  const ours = toggleTask(base, lineOf(base, 'Liste Planobjekte'));
+  fake.putErrorOnce.set(A, new ConflictError());
+  await e.write(A, ours, 'md');
+  await e.flush();
+  expect(fake.files[A].text).toBe(ours);
+  expect(fake.log.filter((line) => line.startsWith(`put ${A} `))).toEqual([`put ${A} s1`, `put ${A} null`]);
+  expect(h.conflicts).toEqual([]);
+  expect(await h.store.get('files', A)).toMatchObject({ text: ours, sha: fake.files[A].sha, base: ours });
+});
+
+test('an upload answered with 404 creates the file again and goes on with the other changes', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  delete fake.files[A]; // wurde auf GitHub gelöscht, bevor die Änderung hochging
+  await e.write(A, 'zurück', 'md');
+  await e.write(B, 'daneben', 'md');
+  await e.flush();
+  expect(fake.log.filter((line) => line.startsWith('put '))).toEqual([`put ${A} s1`, `put ${A} null`, `put ${B} null`]);
+  expect(fake.files[A].text).toBe('zurück');
+  expect(fake.files[B].text).toBe('daneben');
+  expect(h.errors).toEqual([]);
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+});
+
+test('an upload answered with another error status stays queued and is not handled like a conflict', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  fake.putErrors.set(A, httpError(500));
+  await e.write(A, 'x', 'md');
+  await e.flush();
+  expect(fake.count('get')).toBe(1); // nur das erste Lesen: Es gab keinen Umweg über die Konfliktbehandlung
+  expect(await h.store.get('outbox', A)).toMatchObject({ text: 'x', baseSha: 's1' });
+  expect(h.errors.map((i) => i.path)).toEqual([A]);
+  expect(h.conflicts).toEqual([]);
+});
+
+test('a 404 on an upload without a sha is an ordinary error, not a vanished file', async () => {
+  fake.putErrors.set(B, httpError(404)); // zum Beispiel ein falscher Repo-Name: Es gibt nichts, was verschwunden wäre
+  await e.write(B, 'neu', 'md');
+  await e.flush();
+  expect(fake.log).toEqual([`put ${B} null`]); // kein Umweg über die Konfliktbehandlung
+  expect(await h.store.get('outbox', B)).toMatchObject({ text: 'neu', baseSha: null });
+  expect(h.errors.map((i) => i.path)).toEqual([B]);
 });
 
 test('going offline in the middle of a conflict loses nothing', async () => {

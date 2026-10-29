@@ -1,4 +1,4 @@
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction, type StoreKey, type StoreNames, type StoreValue } from 'idb';
 import type { Settings } from '../lib/settings';
 
 // Der lokale Speicher im Browser (IndexedDB). Nur hier liegen Dateien, Warteschlange, Einstellungen und der Token.
@@ -19,7 +19,7 @@ export type FileRecord = {
 /** Eine Änderung, die noch nicht auf GitHub ist. Je Pfad gibt es höchstens eine. */
 export type OutboxEntry = {
   path: string;
-  /** Die neueste Fassung. */
+  /** Die neueste Fassung. Bei einer Löschung die letzte lokale Fassung: Ohne bekannte sha löscht der Abgleich nur genau sie. */
   text: string;
   kind: 'md' | 'svg';
   /** sha und Text der Fassung auf GitHub, aus der die Änderung entstand (beim ersten Schreiben festgehalten). */
@@ -30,6 +30,11 @@ export type OutboxEntry = {
   deleted?: boolean;
 };
 
+/** Die Kopie einer Datei, die genau dem Stand entspricht, der auf GitHub liegt. */
+export function syncedRecord(path: string, remote: { text: string; sha: string }): FileRecord {
+  return { path, text: remote.text, sha: remote.sha, base: remote.text, syncedAt: Date.now() };
+}
+
 export interface NotizbuchDB extends DBSchema {
   files: { key: string; value: FileRecord };
   outbox: { key: string; value: OutboxEntry };
@@ -39,15 +44,148 @@ export interface NotizbuchDB extends DBSchema {
   meta: { key: string; value: string };
 }
 
-export type Store = IDBPDatabase<NotizbuchDB>;
+type Db = IDBPDatabase<NotizbuchDB>;
+type Area = StoreNames<NotizbuchDB>;
+/** Eine Schreib-Transaktion, in der eine Funktion Bereiche der Datenbank liest und ändert. */
+export type StoreTx = IDBPTransaction<NotizbuchDB, Area[], 'readwrite'>;
+
+const VERSION = 1;
+
+/** Ist die Verbindung zu? Dann wirft jeder Zugriff darauf `InvalidStateError`. */
+function isClosedConnection(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'InvalidStateError';
+}
+
+/**
+ * Der lokale Speicher. Safari beendet die Verbindung zur IndexedDB gern, wenn die App im Hintergrund war, und kein
+ * Zugriff geht danach mehr. Darum öffnet der Speicher sie neu: sofort, wenn der Browser das Beenden meldet (Ereignis
+ * `close`), sonst beim ersten Zugriff, der an einem `InvalidStateError` scheitert. Dieser Zugriff läuft dann noch
+ * einmal. Das ist sicher, weil jeder Zugriff der App ganze Werte schreibt oder löscht: Zweimal ausgeführt ergibt er
+ * dasselbe wie einmal. Wer den Speicher mit `close()` selbst schließt, will ihn zu haben und bekommt ihn nicht neu geöffnet.
+ */
+export class Store {
+  readonly #name: string;
+  #db!: Db;
+  /** Zählt die Verbindungen: Das `close`-Ereignis einer älteren sagt nichts über die jetzige. */
+  #generation = 0;
+  /** Der Browser hat die jetzige Verbindung beendet, der nächste Zugriff öffnet neu. */
+  #lost = false;
+  #closed = false;
+  #connecting: Promise<void> | null = null;
+
+  private constructor(name: string) {
+    this.#name = name;
+  }
+
+  static async open(name: string): Promise<Store> {
+    const store = new Store(name);
+    await store.#connect();
+    return store;
+  }
+
+  async #connect(): Promise<void> {
+    const generation = ++this.#generation;
+    this.#lost = false;
+    const previous = this.#db as Db | undefined;
+    this.#db = await openDB<NotizbuchDB>(this.#name, VERSION, {
+      upgrade(db) {
+        db.createObjectStore('files', { keyPath: 'path' });
+        db.createObjectStore('outbox', { keyPath: 'path' });
+        db.createObjectStore('settings');
+        db.createObjectStore('meta');
+      },
+      terminated: () => {
+        if (generation === this.#generation) this.#lost = true;
+      },
+    });
+    // Die ersetzte Verbindung darf nicht offen bleiben, sonst hielte sie spätere Änderungen an der Datenbank auf.
+    try {
+      previous?.close();
+    } catch {
+      // war schon zu
+    }
+  }
+
+  /** Öffnet neu, wenn `failed` noch die jetzige Verbindung ist. Gleichzeitige Zugriffe teilen sich einen Versuch. */
+  #reconnect(failed: Db): Promise<void> {
+    if (this.#db !== failed) return Promise.resolve(); // ein anderer Zugriff war schneller
+    this.#connecting ??= this.#connect().finally(() => {
+      this.#connecting = null;
+    });
+    return this.#connecting;
+  }
+
+  /**
+   * Führt `work` mit der Verbindung aus. Ist sie zu, oder hat der Browser sie währenddessen beendet, wird neu geöffnet
+   * und `work` noch einmal ausgeführt.
+   */
+  async run<T>(work: (db: Db) => Promise<T>): Promise<T> {
+    if (this.#lost && !this.#closed) await this.#reconnect(this.#db);
+    const db = this.#db;
+    try {
+      return await work(db);
+    } catch (error) {
+      const connectionLost = isClosedConnection(error) || (this.#lost && this.#db === db);
+      if (this.#closed || !connectionLost) throw error;
+      await this.#reconnect(db);
+      return work(this.#db);
+    }
+  }
+
+  /**
+   * Eine Schreib-Transaktion über `areas`. Gelingt `work`, gilt alles, was es geschrieben hat, sonst nichts davon. Wegen
+   * des zweiten Versuchs darf `work` außer der Datenbank nichts verändern: Meldungen an die Oberfläche kommen danach.
+   */
+  transact<T>(areas: Area[], work: (tx: StoreTx) => Promise<T>): Promise<T> {
+    return this.run(async (db) => {
+      const tx = db.transaction(areas, 'readwrite');
+      try {
+        const result = await work(tx);
+        await tx.done;
+        return result;
+      } catch (error) {
+        tx.done.catch(() => undefined); // der Abbruch unten soll nicht als unbehandelter Fehler enden
+        try {
+          tx.abort();
+        } catch {
+          // schon übernommen oder abgebrochen
+        }
+        throw error;
+      }
+    });
+  }
+
+  get<A extends Area>(area: A, key: StoreKey<NotizbuchDB, A> | IDBKeyRange): Promise<StoreValue<NotizbuchDB, A> | undefined> {
+    return this.run((db) => db.get(area, key));
+  }
+
+  getAll<A extends Area>(area: A): Promise<StoreValue<NotizbuchDB, A>[]> {
+    return this.run((db) => db.getAll(area));
+  }
+
+  count(area: Area): Promise<number> {
+    return this.run((db) => db.count(area));
+  }
+
+  put<A extends Area>(area: A, value: StoreValue<NotizbuchDB, A>, key?: StoreKey<NotizbuchDB, A> | IDBKeyRange): Promise<StoreKey<NotizbuchDB, A>> {
+    return this.run((db) => db.put(area, value, key));
+  }
+
+  delete<A extends Area>(area: A, key: StoreKey<NotizbuchDB, A> | IDBKeyRange): Promise<void> {
+    return this.run((db) => db.delete(area, key));
+  }
+
+  get objectStoreNames(): Db['objectStoreNames'] {
+    return this.#db.objectStoreNames;
+  }
+
+  /** Schließt den Speicher für immer. Danach scheitert jeder Zugriff. */
+  close(): void {
+    this.#closed = true;
+    this.#db.close();
+  }
+}
 
 export function openStore(name = 'notizbuch'): Promise<Store> {
-  return openDB<NotizbuchDB>(name, 1, {
-    upgrade(db) {
-      db.createObjectStore('files', { keyPath: 'path' });
-      db.createObjectStore('outbox', { keyPath: 'path' });
-      db.createObjectStore('settings');
-      db.createObjectStore('meta');
-    },
-  });
+  return Store.open(name);
 }

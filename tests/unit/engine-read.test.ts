@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { parsePage } from '../../src/ink/svg';
 import { PathNotAllowedError } from '../../src/sync/paths';
 import type { SyncEngine } from '../../src/sync/engine';
 import { fixture } from './helpers';
-import { A, B, S, quiet, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
+import { A, B, S, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
 
 const base = fixture('05 Daily Notes/2026-10-29.md');
 
@@ -87,21 +88,27 @@ test('the refresh keeps quiet when nothing changed', async () => {
   fake.files[A] = { text: base, sha: 's1' };
   await e.read(A);
   await e.read(A);
-  await until(() => fake.count('get') === 2);
-  await quiet();
+  await until(() => fake.finished('get') === 2); // das Auffrischen ist beantwortet, danach bleibt nur noch der Vergleich
   expect(h.remoteChanges).toEqual([]);
 });
 
 test('a path with a queued change is not refreshed', async () => {
   fake.files[A] = { text: base, sha: 's1' };
+  fake.files[B] = { text: 'b1', sha: 'sb1' };
   await e.read(A);
+  await e.read(B);
   await e.write(A, 'lokal', 'md');
   fake.files[A] = { text: 'fremd', sha: 's2' };
+  fake.files[B] = { text: 'b2', sha: 'sb2' };
+
+  // B ist der Zeuge: Sein Auffrischen beginnt nach dem von A und braucht dieselben Schritte bis zur Anfrage an GitHub.
+  // Ist B durch, hätte A längst gefragt, wenn es das vorhätte.
   expect(await e.read(A)).toBe('lokal');
-  await quiet();
-  expect(fake.count('get')).toBe(1); // nur das erste Lesen
+  expect(await e.read(B)).toBe('b1');
+  await until(() => h.remoteChanges.length === 1);
+  expect(h.remoteChanges).toEqual([[B]]);
+  expect(fake.log.filter((line) => line === `get ${A}`)).toHaveLength(1); // nur das erste Lesen
   expect(await h.store.get('files', A)).toMatchObject({ text: 'lokal', sha: 's1' });
-  expect(h.remoteChanges).toEqual([]);
 });
 
 test('a change made while the refresh is under way wins over the refreshed text', async () => {
@@ -113,9 +120,76 @@ test('a change made while the refresh is under way wins over the refreshed text'
   await hold.reached;
   await e.write(A, 'lokal', 'md');
   hold.release();
-  await quiet();
+  await until(() => fake.finished('get') === 2); // die Antwort ist da, die Übernahme in die Datenbank läuft an
+  await h.store.get('files', A); // und diese Abfrage kommt erst, wenn sie durch ist
   expect(await h.store.get('files', A)).toMatchObject({ text: 'lokal', sha: 's1', base });
   expect(h.remoteChanges).toEqual([]);
+});
+
+test('an old answer to a refresh does not replace a newer copy that was adopted meanwhile', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  fake.files[A] = { text: 'Stand zwei', sha: 's2' };
+  const hold = fake.hold('get');
+  await e.read(A); // das erste Auffrischen holt Stand zwei, seine Antwort bleibt unterwegs
+  await hold.reached;
+  fake.files[A] = { text: 'Stand drei', sha: 's3' };
+  await e.read(A); // das zweite holt Stand drei und übernimmt ihn
+  await until(() => h.remoteChanges.length === 1);
+
+  hold.release(); // jetzt kommt die alte Antwort an
+  await until(() => fake.finished('get') === 3);
+  await h.store.get('files', A); // und diese Abfrage kommt erst, wenn ihre Übernahme (falls sie liefe) durch ist
+  expect(await h.store.get('files', A)).toMatchObject({ text: 'Stand drei', sha: 's3', base: 'Stand drei' });
+  expect(h.remoteChanges).toEqual([[A]]);
+});
+
+test('a local copy whose file was deleted on GitHub is dropped by the refresh, and the page is told', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  delete fake.files[A];
+  expect(await e.read(A)).toBe(base); // sofort die Kopie
+  await until(() => h.remoteChanges.length === 1);
+  expect(h.remoteChanges).toEqual([[A]]);
+  expect(await h.store.get('files', A)).toBeUndefined();
+  expect(await e.read(A)).toBeNull();
+});
+
+test('a local copy with a queued change survives the deletion on GitHub', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  fake.files[B] = { text: 'b1', sha: 'sb1' };
+  await e.read(A);
+  await e.read(B);
+  await e.write(A, 'lokal', 'md');
+  delete fake.files[A];
+  delete fake.files[B];
+  await e.read(A);
+  await e.read(B); // Zeuge, siehe oben: Er wird gelöscht, A mit der offenen Änderung nicht
+  await until(() => h.remoteChanges.length === 1);
+  expect(h.remoteChanges).toEqual([[B]]);
+  expect(await h.store.get('files', A)).toMatchObject({ text: 'lokal' });
+});
+
+test('a copy that was never on GitHub is not dropped just because the file is missing there', async () => {
+  // Ein Zustand, den die App selbst nicht herstellt: eine Kopie ohne sha und ohne offene Änderung
+  await h.store.put('files', { path: A, text: 'lokal', sha: null, base: null, syncedAt: 0 });
+  expect(await e.read(A)).toBe('lokal');
+  await until(() => fake.finished('get') === 1);
+  await h.store.get('files', A); // diese Abfrage kommt erst, wenn die Übernahme (falls sie liefe) durch ist
+  expect(await h.store.get('files', A)).toMatchObject({ text: 'lokal' });
+  expect(h.remoteChanges).toEqual([]);
+});
+
+test('a page removed while its first read is still fetching does not come back as a local copy', async () => {
+  fake.files[S] = { text: svgPage('a'), sha: 's1' };
+  const hold = fake.hold('get');
+  const reading = e.read(S);
+  await hold.reached;
+  await e.remove(S); // gelöscht, bevor die Antwort ankommt
+  hold.release();
+  expect(await reading).toBeNull();
+  expect(await h.store.get('files', S)).toBeUndefined();
+  expect(await e.read(S)).toBeNull(); // bis zum Löschen gilt die Seite als weg
 });
 
 // ---------- Löschen ----------
@@ -127,7 +201,9 @@ test('remove queues a delete with the last known sha, drops the local copy and f
   expect(await h.store.get('files', S)).toBeUndefined();
   expect(await h.store.get('outbox', S)).toMatchObject({ path: S, kind: 'svg', deleted: true, baseSha: 's1' });
   expect(e.status.value.pending).toBe(1);
+  const asked = fake.count('get');
   expect(await e.read(S)).toBeNull(); // bis zum Löschen gilt die Seite als weg
+  expect(fake.count('get')).toBe(asked); // und GitHub wird dafür nicht gefragt
   expect(await h.store.get('files', S)).toBeUndefined();
 
   await e.flush();
@@ -161,6 +237,57 @@ test('a delete that meets a changed file is cancelled and the remote version sta
   expect(await h.store.getAll('outbox')).toEqual([]);
   expect(h.remoteChanges).toEqual([[S]]);
   expect(await e.read(S)).toBe(theirs);
+});
+
+test('a delete that meets a changed file which is gone by the time it looks is done', async () => {
+  fake.files[S] = { text: svgPage('a'), sha: 's1' };
+  await e.read(S);
+  fake.files[S] = { text: svgPage('a', 'r'), sha: 's2' }; // ein anderes Gerät hat weitergeschrieben ...
+  await e.remove(S);
+  fake.before = (line) => {
+    if (line === `get ${S}`) delete fake.files[S]; // ... und die Seite dann gelöscht, bevor wir nachsehen
+  };
+  await e.flush();
+  expect(fake.log).toEqual([`get ${S}`, `delete ${S} s1`, `get ${S}`]);
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(await h.store.get('files', S)).toBeUndefined();
+  expect(h.errors).toEqual([]);
+  expect(h.remoteChanges).toEqual([]);
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+});
+
+test('a page written again while its delete is being cancelled keeps the new ink', async () => {
+  fake.files[S] = { text: svgPage('a'), sha: 's1' };
+  await e.read(S);
+  fake.files[S] = { text: svgPage('a', 'r'), sha: 's2' }; // ein anderes Gerät hat weitergeschrieben
+  await e.remove(S);
+  const pause = fake.pause('get');
+  const flushing = e.flush();
+  await pause.reached; // das Löschen traf auf den fremden Stand, der Abgleich holt ihn gerade
+  const again = svgPage('a', 'b');
+  await e.write(S, again, 'svg'); // die Seite wird in diesem Moment wieder beschrieben
+  pause.release();
+  await flushing;
+  expect(await h.store.get('outbox', S)).toMatchObject({ text: again, baseSha: 's1' });
+  expect((await h.store.get('outbox', S))?.deleted).toBeFalsy();
+  expect(await h.store.get('files', S)).toMatchObject({ text: again });
+  expect(h.remoteChanges).toEqual([]);
+
+  await e.flush(); // die neue Tinte geht mit der fremden zusammen hoch
+  expect(parsePage(fake.files[S].text).strokes.map((stroke) => stroke.id).sort()).toEqual(['a', 'b', 'r']);
+  expect(fake.count('delete')).toBe(1); // nur der eine Versuch, der am fremden Stand scheiterte
+});
+
+test('removing a page whose upload failed leaves nothing to delete, the upload is no longer under way', async () => {
+  fake.offline = true;
+  await e.write(S, svgPage('a'), 'svg');
+  await e.flush(); // scheitert: Die Seite steht noch in der Warteschlange
+  await e.remove(S);
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(e.status.value.pending).toBe(0);
+  fake.offline = false;
+  await e.flush();
+  expect(fake.log).toEqual([`put ${S} null`]); // nur der Versuch von eben, danach geht nichts mehr an GitHub
 });
 
 test('removing a page that never went up leaves nothing queued', async () => {
@@ -220,14 +347,78 @@ test('writing after remove brings the page back', async () => {
   expect(fake.count('delete')).toBe(0);
 });
 
-test('removing a file that was never read looks up its sha when flushing', async () => {
+test('removing a file that was never read does not delete what this device never saw', async () => {
   fake.files[S] = { text: svgPage('a'), sha: 's7' };
   await e.remove(S);
   expect(await h.store.get('outbox', S)).toMatchObject({ deleted: true, baseSha: null });
   await e.flush();
-  expect(fake.log).toEqual([`get ${S}`, `delete ${S} s7`]);
-  expect(fake.files[S]).toBeUndefined();
+  expect(fake.log).toEqual([`get ${S}`]); // angesehen, aber nicht gelöscht
+  expect(fake.files[S]).toEqual({ text: svgPage('a'), sha: 's7' });
+  expect(await h.store.get('files', S)).toMatchObject({ text: svgPage('a'), sha: 's7', base: svgPage('a') });
+  expect(h.remoteChanges).toEqual([[S]]); // die Seite bekommt zu sehen, was sie löschen wollte
   expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+});
+
+test('removing a file again while its delete is queued changes nothing', async () => {
+  fake.files[S] = { text: svgPage('a'), sha: 's7' };
+  await e.remove(S); // nie gelesen: Die Fassung auf GitHub ist unbekannt, das Löschen merkt sich nur die letzte lokale
+  const queued = await h.store.get('outbox', S);
+  await e.remove(S);
+  expect(await h.store.get('outbox', S)).toEqual(queued);
+  expect(e.status.value.pending).toBe(1);
+  await e.flush();
+  expect(fake.log).toEqual([`get ${S}`]); // ein Abgleich, ein Blick auf GitHub, nichts gelöscht (siehe oben)
+});
+
+test('removing a file that never existed on GitHub is done once GitHub confirms it is not there', async () => {
+  await e.remove(S);
+  await e.flush();
+  expect(fake.log).toEqual([`get ${S}`]);
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(h.errors).toEqual([]);
+});
+
+test('a page created without ever seeing the file is not deleted when someone else created it meanwhile', async () => {
+  const theirs = svgPage('r');
+  fake.files[S] = { text: theirs, sha: 's9' }; // ein anderes Gerät hat die Seite angelegt
+  const pause = fake.pause('put');
+  await e.write(S, svgPage('o'), 'svg'); // blind: Dieses Gerät hat die Datei nie gelesen
+  const flushing = e.flush();
+  await pause.reached;
+  await e.remove(S); // während der erste Upload unterwegs ist
+  pause.release();
+  await flushing; // der Upload trifft auf die Datei des anderen Geräts
+  expect(await h.store.get('outbox', S)).toMatchObject({ deleted: true, baseSha: null, text: svgPage('o') });
+
+  await e.flush(); // und das Löschen darf diese Datei nicht mitnehmen
+  expect(fake.files[S]).toEqual({ text: theirs, sha: 's9' });
+  expect(fake.count('delete')).toBe(0);
+  expect(await h.store.get('files', S)).toMatchObject({ text: theirs, sha: 's9', base: theirs });
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(h.remoteChanges).toEqual([[S]]);
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+});
+
+test('a page whose upload arrived but was never answered is still deleted, because the text on GitHub is ours', async () => {
+  const hold = fake.hold('put');
+  await e.write(S, svgPage('a'), 'svg');
+  e.stop();
+  const flushing = e.flush();
+  await hold.reached; // GitHub hat die Seite angelegt, die Antwort fehlt
+  const shaOnGitHub = fake.files[S].sha;
+  await e.remove(S);
+  e.stop(); // die Wartezeit des Löschens soll nicht dazwischenfunken
+  await vi.advanceTimersByTimeAsync(30_000);
+  await flushing;
+  expect(e.status.value).toEqual({ state: 'wartet', pending: 1 });
+
+  hold.release();
+  await e.flush();
+  expect(fake.files[S]).toBeUndefined();
+  expect(fake.log).toContain(`delete ${S} ${shaOnGitHub}`);
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(h.remoteChanges).toEqual([]);
 });
 
 test('deletes and uploads never run at the same time', async () => {

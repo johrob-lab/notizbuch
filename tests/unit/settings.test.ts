@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
-import { IDBFactory } from 'fake-indexeddb';
+import { forceCloseDatabase, IDBFactory } from 'fake-indexeddb';
+import { unwrap } from 'idb';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { loadSettings, saveSettings, type Settings } from '../../src/lib/settings';
 import { openStore, type Store } from '../../src/sync/store';
@@ -68,5 +69,22 @@ test('the token is kept in IndexedDB only', async () => {
   expect(JSON.stringify({ ...sessionStorage })).not.toContain(settings.token);
   expect(await store.getAll('files')).toEqual([]);
   expect(await store.getAll('outbox')).toEqual([]);
-  expect(await store.getAllKeys('meta')).toEqual([]);
+  expect(await store.getAll('meta')).toEqual([]);
+});
+
+test('settings still save after the browser closed the connection in the background', async () => {
+  await saveSettings(store, settings);
+  await store.run(async (db) => db.close());
+  const next: Settings = { ...settings, device: 'Firmen-PC', prediction: false };
+  await saveSettings(store, next);
+  expect(await loadSettings(store)).toEqual(next);
+  const again = await openStore(); // und sie stehen wirklich in der Datenbank
+  expect(await loadSettings(again)).toEqual(next);
+  again.close();
+});
+
+test('settings still load after the browser terminated the connection', async () => {
+  await saveSettings(store, settings);
+  await store.run(async (db) => forceCloseDatabase(unwrap(db) as never));
+  expect(await loadSettings(store)).toEqual(settings);
 });

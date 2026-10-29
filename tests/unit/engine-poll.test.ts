@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import type { SyncEngine } from '../../src/sync/engine';
-import { A, B, S, quiet, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
+import { A, B, S, httpError, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
 
 let h: Harness;
 let fake: FakeClient;
@@ -28,8 +28,8 @@ function setVisibility(state: 'hidden' | 'visible') {
 /** Start und warten, bis der Abgleich beim Start (Abfrage und Hochladen) durch ist. */
 async function startIdle() {
   await e.start();
-  await until(() => fake.count('head') === 1);
-  await quiet();
+  await until(async () => (await lastHead()) !== undefined); // die erste Abfrage merkt sich den Stand als Letztes
+  await e.flush(); // kehrt erst zurück, wenn auch der Abgleich vom Start fertig ist
 }
 
 // ---------- pollRemote ----------
@@ -143,12 +143,74 @@ test('the old head stays when the network fails exactly while asking what change
   expect(await lastHead()).toBe('h2');
 });
 
-test('an unknown old commit does not block polling for good', async () => {
+test.each([
+  ['404', httpError(404)],
+  ['422', httpError(422)],
+  ['422 about the sha', httpError(422, '"sha" wasn\'t supplied')],
+])('an unknown old commit (%s) does not block polling for good', async (_name, error) => {
   fake.head = 'h1';
   await e.pollRemote();
-  fake.changedError = new Error('GitHub antwortete mit Status 404.');
+  fake.changedError = error;
   fake.head = 'h2';
   await e.pollRemote();
+  expect(await lastHead()).toBe('h2');
+  expect(h.errors).toEqual([]);
+});
+
+test.each([
+  ['a server error', httpError(500)],
+  ['a bad gateway', httpError(502)],
+  ['an error without a status', new Error('kaputt')],
+  ['an unreadable answer', new TypeError('Unerwartete Antwort')],
+])('any other failure of the comparison (%s) keeps the old head, so the next poll asks again', async (_name, error) => {
+  fake.files[A] = { text: 'a1', sha: 'sa1' };
+  fake.head = 'h1';
+  await e.read(A);
+  await e.pollRemote();
+
+  fake.files[A] = { text: 'a2', sha: 'sa2' };
+  fake.changes = [A];
+  fake.changedError = error;
+  fake.head = 'h2';
+  await e.pollRemote();
+  expect(await lastHead()).toBe('h1');
+  expect(h.errors).toEqual([{ path: '', error }]);
+  expect(h.remoteChanges).toEqual([]);
+
+  fake.changedError = undefined;
+  await e.pollRemote();
+  expect(await lastHead()).toBe('h2');
+  expect(h.remoteChanges).toEqual([[A]]); // die versäumte Änderung kommt mit der Wiederholung
+  expect(fake.changedArgs).toEqual([
+    ['h1', 'h2'],
+    ['h1', 'h2'],
+  ]);
+});
+
+test('paths that were already refreshed are reported even when a later one stops the poll', async () => {
+  fake.files[A] = { text: 'a1', sha: 'sa1' };
+  fake.files[B] = { text: 'b1', sha: 'sb1' };
+  fake.head = 'h1';
+  await e.read(A);
+  await e.read(B);
+  await e.pollRemote();
+
+  fake.files[A] = { text: 'a2', sha: 'sa2' };
+  fake.files[B] = { text: 'b2', sha: 'sb2' };
+  fake.changes = [A, B];
+  fake.head = 'h2';
+  fake.before = (line) => {
+    if (line === `get ${B}`) fake.offline = true; // das Netz fällt aus, nachdem A schon übernommen ist
+  };
+  await e.pollRemote();
+  expect(await h.store.get('files', A)).toMatchObject({ text: 'a2', sha: 'sa2' }); // A ist lokal schon neu
+  expect(h.remoteChanges).toEqual([[A]]); // also muss die Seite es erfahren
+  expect(await lastHead()).toBe('h1'); // und die Abfrage gilt als nicht fertig
+
+  fake.before = undefined;
+  fake.offline = false;
+  await e.pollRemote();
+  expect(h.remoteChanges).toEqual([[A], [B]]); // A wird nicht noch einmal gemeldet
   expect(await lastHead()).toBe('h2');
 });
 
@@ -172,6 +234,76 @@ test('a file that cannot be read does not stop the others', async () => {
   expect(await lastHead()).toBe('h2');
 });
 
+test('a file deleted on GitHub is dropped locally and the page is told', async () => {
+  fake.files[A] = { text: 'a1', sha: 'sa1' };
+  fake.head = 'h1';
+  await e.read(A);
+  await e.pollRemote();
+
+  delete fake.files[A];
+  fake.changes = [A];
+  fake.head = 'h2';
+  await e.pollRemote();
+  expect(await h.store.get('files', A)).toBeUndefined();
+  expect(h.remoteChanges).toEqual([[A]]);
+  expect(await e.read(A)).toBeNull(); // die Seite liest neu und findet nichts mehr
+  expect(await lastHead()).toBe('h2');
+});
+
+test('a file deleted on GitHub keeps its local copy while a change is queued, and the change brings it back', async () => {
+  fake.files[A] = { text: 'a1', sha: 'sa1' };
+  fake.head = 'h1';
+  await e.read(A);
+  await e.pollRemote();
+  await e.write(A, 'lokal', 'md');
+
+  delete fake.files[A];
+  fake.changes = [A];
+  fake.head = 'h2';
+  await e.pollRemote();
+  expect(await h.store.get('files', A)).toMatchObject({ text: 'lokal' });
+  expect(h.remoteChanges).toEqual([]);
+
+  await e.flush();
+  expect(fake.files[A].text).toBe('lokal'); // die eigene Änderung geht nicht verloren, die Datei ist wieder da
+  expect(h.conflicts).toEqual([]);
+});
+
+test('a page that still shows a file deleted on GitHub can write it back', async () => {
+  fake.files[A] = { text: 'a1', sha: 'sa1' };
+  fake.head = 'h1';
+  await e.read(A);
+  await e.pollRemote();
+  delete fake.files[A];
+  fake.changes = [A];
+  fake.head = 'h2';
+  await e.pollRemote();
+  expect(h.remoteChanges).toEqual([[A]]);
+
+  await e.write(A, 'a1 plus Ergänzung', 'md'); // die Seite hat den Hinweis noch nicht verarbeitet
+  await e.flush();
+  expect(fake.files[A].text).toBe('a1 plus Ergänzung');
+  expect(fake.log.filter((line) => line.startsWith(`put ${A} `))).toEqual([`put ${A} sa1`, `put ${A} null`]);
+  expect(h.conflicts).toEqual([]);
+});
+
+test('a page that learned the file is gone writes it fresh, without the old version', async () => {
+  fake.files[A] = { text: 'a1', sha: 'sa1' };
+  fake.head = 'h1';
+  await e.read(A);
+  await e.pollRemote();
+  delete fake.files[A];
+  fake.changes = [A];
+  fake.head = 'h2';
+  await e.pollRemote();
+  expect(await e.read(A)).toBeNull(); // die Seite liest neu und findet nichts
+
+  await e.write(A, 'neu angelegt', 'md');
+  await e.flush();
+  expect(fake.log.filter((line) => line.startsWith(`put ${A} `))).toEqual([`put ${A} null`]);
+  expect(fake.files[A].text).toBe('neu angelegt');
+});
+
 test('a refused access while polling shows zugang', async () => {
   fake.auth = false;
   await e.pollRemote();
@@ -191,8 +323,7 @@ test('starting twice changes nothing', async () => {
   const persist = vi.fn(async () => true);
   Object.defineProperty(navigator, 'storage', { value: { persist }, configurable: true });
   await startIdle();
-  await e.start();
-  await quiet();
+  await e.start(); // kehrt sofort zurück, eine zweite Abfrage würde sofort im Protokoll stehen
   expect(persist).toHaveBeenCalledTimes(1);
   expect(fake.count('head')).toBe(1);
 });
@@ -242,15 +373,54 @@ test('every 3 minutes it polls, and sends only when something is waiting', async
 });
 
 test('stop removes the listeners and the timers', async () => {
+  const added = { document: vi.spyOn(document, 'addEventListener'), window: vi.spyOn(window, 'addEventListener') };
+  const removed = { document: vi.spyOn(document, 'removeEventListener'), window: vi.spyOn(window, 'removeEventListener') };
   await startIdle();
   await e.write(A, 'x', 'md');
+  expect(vi.getTimerCount()).toBe(2); // der Takt der Abfrage und die Wartezeit des Schreibens
   e.stop();
+  expect(vi.getTimerCount()).toBe(0);
+
+  const handler = (spy: typeof added.document, type: string) => spy.mock.calls.find(([name]) => name === type)?.[1];
+  const onVisibility = handler(added.document, 'visibilitychange');
+  const onOnline = handler(added.window, 'online');
+  expect(onVisibility).toBeTypeOf('function');
+  expect(onOnline).toBeTypeOf('function');
+  expect(removed.document).toHaveBeenCalledWith('visibilitychange', onVisibility);
+  expect(removed.window).toHaveBeenCalledWith('online', onOnline);
+
+  // und die Ereignisse selbst bewirken nichts mehr: Eine Abfrage stünde sofort im Protokoll
   const calls = fake.log.length;
-  setVisibility('hidden');
   setVisibility('visible');
-  window.dispatchEvent(new Event('online'));
-  await vi.advanceTimersByTimeAsync(600_000); // auch die Wartezeit des Schreibens von eben ist abgebrochen
-  await quiet();
   expect(fake.log.length).toBe(calls);
   expect(fake.files[A]).toBeUndefined();
+});
+
+test('stop right after start leaves nothing running, and a later start sets everything up only once', async () => {
+  const starting = e.start();
+  e.stop(); // bevor die Warteschlange geladen ist
+  await starting;
+  expect(vi.getTimerCount()).toBe(0);
+  expect(fake.count('head')).toBe(0);
+  setVisibility('visible');
+  expect(fake.count('head')).toBe(0); // nichts hört mehr zu
+
+  await startIdle();
+  expect(vi.getTimerCount()).toBe(1); // ein Takt
+  const polls = fake.count('head');
+  setVisibility('visible');
+  expect(fake.count('head')).toBe(polls + 1); // ein Zuhörer, nicht zwei
+});
+
+test('stopping and starting again before the queue is loaded still sets up once', async () => {
+  const first = e.start();
+  e.stop();
+  const second = e.start();
+  await Promise.all([first, second]);
+  await until(async () => (await lastHead()) !== undefined);
+  await e.flush();
+  expect(vi.getTimerCount()).toBe(1);
+  const polls = fake.count('head');
+  setVisibility('visible');
+  expect(fake.count('head')).toBe(polls + 1);
 });
