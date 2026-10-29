@@ -7,7 +7,7 @@
     "moduleDetection": "force",
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
-    "types": ["vite/client", "vite-plugin-pwa/client", "node"],
+    "types": ["vite/client", "vite-plugin-pwa/client"],
     "strict": true,
     "isolatedModules": true,
     "noFallthroughCasesInSwitch": true,
@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "tests", "vite.config.ts", "playwright.config.ts"]
+  "include": ["src"]
 }

@@ -1,0 +1,67 @@
+import { expect, test, vi } from 'vitest';
+import { base64ToUtf8, utf8ToBase64 } from '../../src/sync/base64';
+
+test('utf8 roundtrip', () => {
+  expect(base64ToUtf8(utf8ToBase64('## Ergänzungen äöüß € „x“'))).toBe('## Ergänzungen äöüß € „x“');
+});
+
+test('is plain UTF-8 plus standard Base64, same as Node', () => {
+  const samples = [
+    '',
+    'a',
+    'ab',
+    'abc',
+    'abcd',
+    '## Ergänzungen äöüß € „x“',
+    '<svg viewBox="0 0 1192 1590"/>',
+    'Emoji 😀 und 𝄞',
+    'Zeile 1\r\nZeile 2\n',
+    'Sperren & "Muster" <2027>',
+  ];
+  for (const text of samples) {
+    const reference = Buffer.from(text, 'utf8').toString('base64');
+    expect(utf8ToBase64(text)).toBe(reference);
+    expect(base64ToUtf8(reference)).toBe(text);
+  }
+});
+
+test('large text (several MB) does not hit argument limits', () => {
+  const unit = '## Ergänzungen äöüß € „x“ 😀 <path d="M 0 0 L 5 5"/>\n';
+  const text = unit.repeat(Math.ceil(5_000_000 / unit.length));
+  expect(text.length).toBeGreaterThan(5_000_000);
+  const encoded = utf8ToBase64(text);
+  // Boolean statt toBe: bei einem Fehler soll kein Diff über Millionen Zeichen entstehen.
+  expect(encoded === Buffer.from(text, 'utf8').toString('base64')).toBe(true);
+  expect(base64ToUtf8(encoded) === text).toBe(true);
+});
+
+test('base64 with line breaks or other whitespace, as GitHub sends it, decodes', () => {
+  const text = 'Zeile mit Umlauten äöü € und Emoji 😀\n'.repeat(12);
+  const plain = Buffer.from(text, 'utf8').toString('base64');
+  const wrapped = plain.replace(/(.{60})/g, '$1\n') + '\n'; // GitHub bricht alle 60 Zeichen um
+  expect(wrapped).toContain('\n');
+  expect(base64ToUtf8(wrapped)).toBe(text);
+  expect(base64ToUtf8(plain.replace(/(.{76})/g, '$1\r\n'))).toBe(text);
+  expect(base64ToUtf8(` ${plain.slice(0, 8)}\t${plain.slice(8, 20)} \n${plain.slice(20)} `)).toBe(text);
+});
+
+test('invalid input is refused instead of silently replaced', () => {
+  // Ein einzelnes Latin-1-ä (0xE4) ist kein gültiges UTF-8. Ersatzzeichen würden die Datei beim Speichern verändern.
+  expect(() => base64ToUtf8(Buffer.from([0xe4]).toString('base64'))).toThrow();
+  expect(() => base64ToUtf8('***')).toThrow();
+});
+
+test('removes whitespace itself instead of relying on atob to skip it', () => {
+  // Die Vorgabe lautet: Leerraum entfernen, bevor dekodiert wird. Aktuelle Browser überspringen ihn in atob selbst,
+  // dieser strenge Ersatz gilt für jede Engine, die das nicht tut.
+  const realAtob = globalThis.atob;
+  vi.stubGlobal('atob', (data: string) => {
+    if (/\s/.test(data)) throw new DOMException('Invalid character', 'InvalidCharacterError');
+    return realAtob(data);
+  });
+  try {
+    expect(base64ToUtf8('SGVs\nbG8g\r\nV29y bGQ=\n')).toBe('Hello World');
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
