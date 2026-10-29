@@ -81,3 +81,18 @@ export function monthGrid(month: string): Day[][] {
 export function formatDayLong(d: Day): string {
   return `${WEEKDAY_NAMES[weekdayIndex(d)]} ${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}`;
 }
+
+/**
+ * `true`, wenn `d` genau die Form `YYYY-MM-DD` hat und es diesen Tag im Kalender gibt
+ * (`2026-02-30` und `2026-13-45` gibt es nicht).
+ */
+export function isValidDay(d: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  if (!match) return false;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  // Zurückrechnen statt Date.parse: Der Tag gilt, wenn er unverändert wieder herauskommt. Mit
+  // setUTCFullYear, weil Date.UTC aus den Jahren 0 bis 99 die Jahre 1900 bis 1999 macht.
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}

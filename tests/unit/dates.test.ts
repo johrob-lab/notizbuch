@@ -2,6 +2,7 @@ import { expect, test } from 'vitest';
 import {
   addDays,
   formatDayLong,
+  isValidDay,
   isoWeekKey,
   mondayOf,
   monthGrid,
@@ -170,4 +171,51 @@ test('long day format', () => {
   expect(formatDayLong('2026-10-31')).toBe('Sa 31.10.2026');
   expect(formatDayLong('2026-11-01')).toBe('So 01.11.2026');
   expect(formatDayLong('2027-01-05')).toBe('Di 05.01.2027');
+});
+
+test('isValidDay accepts real calendar days in the form YYYY-MM-DD', () => {
+  for (const d of ['2026-10-29', '2026-01-01', '2026-12-31', '2026-02-28', '2026-04-30', '2028-02-29', '2000-02-29']) {
+    expect(isValidDay(d), d).toBe(true);
+  }
+});
+
+test('isValidDay rejects days that do not exist', () => {
+  for (const d of ['2026-13-45', '2026-13-01', '2026-00-10', '2026-10-00', '2026-10-32', '2026-02-29', '2026-02-30', '2026-04-31', '2027-02-29', '2100-02-29']) {
+    expect(isValidDay(d), d).toBe(false);
+  }
+});
+
+test('isValidDay rejects everything that is not exactly YYYY-MM-DD', () => {
+  for (const d of ['', '2026-1-5', '26-10-29', '2026-10-29 ', ' 2026-10-29', '2026-10-29\n', '2026-10-29T00:00:00Z', '2026/10/29', '20261029', '+2026-10-29', 'abcd-ef-gh', '2026-10-2\uFF19']) {
+    expect(isValidDay(d), JSON.stringify(d)).toBe(false);
+  }
+});
+
+test('isValidDay does not turn the years 0 to 99 into 19xx', () => {
+  expect(isValidDay('0004-02-29')).toBe(true); // Jahr 4 ist ein Schaltjahr
+  expect(isValidDay('0099-02-29')).toBe(false);
+  expect(isValidDay('0000-01-01')).toBe(true);
+});
+
+test('isValidDay: the last day of every month is valid and the day after it is not', () => {
+  const problems: string[] = [];
+  for (let year = 2026; year <= 2032; year++) {
+    for (let month = 1; month <= 12; month++) {
+      const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      const key = `${year}-${String(month).padStart(2, '0')}`;
+      if (!isValidDay(`${key}-${String(last).padStart(2, '0')}`)) problems.push(`${key}: letzter Tag ${last} fehlt`);
+      if (isValidDay(`${key}-${String(last + 1).padStart(2, '0')}`)) problems.push(`${key}: Tag ${last + 1} gilt`);
+    }
+  }
+  expect(problems).toEqual([]);
+});
+
+test('isValidDay agrees with addDays for a few years of days', () => {
+  let d = '2026-01-01';
+  const problems: string[] = [];
+  for (let i = 0; i < 365 * 5; i++) {
+    if (!isValidDay(d)) problems.push(d);
+    d = addDays(d, 1);
+  }
+  expect(problems).toEqual([]);
 });
