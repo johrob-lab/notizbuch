@@ -1,0 +1,842 @@
+<title>Stift-Test Notizbuch</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: Werkzeugleiste oben, darunter der Schreibtisch mit einer A4-Seite.
+   Der Testplan schwebt rechts oben, die Messwerte stehen links unten. */
+:root {
+  --desk: #dce1e7;
+  --panel: #f5f6f8;
+  --raised: #ffffff;
+  --fg: #1e2430;
+  --muted: #5b6472;
+  --line: #c8cfd8;
+  --accent: #2c5a8a;
+  --accent-soft: #dce7f3;
+  --on-accent: #ffffff;
+  --ink-black: #1c1f26;
+  --ink-blue: #1f4fa3;
+  --ink-red: #c62828;
+  --ink-green: #2e7d32;
+  --shadow: 0 1px 2px rgba(22, 32, 48, .08), 0 8px 24px rgba(22, 32, 48, .12);
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-data: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --desk: #1a1e24; --panel: #232931; --raised: #2b323c; --fg: #e6eaf0; --muted: #9aa4b3;
+    --line: #3a434f; --accent: #8db5e4; --accent-soft: #2e3d51; --on-accent: #0f2238;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .45), 0 8px 24px rgba(0, 0, 0, .35);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --desk: #1a1e24; --panel: #232931; --raised: #2b323c; --fg: #e6eaf0; --muted: #9aa4b3;
+  --line: #3a434f; --accent: #8db5e4; --accent-soft: #2e3d51; --on-accent: #0f2238;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .45), 0 8px 24px rgba(0, 0, 0, .35);
+  color-scheme: dark;
+}
+html { height: 100%; box-sizing: border-box; }
+*, *::before, *::after { box-sizing: inherit; }
+[hidden] { display: none !important; }
+body {
+  height: 100%; margin: 0; overflow: hidden;
+  background: var(--desk); color: var(--fg);
+  font: 14px/1.4 var(--font-ui);
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+}
+#app { height: 100%; display: flex; flex-direction: column; }
+
+/* Werkzeugleiste */
+#bar {
+  flex: none; display: flex; align-items: center; gap: 2px;
+  overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+  padding-block: 8px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+#bar::-webkit-scrollbar { display: none; }
+.grp { flex: none; display: flex; align-items: center; gap: 2px; }
+.sep { flex: none; width: 1px; height: 26px; margin-inline: 3px; background: var(--line); }
+.tb {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 38px; min-width: 36px; padding: 0 7px;
+  border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: var(--fg);
+  font: 600 13px/1 var(--font-ui); cursor: pointer; touch-action: manipulation;
+}
+.tb:hover { background: var(--accent-soft); }
+.tb[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.tb:disabled { opacity: .35; cursor: default; background: transparent; }
+.tb svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tb:focus-visible, .chip:focus-visible, .primary:focus-visible, #planToggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dot { display: block; border-radius: 50%; background: currentColor; }
+.swatch span { display: block; width: 22px; height: 22px; border-radius: 50%; box-shadow: 0 0 0 1px var(--line); }
+.swatch[aria-pressed="true"] { background: transparent; border-color: transparent; }
+.swatch[aria-pressed="true"] span { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
+#paper, #smooth { justify-content: flex-start; }
+#smooth { min-width: 128px; border-color: var(--line); }
+#zoomFit { min-width: 58px; font-variant-numeric: tabular-nums; }
+.big { font-size: 20px; font-weight: 500; }
+
+/* Schreibtisch */
+#stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; touch-action: none; background: var(--desk); }
+#stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#base, #pred { pointer-events: none; }
+#live { cursor: crosshair; }
+
+#status {
+  position: absolute; z-index: 1; left: max(12px, env(safe-area-inset-left, 0px)); bottom: 12px;
+  max-width: calc(100% - 24px); padding: 6px 10px; border-radius: 8px;
+  background: var(--raised); border: 1px solid var(--line); box-shadow: var(--shadow);
+  color: var(--muted); font: 12px/1.35 var(--font-data); pointer-events: none;
+}
+
+/* Testplan */
+#plan {
+  position: absolute; z-index: 2; top: 12px; right: max(12px, env(safe-area-inset-right, 0px));
+  width: min(19rem, calc(100% - 24px));
+  background: var(--raised); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+  touch-action: manipulation;
+}
+#planToggle {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 11px 14px; border: 0; border-radius: 14px; background: none; color: var(--fg);
+  font: 600 14px/1.2 var(--font-ui); cursor: pointer; text-align: left;
+}
+#planToggle svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .2s ease; }
+#planToggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
+#planBody { display: grid; gap: 12px; padding: 0 14px 14px; }
+.steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.steps label { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; font-size: 13.5px; line-height: 1.35; cursor: pointer; }
+.steps input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
+.num { color: var(--muted); font-variant-numeric: tabular-nums; }
+.rate-row { display: grid; gap: 6px; }
+.rate-label { font-size: 12px; font-weight: 600; letter-spacing: .03em; color: var(--muted); }
+.rate { display: flex; gap: 6px; }
+.chip {
+  flex: 1; height: 36px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--fg); font: 600 13px/1 var(--font-ui); cursor: pointer;
+}
+.chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.primary { height: 40px; border: 0; border-radius: 10px; background: var(--accent); color: var(--on-accent); font: 600 14px/1 var(--font-ui); cursor: pointer; }
+.note { margin: -4px 0 0; font-size: 12px; color: var(--muted); }
+#copyText {
+  width: 100%; min-height: 7rem; padding: 8px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--fg);
+  font: 12px/1.4 var(--font-data); -webkit-user-select: text; user-select: text;
+}
+@media (prefers-reduced-motion: reduce) { #planToggle svg { transition: none; } }
+</style>
+
+<div id="app">
+  <div id="bar" role="toolbar" aria-label="Werkzeuge">
+    <div class="grp" role="group" aria-label="Stiftbreite">
+      <button class="tb" type="button" id="w1" data-w="0.1" aria-pressed="false" aria-label="Stiftbreite 0,1 mm" title="0,1 mm"><span class="dot" style="width:3px;height:3px"></span></button>
+      <button class="tb" type="button" id="w2" data-w="0.2" aria-pressed="true" aria-label="Stiftbreite 0,2 mm" title="0,2 mm"><span class="dot" style="width:5px;height:5px"></span></button>
+      <button class="tb" type="button" id="w3" data-w="0.35" aria-pressed="false" aria-label="Stiftbreite 0,35 mm" title="0,35 mm"><span class="dot" style="width:7px;height:7px"></span></button>
+      <button class="tb" type="button" id="w4" data-w="0.5" aria-pressed="false" aria-label="Stiftbreite 0,5 mm" title="0,5 mm"><span class="dot" style="width:10px;height:10px"></span></button>
+    </div>
+    <div class="sep" aria-hidden="true"></div>
+    <div class="grp" role="group" aria-label="Farbe">
+      <button class="tb swatch" type="button" id="c1" data-ink="schwarz" aria-pressed="true" aria-label="Schwarz" title="Schwarz"><span style="background:var(--ink-black)"></span></button>
+      <button class="tb swatch" type="button" id="c2" data-ink="blau" aria-pressed="false" aria-label="Blau" title="Blau"><span style="background:var(--ink-blue)"></span></button>
+      <button class="tb swatch" type="button" id="c3" data-ink="rot" aria-pressed="false" aria-label="Rot (offen)" title="Rot (offen)"><span style="background:var(--ink-red)"></span></button>
+      <button class="tb swatch" type="button" id="c4" data-ink="gruen" aria-pressed="false" aria-label="Grün (erledigt)" title="Grün (erledigt)"><span style="background:var(--ink-green)"></span></button>
+    </div>
+    <div class="sep" aria-hidden="true"></div>
+    <div class="grp">
+      <button class="tb" type="button" id="eraser" aria-pressed="false" aria-label="Radierer" title="Radierer">
+        <svg viewBox="0 0 24 24"><path d="M14.6 4.6a2 2 0 0 1 2.8 0l2 2a2 2 0 0 1 0 2.8L11 17.8H7l-2.4-2.4a2 2 0 0 1 0-2.8z"/><path d="M9.5 9.7l5 5"/><path d="M11 17.8h8.5"/></svg>
+      </button>
+      <button class="tb" type="button" id="undo" aria-label="Rückgängig" title="Rückgängig" disabled>
+        <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+      </button>
+      <button class="tb" type="button" id="redo" aria-label="Wiederholen" title="Wiederholen" disabled>
+        <svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>
+      </button>
+    </div>
+    <div class="sep" aria-hidden="true"></div>
+    <button class="tb" type="button" id="paper" aria-label="Papier wechseln" title="Papier wechseln">
+      <svg viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M9 10h6M9 14h6M9 18h4"/></svg>
+      <span id="paperName">Linien 7 mm</span>
+    </button>
+    <div class="sep" aria-hidden="true"></div>
+    <div class="grp" role="group" aria-label="Zoom">
+      <button class="tb big" type="button" id="zoomOut" aria-label="Verkleinern" title="Verkleinern">&minus;</button>
+      <button class="tb" type="button" id="zoomFit" aria-label="Auf Seitenbreite zoomen" title="Auf Seitenbreite">100 %</button>
+      <button class="tb big" type="button" id="zoomIn" aria-label="Vergrößern" title="Vergrößern">+</button>
+    </div>
+    <div class="sep" aria-hidden="true"></div>
+    <button class="tb" type="button" id="smooth" title="Wie stark die Schrift geglättet wird. Antippen schaltet weiter.">Glättung: mittel</button>
+    <button class="tb" type="button" id="predict" aria-pressed="true" title="Zeichnet die Linie ein Stück voraus, damit sie nicht hinterherhinkt">Vorhersage</button>
+    <div class="sep" aria-hidden="true"></div>
+    <button class="tb" type="button" id="clear" aria-label="Seite leeren" title="Seite leeren (Rückgängig holt alles zurück)">
+      <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>
+    </button>
+  </div>
+
+  <div id="stage">
+    <canvas id="base" aria-hidden="true"></canvas>
+    <canvas id="live" aria-label="Schreibfläche"></canvas>
+    <canvas id="pred" aria-hidden="true"></canvas>
+
+    <section id="plan" aria-label="Testplan">
+      <button type="button" id="planToggle" aria-expanded="true" aria-controls="planBody">
+        <span>So testest du (Runde 3)</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div id="planBody">
+        <ol class="steps">
+          <li><label><input type="checkbox" id="s1"><span><span class="num">1.</span> Ein paar Zeilen schreiben, so klein wie in GoodNotes</span></label></li>
+          <li><label><input type="checkbox" id="s2"><span><span class="num">2.</span> Oben „Glättung“ durchschalten (leicht, mittel, stark) und je eine Zeile schreiben</span></label></li>
+          <li><label><input type="checkbox" id="s3"><span><span class="num">3.</span> Die beste Stufe stehen lassen, dann schnell schreiben: hinkt die Linie hinterher?</span></label></li>
+        </ol>
+        <div class="rate-row">
+          <span class="rate-label">TEMPO</span>
+          <div class="rate" role="group" aria-label="Tempo">
+            <button type="button" class="chip" id="t1" data-tempo="passt" aria-pressed="false">Passt</button>
+            <button type="button" class="chip" id="t2" data-tempo="geht so" aria-pressed="false">Geht so</button>
+            <button type="button" class="chip" id="t3" data-tempo="zu träge" aria-pressed="false">Zu träge</button>
+          </div>
+        </div>
+        <div class="rate-row">
+          <span class="rate-label">SCHRIFTBILD</span>
+          <div class="rate" role="group" aria-label="Schriftbild">
+            <button type="button" class="chip" id="o1" data-schrift="passt" aria-pressed="false">Passt</button>
+            <button type="button" class="chip" id="o2" data-schrift="geht so" aria-pressed="false">Geht so</button>
+            <button type="button" class="chip" id="o3" data-schrift="zu eckig" aria-pressed="false">Zu eckig</button>
+          </div>
+        </div>
+        <button type="button" class="primary" id="copy">Ergebnis kopieren</button>
+        <p class="note" id="copyNote">Danach im Chat einfügen.</p>
+        <textarea id="copyText" readonly hidden aria-label="Ergebnis zum Kopieren"></textarea>
+      </div>
+    </section>
+
+    <div id="status" role="status">Stift: noch nicht erkannt</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const $ = (id) => document.getElementById(id);
+  const stage = $('stage'), base = $('base'), live = $('live'), pred = $('pred');
+  const bctx = base.getContext('2d');
+  const lctx = live.getContext('2d', { desynchronized: true });
+  const pctx = pred.getContext('2d');
+  const snap = document.createElement('canvas'), sctx = snap.getContext('2d');
+
+  const PAGE_W = 794, PAGE_H = 1123;          // A4 bei 96 dpi
+  const MM = PAGE_W / 210;                    // Seiteneinheiten je Millimeter
+  const PAPERS = [
+    { name: 'Linien 7 mm', kind: 'lines', mm: 7 },
+    { name: 'Linien 5 mm', kind: 'lines', mm: 5 },
+    { name: 'Karo 5 mm', kind: 'grid', mm: 5 },
+    { name: 'Blanko', kind: 'none', mm: 0 }
+  ];
+  const INK = { schwarz: '#1c1f26', blau: '#1f4fa3', rot: '#c62828', gruen: '#2e7d32' };
+  // Glättung: jeder Punkt wird mit seinen Nachbarn davor und danach gemittelt.
+  // Die Stiftspitze selbst bleibt unverändert, darum hinkt nichts hinterher.
+  const SMOOTH = [
+    { name: 'aus', sigma: 0 },
+    { name: 'leicht', sigma: 1.0 },
+    { name: 'mittel', sigma: 1.6 },
+    { name: 'stark', sigma: 2.4 }
+  ];
+  const KEY = 'stift-test-v3';
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const median = (a) => { const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; };
+
+  let dpr = 1, vw = 0, vh = 0, fit = 1, rect = { left: 0, top: 0 };
+  const view = { s: 1, x: 0, y: 0 };
+  const st = { strokes: [], undo: [], redo: [], tool: 'pen', color: INK.schwarz, widthMm: 0.2, paper: 0, smooth: 2 };
+  const diag = {
+    pen: false, mouse: false, pMin: 1, pMax: 0, penSamples: 0, rate: 0, hz: 0,
+    coalesced: typeof PointerEvent !== 'undefined' && 'getCoalescedEvents' in PointerEvent.prototype,
+    predSource: ''
+  };
+
+  let drawing = null, erasing = null, gesture = null, liveArea = null;
+  let predArea = null, predTimer = 0, predictOn = true;
+  const touches = new Map();
+  let penDown = false, lastPenUp = -1e9;
+
+  // ---------- Koordinaten ----------
+  const local = (e) => ({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  const toPage = (x, y) => ({ x: (x - view.x) / view.s, y: (y - view.y) / view.s });
+  const setView = (ctx) => ctx.setTransform(dpr * view.s, 0, 0, dpr * view.s, dpr * view.x, dpr * view.y);
+  function ink(ctx, color) { ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; }
+
+  // ---------- Striche ----------
+  function newStroke() {
+    return { color: st.color, nomW: st.widthMm * MM, w: 0, sumW: 0, pts: [], box: [Infinity, Infinity, -Infinity, -Infinity], maxW: 0 };
+  }
+  function grow(s, p) {
+    const b = s.box;
+    if (p.x < b[0]) b[0] = p.x; if (p.y < b[1]) b[1] = p.y;
+    if (p.x > b[2]) b[2] = p.x; if (p.y > b[3]) b[3] = p.y;
+    if (p.w > s.maxW) s.maxW = p.w;
+  }
+  function rebox(s) {
+    s.box = [Infinity, Infinity, -Infinity, -Infinity]; s.maxW = 0; s.sumW = 0;
+    for (const q of s.pts) { grow(s, q); s.sumW += q.w; }
+    s.w = s.pts.length ? s.sumW / s.pts.length : s.nomW;
+  }
+  const lineW = (s) => Math.max(s.w || s.nomW, 1 / (view.s * dpr));   // mindestens ein Bildpunkt
+
+  function centerPath(ctx, p) {
+    ctx.beginPath(); ctx.moveTo(p[0].x, p[0].y);
+    for (let i = 1; i < p.length; i++) {
+      const a = p[i - 1], b = p[i], mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      if (i === 1) ctx.lineTo(mx, my); else ctx.quadraticCurveTo(a.x, a.y, mx, my);
+    }
+    ctx.lineTo(p[p.length - 1].x, p[p.length - 1].y);
+  }
+  // Ein Strich ist ein einziger glatter Pfad in einer Breite: keine Stöße, keine Ecken
+  function drawStroke(ctx, s) {
+    const p = s.pts;
+    if (!p.length) return;
+    ink(ctx, s.color);
+    const w = lineW(s);
+    if (p.length === 1) { ctx.beginPath(); ctx.arc(p[0].x, p[0].y, w * 0.55, 0, Math.PI * 2); ctx.fill(); return; }
+    centerPath(ctx, p); ctx.lineWidth = w; ctx.stroke();
+  }
+
+  // ---------- Glättung ----------
+  // Das Fenster wird zu den Enden hin kleiner: Anfang, Ende und Stiftspitze bleiben genau dort, wo der Stift war
+  function smoothTail(d) {
+    const raw = d.raw, n = raw.length, out = d.stroke.pts;
+    if (!d.K) { out[n - 1] = raw[n - 1]; return; }
+    for (let i = Math.max(0, n - 1 - d.K); i < n; i++) {
+      const r = Math.min(d.K, i, n - 1 - i);
+      let sx = 0, sy = 0, sw = 0;
+      for (let j = -r; j <= r; j++) { const w = d.wts[j < 0 ? -j : j]; sx += w * raw[i + j].x; sy += w * raw[i + j].y; sw += w; }
+      out[i] = { x: sx / sw, y: sy / sw, w: raw[i].w };
+    }
+  }
+
+  // ---------- Seite ----------
+  function drawPage(ctx) {
+    const px = 1 / view.s;                    // ein Bildschirmpunkt in Seiteneinheiten
+    ctx.fillStyle = 'rgba(22, 32, 48, 0.10)';
+    ctx.fillRect(2 * px, 3 * px, PAGE_W, PAGE_H);
+    ctx.fillStyle = '#fffefa';
+    ctx.fillRect(0, 0, PAGE_W, PAGE_H);
+    const pp = PAPERS[st.paper];
+    ctx.lineWidth = Math.min(0.8, px);
+    if (pp.kind === 'lines') {
+      ctx.strokeStyle = '#b8cde3';
+      ctx.beginPath();
+      for (let y = 24 * MM; y < PAGE_H - 10 * MM; y += pp.mm * MM) { ctx.moveTo(0, y); ctx.lineTo(PAGE_W, y); }
+      ctx.stroke();
+    } else if (pp.kind === 'grid') {
+      ctx.strokeStyle = '#d2dde9';
+      ctx.beginPath();
+      for (let y = pp.mm * MM; y < PAGE_H; y += pp.mm * MM) { ctx.moveTo(0, y); ctx.lineTo(PAGE_W, y); }
+      for (let x = pp.mm * MM; x < PAGE_W; x += pp.mm * MM) { ctx.moveTo(x, 0); ctx.lineTo(x, PAGE_H); }
+      ctx.stroke();
+    }
+    if (pp.kind !== 'none') {                 // roter Rand wie im GoodNotes-Notizbuch
+      ctx.strokeStyle = '#e29a9a';
+      ctx.beginPath(); ctx.moveTo(25 * MM, 0); ctx.lineTo(25 * MM, PAGE_H); ctx.stroke();
+    }
+  }
+
+  let raf = 0;
+  const scheduleRender = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(); }); };
+
+  function render() {
+    bctx.setTransform(1, 0, 0, 1, 0, 0);
+    bctx.clearRect(0, 0, base.width, base.height);
+    if (gesture && gesture.snapView) {        // volle Seiten: beim Zoomen nur das Bild verschieben
+      const sv = gesture.snapView, k = view.s / sv.s;
+      bctx.setTransform(k, 0, 0, k, (view.x - sv.x * k) * dpr, (view.y - sv.y * k) * dpr);
+      bctx.drawImage(snap, 0, 0);
+    } else {
+      setView(bctx);
+      drawPage(bctx);
+      const x0 = -view.x / view.s, y0 = -view.y / view.s, x1 = x0 + vw / view.s, y1 = y0 + vh / view.s;
+      for (const s of st.strokes) {
+        const b = s.box, m = Math.max(s.maxW, lineW(s));
+        if (b[2] + m < x0 || b[0] - m > x1 || b[3] + m < y0 || b[1] - m > y1) continue;
+        drawStroke(bctx, s);
+      }
+    }
+    if (drawing) { clearPred(); redrawLive(); }
+    $('zoomFit').textContent = Math.round(view.s / fit * 100) + ' %';
+  }
+
+  // ---------- Strich, der gerade entsteht ----------
+  function screenBox(s) {
+    const b = s.box, pad = Math.max(s.maxW, lineW(s)) + 3 / view.s;
+    return [(b[0] - pad) * view.s + view.x, (b[1] - pad) * view.s + view.y,
+            (b[2] + pad) * view.s + view.x, (b[3] + pad) * view.s + view.y];
+  }
+  function clearLive(all) {
+    lctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (all) lctx.clearRect(0, 0, live.width, live.height);
+    else if (liveArea) {
+      const [x0, y0, x1, y1] = liveArea;
+      lctx.clearRect(Math.floor(x0 * dpr) - 2, Math.floor(y0 * dpr) - 2,
+                     Math.ceil((x1 - x0) * dpr) + 4, Math.ceil((y1 - y0) * dpr) + 4);
+    }
+    liveArea = null;
+  }
+  function liveUpdate() {
+    const s = drawing.stroke;
+    if (!s.pts.length) return;
+    clearLive(false);
+    setView(lctx); drawStroke(lctx, s);
+    liveArea = screenBox(s);
+  }
+  function redrawLive() { clearLive(true); liveUpdate(); }
+
+  // ---------- Vorhersage: Linie ein Stück vor dem Stift zeichnen ----------
+  function clearPred() {
+    clearTimeout(predTimer);
+    if (!predArea) return;
+    const [x0, y0, x1, y1] = predArea;
+    pctx.setTransform(1, 0, 0, 1, 0, 0);
+    pctx.clearRect(Math.floor(x0 * dpr) - 2, Math.floor(y0 * dpr) - 2,
+                   Math.ceil((x1 - x0) * dpr) + 4, Math.ceil((y1 - y0) * dpr) + 4);
+    predArea = null;
+  }
+  function predict(e) {
+    clearPred();
+    const d = drawing;
+    if (!predictOn || !d) return;
+    const p = d.stroke.pts;
+    if (!p.length) return;
+    let target = null;
+    if (e.getPredictedEvents) {                // Safari liefert eigene Vorhersagen, wenn es sie kann
+      try {
+        const list = e.getPredictedEvents();
+        if (list && list.length) { target = local(list[list.length - 1]); diag.predSource = 'Safari'; }
+      } catch (_) { /* egal */ }
+    }
+    if (!target) {                             // sonst selbst aus der Geschwindigkeit hochrechnen
+      const h = d.hist, n = h.length;
+      if (n < 3) return;
+      const a = h[n - 1];
+      let b = h[0];
+      for (let i = n - 2; i >= 0; i--) { if (a.t - h[i].t >= 12) { b = h[i]; break; } }
+      const dt = a.t - b.t;
+      if (dt <= 0 || dt > 60) return;
+      let dx = (a.x - b.x) / dt * 18, dy = (a.y - b.y) / dt * 18;   // 18 ms voraus
+      const len = Math.hypot(dx, dy);
+      if (len < 0.5) return;
+      if (len > 16) { dx *= 16 / len; dy *= 16 / len; }
+      target = { x: a.x + dx, y: a.y + dy };
+      if (!diag.predSource) diag.predSource = 'eigene';
+    }
+    const last = p[p.length - 1], t = toPage(target.x, target.y), w = lineW(d.stroke);
+    setView(pctx); ink(pctx, d.stroke.color);
+    pctx.beginPath(); pctx.moveTo(last.x, last.y); pctx.lineTo(t.x, t.y);
+    pctx.lineWidth = w; pctx.stroke();
+    const pad = w + 2 / view.s;
+    predArea = [(Math.min(last.x, t.x) - pad) * view.s + view.x, (Math.min(last.y, t.y) - pad) * view.s + view.y,
+                (Math.max(last.x, t.x) + pad) * view.s + view.x, (Math.max(last.y, t.y) + pad) * view.s + view.y];
+    predTimer = setTimeout(clearPred, 40);     // Stift steht still: Vorhersage wieder weg
+  }
+
+  // ---------- Messwerte ----------
+  let fm = null;
+  function startFrameMeter() {
+    if (fm) return;
+    fm = { last: 0, deltas: [], id: 0 };
+    const tick = (t) => {
+      if (!fm) return;
+      if (fm.last) { const dt = t - fm.last; if (dt > 2 && dt < 50) fm.deltas.push(dt); }
+      fm.last = t; fm.id = requestAnimationFrame(tick);
+    };
+    fm.id = requestAnimationFrame(tick);
+  }
+  function stopFrameMeter() {
+    if (!fm) return;
+    cancelAnimationFrame(fm.id);
+    if (fm.deltas.length > 8) diag.hz = Math.round(1000 / median(fm.deltas) / 10) * 10;
+    fm = null;
+  }
+  function statusText() {
+    const parts = [];
+    parts.push(diag.pen ? 'Stift: erkannt' : diag.mouse ? 'Maus' : 'Stift: noch nicht erkannt');
+    if (diag.pen) parts.push('Druck: ' + (diag.pMax - diag.pMin > 0.15 ? 'ja' : diag.penSamples > 60 ? 'nein' : 'prüft …'));
+    if (diag.rate) parts.push('Abtastung: ' + diag.rate + '/s');
+    if (diag.hz) parts.push('Bild: ' + diag.hz + ' Hz');
+    parts.push('Zwischenpunkte: ' + (diag.coalesced ? 'ja' : 'nein'));
+    parts.push('Vorhersage: ' + (predictOn ? (diag.predSource || 'an') : 'aus'));
+    return parts.join(' · ');
+  }
+  const updateStatus = () => { $('status').textContent = statusText(); };
+
+  // ---------- Schreiben ----------
+  function beginDraw(e, kind) {
+    const pos = local(e);
+    if (st.tool === 'eraser') {
+      erasing = { id: e.pointerId, removed: [], last: pos };
+      eraseAt(pos.x, pos.y); eraserCursor(pos.x, pos.y);
+      return;
+    }
+    const sig = SMOOTH[st.smooth].sigma, K = sig ? Math.ceil(2.5 * sig) : 0;
+    drawing = {
+      id: e.pointerId, kind, stroke: newStroke(), raw: [], ps: null, last: pos, lastTs: null, deltas: [], hist: [],
+      K, wts: sig ? Array.from({ length: K + 1 }, (_, j) => Math.exp(-(j * j) / (2 * sig * sig))) : []
+    };
+    addSample(drawing, e);
+    liveUpdate();
+    if (kind === 'pen') startFrameMeter();
+  }
+  function addSample(d, ev) {
+    const pos = local(ev);
+    d.last = pos;
+    d.hist.push({ x: pos.x, y: pos.y, t: ev.timeStamp });
+    if (d.hist.length > 12) d.hist.shift();
+    if (d.kind === 'pen') {
+      diag.penSamples++;
+      const raw = ev.pressure;
+      if (raw > 0) { if (raw < diag.pMin) diag.pMin = raw; if (raw > diag.pMax) diag.pMax = raw; }
+      if (d.lastTs !== null) { const dt = ev.timeStamp - d.lastTs; if (dt > 0.3 && dt < 40 && d.deltas.length < 4000) d.deltas.push(dt); }
+      d.lastTs = ev.timeStamp;
+    }
+    pushPoint(d, pos.x, pos.y, d.kind === 'pen' && ev.pressure > 0 ? ev.pressure : 0.5);
+  }
+  function pushPoint(d, x, y, pv) {
+    const s = d.stroke, pt = toPage(x, y), raw = d.raw, last = raw[raw.length - 1];
+    if (last) { const dx = pt.x - last.x, dy = pt.y - last.y, min = 0.6 / view.s; if (dx * dx + dy * dy < min * min) return; }
+    d.ps = d.ps === null ? pv : d.ps * 0.7 + pv * 0.3;
+    pt.w = s.nomW * (0.7 + 0.6 * d.ps);       // Druck wirkt dezent auf die Breite
+    raw.push(pt); s.pts.push(pt); grow(s, pt);
+    s.sumW += pt.w; s.w = s.sumW / raw.length;
+    smoothTail(d);
+  }
+  function finishDraw(commit) {
+    const d = drawing; drawing = null;
+    clearLive(true);
+    clearPred();
+    if (d.kind === 'pen') stopFrameMeter();
+    if (d.deltas.length > 12) diag.rate = Math.max(diag.rate, Math.round(1000 / median(d.deltas) / 10) * 10);
+    const s = d.stroke;
+    if (commit && s.pts.length) {
+      setView(bctx); drawStroke(bctx, s);
+      st.strokes.push(s);
+      pushAction({ type: 'add', stroke: s });
+      collapsePlanOnce();
+      save();
+    }
+    updateStatus();
+  }
+
+  // ---------- Radierer (ganze Striche) ----------
+  function segDist2(p, a, b) {
+    const vx = b.x - a.x, vy = b.y - a.y, l2 = vx * vx + vy * vy;
+    const t = l2 ? clamp(((p.x - a.x) * vx + (p.y - a.y) * vy) / l2, 0, 1) : 0;
+    const dx = a.x + t * vx - p.x, dy = a.y + t * vy - p.y;
+    return dx * dx + dy * dy;
+  }
+  function hits(s, p, r) {
+    const q = s.pts, rr = r + lineW(s) / 2;
+    if (q.length === 1) return (q[0].x - p.x) ** 2 + (q[0].y - p.y) ** 2 <= rr * rr;
+    for (let i = 1; i < q.length; i++) if (segDist2(p, q[i - 1], q[i]) <= rr * rr) return true;
+    return false;
+  }
+  function eraseAt(x, y) {
+    const p = toPage(x, y), r = 10 / view.s;
+    let hit = false;
+    for (let i = st.strokes.length - 1; i >= 0; i--) {
+      const s = st.strokes[i], b = s.box, m = r + Math.max(s.maxW, lineW(s));
+      if (p.x < b[0] - m || p.x > b[2] + m || p.y < b[1] - m || p.y > b[3] + m) continue;
+      if (hits(s, p, r)) { erasing.removed.push({ stroke: s, index: i }); st.strokes.splice(i, 1); hit = true; }
+    }
+    if (hit) scheduleRender();
+  }
+  function eraserCursor(x, y) {
+    clearLive(false);
+    lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    lctx.beginPath(); lctx.arc(x, y, 10, 0, Math.PI * 2);
+    lctx.fillStyle = 'rgba(44, 90, 138, 0.12)'; lctx.fill();
+    lctx.lineWidth = 1.5; lctx.strokeStyle = 'rgba(44, 90, 138, 0.9)'; lctx.stroke();
+    liveArea = [x - 12, y - 12, x + 12, y + 12];
+  }
+  function finishErase() {
+    const er = erasing; erasing = null;
+    clearLive(true);
+    if (er.removed.length) { pushAction({ type: 'erase', removed: er.removed }); save(); }
+  }
+
+  // ---------- Rückgängig ----------
+  function syncUndo() { $('undo').disabled = !st.undo.length; $('redo').disabled = !st.redo.length; }
+  function pushAction(a) { st.undo.push(a); if (st.undo.length > 300) st.undo.shift(); st.redo.length = 0; syncUndo(); }
+  function undo() {
+    const a = st.undo.pop(); if (!a) return;
+    if (a.type === 'add') { const i = st.strokes.lastIndexOf(a.stroke); if (i >= 0) st.strokes.splice(i, 1); }
+    else if (a.type === 'erase') { for (let k = a.removed.length - 1; k >= 0; k--) st.strokes.splice(a.removed[k].index, 0, a.removed[k].stroke); }
+    else if (a.type === 'clear') st.strokes = a.strokes.slice();
+    st.redo.push(a); render(); save(); syncUndo();
+  }
+  function redo() {
+    const a = st.redo.pop(); if (!a) return;
+    if (a.type === 'add') st.strokes.push(a.stroke);
+    else if (a.type === 'erase') { for (const r of a.removed) st.strokes.splice(r.index, 1); }
+    else if (a.type === 'clear') st.strokes = [];
+    st.undo.push(a); render(); save(); syncUndo();
+  }
+
+  // ---------- Zoomen und Verschieben ----------
+  function clampView() {
+    const m = 60, pw = PAGE_W * view.s, ph = PAGE_H * view.s;
+    view.x = clamp(view.x, m - pw, vw - m);
+    view.y = clamp(view.y, m - ph, vh - m);
+  }
+  function zoomAt(x, y, f) {
+    const s = clamp(view.s * f, fit * 0.3, fit * 10);
+    const px = (x - view.x) / view.s, py = (y - view.y) / view.s;
+    view.s = s; view.x = x - px * s; view.y = y - py * s;
+    clampView(); scheduleRender();
+  }
+  function fitPage() { view.s = fit; view.x = (vw - PAGE_W * fit) / 2; view.y = 16; clampView(); render(); }
+
+  function rebaseGesture() {
+    if (!gesture) gesture = { revert: { ...view }, moved: false, snapView: null };
+    gesture.ref = { ...view };
+    gesture.refPts = new Map();
+    touches.forEach((v, k) => gesture.refPts.set(k, { x: v.x, y: v.y }));
+  }
+  function startMoving() {
+    if (gesture.moved) return;
+    gesture.moved = true;
+    let n = 0; for (const s of st.strokes) n += s.pts.length;
+    if (n > 8000) {
+      sctx.setTransform(1, 0, 0, 1, 0, 0); sctx.clearRect(0, 0, snap.width, snap.height); sctx.drawImage(base, 0, 0);
+      gesture.snapView = { ...view };
+    }
+  }
+  function moveGesture() {
+    if (!gesture) return;
+    const ids = [...touches.keys()];
+    if (ids.length === 1) {
+      const p = touches.get(ids[0]), q = gesture.refPts.get(ids[0]);
+      if (!q) return;
+      const dx = p.x - q.x, dy = p.y - q.y;
+      if (!gesture.moved && dx * dx + dy * dy < 100) return;
+      startMoving();
+      view.x = gesture.ref.x + dx; view.y = gesture.ref.y + dy;
+    } else if (ids.length >= 2) {
+      const a = touches.get(ids[0]), b = touches.get(ids[1]);
+      const a0 = gesture.refPts.get(ids[0]), b0 = gesture.refPts.get(ids[1]);
+      if (!a0 || !b0) { rebaseGesture(); return; }
+      startMoving();
+      const ref = gesture.ref;
+      const d0 = Math.hypot(b0.x - a0.x, b0.y - a0.y) || 1, d1 = Math.hypot(b.x - a.x, b.y - a.y);
+      const s = clamp(ref.s * d1 / d0, fit * 0.3, fit * 10);
+      const px = ((a0.x + b0.x) / 2 - ref.x) / ref.s, py = ((a0.y + b0.y) / 2 - ref.y) / ref.s;
+      view.s = s; view.x = (a.x + b.x) / 2 - px * s; view.y = (a.y + b.y) / 2 - py * s;
+    }
+    clampView(); scheduleRender();
+  }
+  function endGesture(revert) {
+    if (!gesture) return;
+    const g = gesture; gesture = null;
+    if (revert && g.moved) Object.assign(view, g.revert);   // Stift kam, während Finger lagen: das war die Hand
+    render();
+  }
+
+  // ---------- Eingabe ----------
+  function capture(e) { try { live.setPointerCapture(e.pointerId); } catch (_) { /* egal */ } }
+  function samples(e) {
+    if (e.getCoalescedEvents) { try { const list = e.getCoalescedEvents(); if (list && list.length) return list; } catch (_) { /* egal */ } }
+    return [e];
+  }
+  function refreshRect() { const r = live.getBoundingClientRect(); rect = { left: r.left, top: r.top }; }
+
+  function onDown(e) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    refreshRect();
+    const now = performance.now();
+    if (e.pointerType === 'pen') {
+      diag.pen = true; penDown = true;
+      if (gesture) endGesture(true);
+      touches.clear();
+      if (drawing) finishDraw(drawing.kind !== 'touch');
+      if (erasing) finishErase();
+      capture(e); beginDraw(e, 'pen'); updateStatus();
+      return;
+    }
+    if (e.pointerType === 'touch') {
+      if (penDown || now - lastPenUp < 250) return;              // Hand liegt beim Schreiben auf
+      if ((e.width || 0) > 120 || (e.height || 0) > 120) return; // sehr große Auflagefläche: Handballen
+      if (!diag.pen && !gesture && !drawing && !erasing && touches.size === 0) {
+        capture(e); beginDraw(e, 'touch');                         // ohne Stift schreibt der Finger
+        return;
+      }
+      if (drawing && drawing.kind === 'touch') { touches.set(drawing.id, drawing.last); finishDraw(false); }
+      if (erasing) { touches.set(erasing.id, erasing.last); finishErase(); }
+      touches.set(e.pointerId, local(e));
+      rebaseGesture();
+      return;
+    }
+    diag.mouse = true; capture(e); beginDraw(e, 'mouse'); updateStatus();
+  }
+  function onMove(e) {
+    if (drawing && e.pointerId === drawing.id) {
+      e.preventDefault();
+      for (const ev of samples(e)) addSample(drawing, ev);
+      liveUpdate();
+      if (drawing.kind === 'pen') predict(e);
+      return;
+    }
+    if (erasing && e.pointerId === erasing.id) {
+      e.preventDefault();
+      for (const ev of samples(e)) { const p = local(ev); eraseAt(p.x, p.y); }
+      const p = local(e); erasing.last = p; eraserCursor(p.x, p.y);
+      return;
+    }
+    if (touches.has(e.pointerId)) { e.preventDefault(); touches.set(e.pointerId, local(e)); moveGesture(); }
+  }
+  function onUp(e) {
+    if (drawing && e.pointerId === drawing.id) finishDraw(true);
+    else if (erasing && e.pointerId === erasing.id) finishErase();
+    if (e.pointerType === 'pen') { penDown = false; lastPenUp = performance.now(); }
+    if (touches.delete(e.pointerId)) { if (touches.size) rebaseGesture(); else endGesture(false); }
+  }
+
+  live.addEventListener('pointerdown', onDown, { passive: false });
+  live.addEventListener('pointermove', onMove, { passive: false });
+  live.addEventListener('pointerup', onUp);
+  live.addEventListener('pointercancel', onUp);
+  live.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+  live.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+  live.addEventListener('contextmenu', (e) => e.preventDefault());
+  for (const t of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(t, (e) => e.preventDefault(), { passive: false });
+
+  live.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    refreshRect();
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? vh : 1;
+    const p = local(e);
+    if (e.ctrlKey || e.metaKey) zoomAt(p.x, p.y, Math.exp(-e.deltaY * unit * 0.0025));
+    else { view.x -= e.deltaX * unit; view.y -= e.deltaY * unit; clampView(); scheduleRender(); }
+  }, { passive: false });
+
+  window.addEventListener('keydown', (e) => {
+    const mod = e.ctrlKey || e.metaKey, k = (e.key || '').toLowerCase();
+    if (mod && k === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+    else if (mod && k === 'y') { e.preventDefault(); redo(); }
+  });
+
+  // ---------- Werkzeugleiste ----------
+  function press(sel, el) { document.querySelectorAll(sel).forEach((b) => b.setAttribute('aria-pressed', String(b === el))); }
+  function setTool(t) { st.tool = t; $('eraser').setAttribute('aria-pressed', String(t === 'eraser')); }
+  const smoothLabel = () => { $('smooth').textContent = 'Glättung: ' + SMOOTH[st.smooth].name; };
+  document.querySelectorAll('[data-w]').forEach((b) => b.addEventListener('click', () => {
+    st.widthMm = parseFloat(b.dataset.w); press('[data-w]', b); setTool('pen');
+  }));
+  document.querySelectorAll('[data-ink]').forEach((b) => b.addEventListener('click', () => {
+    st.color = INK[b.dataset.ink]; press('[data-ink]', b); setTool('pen');
+  }));
+  $('eraser').addEventListener('click', () => setTool(st.tool === 'eraser' ? 'pen' : 'eraser'));
+  $('undo').addEventListener('click', undo);
+  $('redo').addEventListener('click', redo);
+  $('paper').addEventListener('click', () => {
+    st.paper = (st.paper + 1) % PAPERS.length; $('paperName').textContent = PAPERS[st.paper].name; render(); save();
+  });
+  $('zoomOut').addEventListener('click', () => zoomAt(vw / 2, vh / 2, 1 / 1.25));
+  $('zoomIn').addEventListener('click', () => zoomAt(vw / 2, vh / 2, 1.25));
+  $('zoomFit').addEventListener('click', fitPage);
+  $('smooth').addEventListener('click', () => { st.smooth = (st.smooth + 1) % SMOOTH.length; smoothLabel(); save(); });
+  $('predict').addEventListener('click', () => {
+    predictOn = !predictOn; $('predict').setAttribute('aria-pressed', String(predictOn)); clearPred(); updateStatus();
+  });
+  $('clear').addEventListener('click', () => {
+    if (!st.strokes.length) return;
+    pushAction({ type: 'clear', strokes: st.strokes.slice() }); st.strokes = []; render(); save();
+  });
+
+  // ---------- Testplan ----------
+  const planToggle = $('planToggle'), planBody = $('planBody');
+  let planAuto = true;
+  function setPlan(open) { planBody.hidden = !open; planToggle.setAttribute('aria-expanded', String(open)); }
+  function collapsePlanOnce() { if (planAuto) { planAuto = false; setPlan(false); } }
+  planToggle.addEventListener('click', () => { planAuto = false; setPlan(planBody.hidden); });
+
+  const rating = { tempo: '', schrift: '' };
+  document.querySelectorAll('[data-tempo]').forEach((b) => b.addEventListener('click', () => { rating.tempo = b.dataset.tempo; press('[data-tempo]', b); }));
+  document.querySelectorAll('[data-schrift]').forEach((b) => b.addEventListener('click', () => { rating.schrift = b.dataset.schrift; press('[data-schrift]', b); }));
+  $('copy').addEventListener('click', () => {
+    const done = [1, 2, 3].filter((i) => $('s' + i).checked);
+    const text = [
+      'Stift-Test ' + new Date().toLocaleDateString('de-AT') + ' (Runde 3)',
+      'Tempo: ' + (rating.tempo || 'nicht bewertet'),
+      'Schriftbild: ' + (rating.schrift || 'nicht bewertet'),
+      'Glättung: ' + SMOOTH[st.smooth].name,
+      statusText(),
+      'Getestet: ' + (done.length ? done.join(', ') : 'nichts angehakt'),
+      'Browser: ' + (/Safari\//.test(navigator.userAgent) ? 'Safari' : 'App-Fenster'),
+      'Gerät: ' + screen.width + '×' + screen.height + ' @' + (window.devicePixelRatio || 1) + 'x, ' + (navigator.maxTouchPoints || 0) + ' Touchpunkte'
+    ].join('\n');
+    const note = $('copyNote');
+    const fallback = () => {
+      const ta = $('copyText'); ta.value = text; ta.hidden = false; ta.focus(); ta.select();
+      note.textContent = 'Text ist markiert: kopieren und im Chat einfügen.';
+    };
+    try {
+      navigator.clipboard.writeText(text).then(() => { note.textContent = 'Kopiert. Jetzt im Chat einfügen.'; }, fallback);
+    } catch (_) { fallback(); }
+  });
+
+  // ---------- Speichern im Browser (nur für diesen Test) ----------
+  const r2 = (v) => Math.round(v * 100) / 100;
+  let saveTimer = 0;
+  function save() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try {
+        const data = { v: 1, paper: st.paper, smooth: st.smooth, strokes: st.strokes.map((s) => ({ c: s.color, n: r2(s.nomW), p: s.pts.flatMap((q) => [r2(q.x), r2(q.y), r2(q.w)]) })) };
+        localStorage.setItem(KEY, JSON.stringify(data));
+      } catch (_) { /* kein Speicher verfügbar: dann eben ohne */ }
+    }, 500);
+  }
+  function load() {
+    try {
+      const data = JSON.parse(localStorage.getItem(KEY) || 'null');
+      if (!data || data.v !== 1) return;
+      st.paper = clamp(data.paper | 0, 0, PAPERS.length - 1);
+      if (typeof data.smooth === 'number') st.smooth = clamp(data.smooth | 0, 0, SMOOTH.length - 1);
+      for (const o of data.strokes || []) {
+        const s = { color: o.c, nomW: o.n || 0.2 * MM, w: 0, sumW: 0, pts: [], box: [Infinity, Infinity, -Infinity, -Infinity], maxW: 0 };
+        for (let i = 0; i + 2 < o.p.length; i += 3) s.pts.push({ x: o.p[i], y: o.p[i + 1], w: o.p[i + 2] });
+        if (s.pts.length) { rebox(s); st.strokes.push(s); }
+      }
+    } catch (_) { st.strokes = []; }
+  }
+
+  // ---------- Größe ----------
+  function resize() {
+    const r = stage.getBoundingClientRect();
+    const nw = Math.max(1, r.width), nh = Math.max(1, r.height);
+    const had = vw > 0, oldFit = fit;
+    const cx = had ? (vw / 2 - view.x) / view.s : 0, cy = had ? (vh / 2 - view.y) / view.s : 0;
+    dpr = clamp(window.devicePixelRatio || 1, 1, 3); vw = nw; vh = nh;
+    for (const c of [base, live, pred, snap]) { c.width = Math.round(vw * dpr); c.height = Math.round(vh * dpr); }
+    refreshRect();
+    fit = Math.max(0.2, Math.min((vw - 32) / PAGE_W, 1.6));
+    if (!had) { view.s = fit; view.x = (vw - PAGE_W * fit) / 2; view.y = 16; }
+    else { view.s = view.s / oldFit * fit; view.x = vw / 2 - cx * view.s; view.y = vh / 2 - cy * view.s; }
+    clampView(); render();
+  }
+
+  load();
+  $('paperName').textContent = PAPERS[st.paper].name;
+  smoothLabel();
+  syncUndo(); updateStatus();
+  resize();
+  if ('ResizeObserver' in window) new ResizeObserver(() => resize()).observe(stage);
+  window.addEventListener('resize', resize);
+})();
+</script>
