@@ -9,6 +9,7 @@ export type Settings = {
   device: 'iPad' | 'Firmen-PC';
   smoothing: keyof typeof SMOOTHING;
   prediction: boolean;
+  /** Ort des Schnellwechsel-Knopfs als Anteil (0 bis 1) der freien Fläche, von links und von oben. Ohne Angabe unten rechts. */
   quickSwitchPos?: [number, number];
   /** Ablaufdatum des Tokens. Der Browser kann es nicht aus der Antwort von GitHub lesen, darum fragt die Einrichtung danach. */
   tokenExpiry?: Day;

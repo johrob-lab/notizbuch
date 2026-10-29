@@ -1,0 +1,208 @@
+:root {
+  --gruen: #44634c;
+  --linie: #d9d5ca;
+  --leiste: #fbfaf6;
+  --hinweis: #fff4d6;
+  --fehler: #fde4e1;
+}
+
+html,
+body {
+  overscroll-behavior: none;
+}
+
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#root {
+  height: 100%;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+#app > h1 {
+  margin: 0;
+  padding: 16px 16px 4px;
+  font-size: 20px;
+}
+
+#app > p {
+  margin: 0;
+  padding: 0 16px;
+}
+
+.seite {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Werkzeuge links, Status rechts. Auf schmalen Bildschirmen rutscht der Status in die nächste Zeile. */
+.leiste {
+  touch-action: manipulation; /* kein Doppeltipp-Zoom auf den Knöpfen */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  background: var(--leiste);
+  border-bottom: 1px solid var(--linie);
+}
+
+.werkzeuge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.grp {
+  display: flex;
+  gap: 2px;
+}
+
+.sep {
+  width: 1px;
+  height: 28px;
+  margin: 0 6px;
+  background: var(--linie);
+}
+
+.tb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tb svg,
+.schnellwechsel svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tb[aria-pressed='true'] {
+  background: rgb(68 99 76 / 0.14);
+  border-color: var(--gruen);
+}
+
+.tb:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.tb:focus-visible,
+.schnellwechsel:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+.swatch span {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.2);
+}
+
+.dot {
+  display: block;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status {
+  margin-left: auto;
+  font-size: 14px;
+  color: #4a5160;
+  white-space: nowrap;
+}
+
+.status-wartet {
+  color: #8a5a00;
+}
+
+.status-zugang {
+  color: #a32a24;
+  font-weight: 600;
+}
+
+.hinweis {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  z-index: 1;
+  box-sizing: border-box;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 8px 16px;
+  border: 1px solid #ecd9a0;
+  border-radius: 10px;
+  background: var(--hinweis);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+  font-size: 14px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.hinweis.fehler {
+  top: 56px;
+  border-color: #f0b4ad;
+  background: var(--fehler);
+}
+
+/* Die Bühne ist die Fläche unter der Leiste. Die Schreibfläche füllt sie, der Schnellwechsel schwimmt darüber. */
+.buehne {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #e6e3da;
+}
+
+.flaeche {
+  position: absolute;
+  inset: 0;
+}
+
+.schnellwechsel {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 1px solid rgb(0 0 0 / 0.15);
+  border-radius: 50%;
+  background: var(--gruen);
+  color: #fff;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  touch-action: none;
+  cursor: grab;
+}
+
+.schnellwechsel[data-tool='eraser'] {
+  background: #7a3b36;
+}
