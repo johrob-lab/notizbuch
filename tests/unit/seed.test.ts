@@ -24,7 +24,7 @@ const TOKEN = 'github_pat_TEST';
 const API = 'https://api.github.com/repos/johrob-lab/2-gehirn-test/contents/';
 
 type Body = { message?: string; content?: string; sha?: string; branch?: string };
-type Call = { method: string; url: string; path: string; headers: Record<string, string>; body?: Body };
+type Call = { method: string; url: string; path: string; headers: Record<string, string>; body?: Body; redirect?: RequestRedirect };
 /** Darf eine Antwort vorgeben (Response) oder einen Netzfehler (Error). `undefined` heißt: normal antworten. */
 type Override = (call: Call) => Response | Error | undefined;
 
@@ -47,6 +47,7 @@ function fakeGitHub(existing: Record<string, string> = {}, override?: Override) 
       path,
       headers: { ...(init.headers as Record<string, string>) },
       body: typeof init.body === 'string' ? (JSON.parse(init.body) as Body) : undefined,
+      redirect: init.redirect,
     };
     calls.push(call);
     const forced = override?.(call);
@@ -422,6 +423,23 @@ describe('seed script: the uploader', () => {
     );
   });
 
+  test('the uploader itself refuses a repository that is not a test repository, before any request', () => {
+    const fake = fakeGitHub();
+    for (const repo of ['johrob-lab/2-gehirn', 'johrob-lab/2-gehirn-Test', '', 'johrob-lab/2-gehirn-test/x']) {
+      expect(() => createUploader({ token: TOKEN, repo, fetchFn: fake.fetchFn }), repo).toThrow(SeedError);
+    }
+    expect(fake.calls).toHaveLength(0);
+    expect(() => createUploader({ token: TOKEN, repo: DEFAULT_REPO, fetchFn: fake.fetchFn })).not.toThrow();
+  });
+
+  test('requests never follow a redirect', async () => {
+    const fake = fakeGitHub();
+    const uploader = createUploader({ token: TOKEN, repo: DEFAULT_REPO, fetchFn: fake.fetchFn });
+    await uploader.find('05 Daily Notes/a.md');
+    await uploader.put('05 Daily Notes/a.md', new TextEncoder().encode('x'), null, 'Nachricht');
+    expect(fake.calls.map((c) => c.redirect)).toEqual(['error', 'error']);
+  });
+
   test('find returns the sha, or null when there is no file', async () => {
     const fake = fakeGitHub({ '05 Daily Notes/da.md': 'x' });
     const uploader = createUploader({ token: TOKEN, repo: DEFAULT_REPO, fetchFn: fake.fetchFn });
@@ -506,8 +524,9 @@ describe('seed script: switches, token and errors', () => {
       expect(result.code, JSON.stringify(env)).toBe(1);
       expect(result.err.join('\n')).toContain('GITHUB_TOKEN');
     }
-    // Zeichen, die in keinem Token vorkommen, werden gemeldet, ohne den Token zu zeigen.
-    for (const token of [`${TOKEN} mit Leerzeichen`, `${TOKEN}ä`, `${TOKEN}\nzweite Zeile`]) {
+    // Zeichen, die in keinem Token vorkommen, werden gemeldet, ohne den Token zu zeigen. Ein Token besteht nur aus
+    // Buchstaben, Ziffern und Unterstrichen, so wie es die Meldung sagt.
+    for (const token of [`${TOKEN} mit Leerzeichen`, `${TOKEN}ä`, `${TOKEN}\nzweite Zeile`, `${TOKEN}-x`, `${TOKEN}!`, `"${TOKEN}"`, `${TOKEN}.`]) {
       const result = await run([], { GITHUB_TOKEN: token }, fake);
       expect(result.code).toBe(1);
       expect(result.err.join('\n')).toMatch(/ungültige Zeichen/);
@@ -546,6 +565,41 @@ describe('seed script: switches, token and errors', () => {
     const gone = await run([], { GITHUB_TOKEN: TOKEN }, offline);
     expect(gone.code).toBe(1);
     expect(gone.err.join('\n')).toMatch(/Verbindung/);
+  });
+
+  test('a run that stops partway names the file and says how far it got, and that a new run goes on', async () => {
+    const names = filesBelow(FIXTURES_DIR);
+    expect(names.length).toBeGreaterThanOrEqual(3);
+    const [first, second, third] = names;
+    // Die erste Datei gibt es schon, die zweite wird hochgeladen, an der dritten scheitert es.
+    let failing = true;
+    const fake = fakeGitHub({ [first]: 'alter Inhalt' }, (call) =>
+      failing && call.method === 'PUT' && call.path === third ? json(409, { message: 'Text von GitHub' }) : undefined,
+    );
+    const result = await run([], { GITHUB_TOKEN: TOKEN }, fake);
+    expect(result.code).toBe(1);
+    const err = result.err.join('\n');
+    expect(err).toContain(third);
+    expect(err).not.toContain(second);
+    expect(err).toMatch(/Status 409/);
+    expect(err).toContain('Bis dahin: 1 hochgeladen, 0 überschrieben, 1 übersprungen.');
+    expect(err).toContain('Schon Hochgeladenes bleibt, ein neuer Lauf überspringt es und macht weiter.');
+    expect(result.out.join('\n')).toContain(`hochgeladen: ${second}`);
+    expect(result.text).not.toContain('Text von GitHub');
+
+    // Der neue Lauf überspringt, was schon oben ist, und macht dort weiter, wo es scheiterte.
+    const before = fake.puts().length;
+    failing = false;
+    const again = await run([], { GITHUB_TOKEN: TOKEN }, fake);
+    expect(again.code, again.text).toBe(0);
+    expect(fake.puts().slice(before).map((c) => c.path)).toEqual(names.slice(2));
+
+    // Auch ein Fehler beim Nachsehen nennt die Datei, und am Anfang steht alles auf 0
+    const denied = fakeGitHub({}, (call) => (call.method === 'GET' ? json(500, {}) : undefined));
+    const early = await run([], { GITHUB_TOKEN: TOKEN }, denied);
+    expect(early.code).toBe(1);
+    expect(early.err.join('\n')).toContain(first);
+    expect(early.err.join('\n')).toContain('Bis dahin: 0 hochgeladen, 0 überschrieben, 0 übersprungen.');
   });
 
   test('the token never appears in output or errors', async () => {

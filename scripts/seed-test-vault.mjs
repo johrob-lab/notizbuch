@@ -210,8 +210,8 @@ export function redact(text, secrets) {
 }
 
 /**
- * Der Token aus der Umgebung. Ohne Leerzeichen und Zeilenumbrüche drumherum (vom Einfügen), nur sichtbare ASCII-Zeichen.
- * Die Meldungen nennen den Token nie: Ein Header-Fehler von fetch könnte ihn sonst zeigen.
+ * Der Token aus der Umgebung. Ohne Leerzeichen und Zeilenumbrüche drumherum (vom Einfügen), nur Buchstaben, Ziffern und
+ * Unterstriche. Die Meldungen nennen den Token nie: Ein Header-Fehler von fetch könnte ihn sonst zeigen.
  * @param {Record<string, string | undefined>} env
  */
 function readToken(env) {
@@ -221,7 +221,7 @@ function readToken(env) {
       'GITHUB_TOKEN fehlt. Bitte einen Token mit "Contents: Read and write" nur für das Test-Repo setzen. Mit --dry-run geht es auch ohne.',
     );
   }
-  if (!/^[\x21-\x7e]+$/.test(token)) {
+  if (!/^[A-Za-z0-9_]+$/.test(token)) {
     throw new SeedError('GITHUB_TOKEN enthält ungültige Zeichen. Ein Token besteht nur aus Buchstaben, Ziffern und Unterstrichen.');
   }
   return token;
@@ -249,10 +249,13 @@ function httpError(status) {
 
 /**
  * Der kleine Uploader für die Contents-API. Er nimmt den Token nur für den Authorization-Header und gibt ihn nirgends
- * weiter. Fehler von `fetch` werden zu einer Meldung ohne den ursprünglichen Text.
+ * weiter. Fehler von `fetch` werden zu einer Meldung ohne den ursprünglichen Text. Ein Repo, das kein Test-Repo ist, lehnt
+ * er selbst ab (wie `assertTestRepo`), und keine Anfrage folgt einer Weiterleitung: Sie könnte woandershin führen als in
+ * das Test-Repo.
  * @param {{ token: string, repo: string, fetchFn: typeof fetch }} o
  */
 export function createUploader({ token, repo, fetchFn }) {
+  assertTestRepo(repo);
   const headers = {
     Authorization: `Bearer ${token}`,
     Accept: 'application/vnd.github+json',
@@ -277,6 +280,7 @@ export function createUploader({ token, repo, fetchFn }) {
         method,
         headers: body === undefined ? headers : { ...headers, 'Content-Type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
+        redirect: 'error',
         signal: controller.signal,
       });
       // Die Antwort ganz lesen, damit die Verbindung frei wird.
@@ -331,27 +335,42 @@ export function createUploader({ token, repo, fetchFn }) {
 }
 
 /**
- * Geht die Planung der Reihe nach durch. Ein Fehler beendet den Lauf sofort: Das Skript lässt sich wiederholen, denn was schon
- * oben ist, wird übersprungen.
+ * Was ein Lauf bisher geschafft hat, als Text.
+ * @param {{ created: number, updated: number, skipped: number }} counts
+ */
+function summary(counts) {
+  return `${counts.created} hochgeladen, ${counts.updated} überschrieben, ${counts.skipped} übersprungen`;
+}
+
+/**
+ * Geht die Planung der Reihe nach durch. Ein Fehler beendet den Lauf sofort. Die Meldung nennt dann die Datei, sagt, wie weit
+ * der Lauf kam, und dass er sich wiederholen lässt: Was schon oben ist, wird beim nächsten Mal übersprungen.
  * @param {{ plan: { path: string, file: string }[], uploader: ReturnType<typeof createUploader>, force: boolean, log: (line: string) => void }} o
  */
 export async function seed({ plan, uploader, force, log }) {
   const counts = { created: 0, updated: 0, skipped: 0 };
   for (const { path, file } of plan) {
-    const existing = await uploader.find(path);
-    const action = decideAction(existing, force);
-    if (action === 'skip') {
-      counts.skipped += 1;
-      log(`übersprungen (gibt es schon): ${path}`);
-      continue;
-    }
-    await uploader.put(path, readFileSync(file), existing, commitMessage(path));
-    if (action === 'update') {
-      counts.updated += 1;
-      log(`überschrieben: ${path}`);
-    } else {
-      counts.created += 1;
-      log(`hochgeladen: ${path}`);
+    try {
+      const existing = await uploader.find(path);
+      const action = decideAction(existing, force);
+      if (action === 'skip') {
+        counts.skipped += 1;
+        log(`übersprungen (gibt es schon): ${path}`);
+        continue;
+      }
+      await uploader.put(path, readFileSync(file), existing, commitMessage(path));
+      if (action === 'update') {
+        counts.updated += 1;
+        log(`überschrieben: ${path}`);
+      } else {
+        counts.created += 1;
+        log(`hochgeladen: ${path}`);
+      }
+    } catch (error) {
+      const reason = error instanceof SeedError ? error.message : `Unerwarteter Fehler: ${error instanceof Error ? error.message : String(error)}`;
+      throw new SeedError(
+        [`Abbruch bei ${path}: ${reason}`, `Bis dahin: ${summary(counts)}.`, 'Schon Hochgeladenes bleibt, ein neuer Lauf überspringt es und macht weiter.'].join('\n'),
+      );
     }
   }
   return counts;
@@ -409,7 +428,7 @@ export async function main(options = {}) {
     const uploader = createUploader({ token: readToken(env), repo, fetchFn });
     if (args.force) say('Mit --force: Vorhandene Dateien werden überschrieben.');
     const counts = await seed({ plan, uploader, force: args.force, log: say });
-    say(`Fertig: ${counts.created} hochgeladen, ${counts.updated} überschrieben, ${counts.skipped} übersprungen.`);
+    say(`Fertig: ${summary(counts)}.`);
     return 0;
   } catch (error) {
     complain(error instanceof SeedError ? error.message : `Unerwarteter Fehler: ${error instanceof Error ? error.message : String(error)}`);
