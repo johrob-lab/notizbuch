@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
+import { parsePage } from '../../src/ink/svg';
 import { toggleTask } from '../../src/lib/dailyNote';
 import type { SyncEngine } from '../../src/sync/engine';
 import { fixture, lineOf } from './helpers';
-import { A, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
+import { A, S, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
 
 // Die Seite schreibt immer einen Text, der aus dem entstand, den sie zuletzt gelesen oder hochgeladen hat. Die
 // lokale Kopie kann inzwischen weiter sein (fremde Änderung, Konflikt). Dann muss der Upload das merken und
@@ -275,6 +276,91 @@ test('a restarted app: the page writes without having read, the upload is merged
   expect(text).toContain('- [x] Liste Planobjekte');
   expect(text).toContain('- [ ] Reorga abstimmen');
   expect(text).toContain('todo:AAMkTEST2 gemeldet');
+  expect(h.conflicts).toEqual([]);
+});
+
+// ---------- Die wartende Änderung wurde unter der Seite neu aufgesetzt ----------
+
+const idsOf = (text: string) =>
+  parsePage(text)
+    .strokes.map((stroke) => stroke.id)
+    .sort();
+
+/**
+ * Die Seite hat `before` gelesen (sha s1) und `ours` geschrieben, ein anderes Gerät hat `theirs` hochgeladen (sha s2). Während
+ * das Zusammengeführte hochgeht, nimmt die Seite ihre Änderung zurück (sie hält wieder `before`). Die wartende Änderung kommt
+ * danach auf das Hochgeladene, und die Seite erfährt es: Dann läuft `onTold`, was die Seite beim Hinweis tut. Danach wird
+ * hochgeladen, was noch wartet.
+ */
+async function takeBackWhileTheMergedTextGoesUp(path: string, kind: 'md' | 'svg', v: { before: string; ours: string; theirs: string }, onTold: () => Promise<void>) {
+  fake.files[path] = { text: v.before, sha: 's1' };
+  await e.read(path);
+  fake.files[path] = { text: v.theirs, sha: 's2' };
+  await e.write(path, v.ours, kind);
+  const hold = fake.hold('put');
+  const flushing = e.flush();
+  await hold.reached;
+  await e.write(path, v.before, kind);
+  const record = e.onRemoteChange;
+  let told: Promise<void> | undefined;
+  e.onRemoteChange = (paths) => {
+    record?.(paths);
+    told ??= onTold();
+  };
+  hold.release();
+  await flushing;
+  await until(() => told !== undefined, 'Hinweis an die Seite');
+  await told;
+  await e.flush();
+}
+
+/** Strich s2 hier, s9 von einem anderen Gerät, s2 wieder zurückgenommen: Gewartet wird danach auf s1 und s9. */
+const STROKES = { before: svgPage('s1'), ours: svgPage('s1', 's2'), theirs: svgPage('s1', 's9') };
+
+test('a stroke the page draws on its old text before it reads the rebased one is added to it, the stroke from elsewhere stays', async () => {
+  // ohne neu zu lesen: s9 kennt die Seite noch nicht
+  await takeBackWhileTheMergedTextGoesUp(S, 'svg', STROKES, () => e.write(S, svgPage('s1', 's3'), 'svg'));
+  expect(idsOf(fake.files[S].text)).toEqual(['s1', 's3', 's9']);
+  expect(await h.store.get('files', S)).toMatchObject({ text: fake.files[S].text, sha: fake.files[S].sha });
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(h.conflicts).toEqual([]);
+});
+
+test('a page that read the rebased text first writes on top of it as usual', async () => {
+  await takeBackWhileTheMergedTextGoesUp(S, 'svg', STROKES, async () => {
+    const shown = (await e.read(S)) as string; // die Seite liest nach dem Hinweis neu
+    expect(idsOf(shown)).toEqual(['s1', 's9']);
+    await e.write(S, svgPage('s1', 's9', 's3'), 'svg');
+  });
+  expect(idsOf(fake.files[S].text)).toEqual(['s1', 's3', 's9']);
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(h.conflicts).toEqual([]);
+});
+
+test('a page that does not read the rebased text and writes on its old one after that went up still keeps the stroke from elsewhere', async () => {
+  await takeBackWhileTheMergedTextGoesUp(S, 'svg', STROKES, async () => undefined); // die Seite liest nicht neu
+  expect(idsOf(fake.files[S].text)).toEqual(['s1', 's9']); // das neu Aufgesetzte ist oben, nichts wartet mehr
+  await e.write(S, svgPage('s1', 's3'), 'svg'); // weiter auf ihrem alten Text, s9 kennt sie nicht
+  await e.flush();
+  expect(idsOf(fake.files[S].text)).toEqual(['s1', 's3', 's9']);
+  expect(h.conflicts).toEqual([]);
+});
+
+test('a change on its old text that clashes with the rebased note is refused: nothing is stored, and the note from elsewhere stays', async () => {
+  const ticked = toggleTask(base, lineOf(base, 'Liste Planobjekte'));
+  // Die Seite ändert auf ihrem alten Text genau die Zeile, die die Routine geändert hat, und zwar anders.
+  const clash = base.replace('todo:AAMkTEST2%%', 'todo:AAMkTEST2 anders%%');
+  let refused: unknown = null;
+  await takeBackWhileTheMergedTextGoesUp(A, 'md', { before: base, ours: ticked, theirs: theirsGemeldet }, async () => {
+    refused = await e.write(A, clash, 'md').then(
+      () => null,
+      (error: unknown) => error,
+    );
+  });
+  expect(refused).toBeInstanceOf(Error);
+  expect(fake.files[A].text).toBe(theirsGemeldet); // ohne Haken, mit der Änderung der Routine, nichts davon überschrieben
+  expect(await e.read(A)).toBe(theirsGemeldet); // die Seite liest den neuen Stand und kann ihre Änderung darauf wiederholen
+  expect(await h.store.getAll('outbox')).toEqual([]);
   expect(h.conflicts).toEqual([]);
 });
 

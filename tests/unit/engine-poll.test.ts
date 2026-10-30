@@ -429,6 +429,19 @@ test('a hidden page sends what is waiting, a visible page polls', async () => {
   await until(() => fake.count('head') === 2);
 });
 
+test('a page that becomes visible again also sends what is still waiting, when sending on leaving did not get through', async () => {
+  await startIdle();
+  fake.offline = true;
+  await e.write(A, 'x', 'md');
+  setVisibility('hidden');
+  await until(() => e.status.value.state === 'wartet'); // das Hochladen beim Verlassen scheitert
+  fake.offline = false;
+  setVisibility('visible'); // ohne auf die Wartezeit des Schreibens oder den Takt zu warten
+  await until(() => fake.files[A]?.text === 'x');
+  await until(() => e.status.value.state === 'gesichert');
+  expect(fake.count('head')).toBe(2); // und es wird auch abgefragt
+});
+
 test('coming online sends what is waiting', async () => {
   fake.offline = true;
   await e.write(A, 'x', 'md');

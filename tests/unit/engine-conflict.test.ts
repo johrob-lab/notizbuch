@@ -468,3 +468,77 @@ test('svg: a page that was created on both devices has no common version: the st
   expect(idsOf(fake.files[M].text)).toEqual(['o', 'r']);
   expect(parsePage(fake.files[M].text).meta.projekt).toBe('');
 });
+
+// ---------- Weitergeschrieben, während zusammengeführt hochgeladen wird ----------
+
+/**
+ * Die Seite hält `before` (sha s1). Hier kommt `ours` dazu, auf GitHub hat ein anderes Gerät inzwischen `theirs` hochgeladen
+ * (sha s2). Der Abgleich führt zusammen und lädt hoch, und während die Antwort darauf aussteht, schreibt die Seite `newer`.
+ */
+async function writeWhileTheMergedTextGoesUp(path: string, kind: 'md' | 'svg', v: { before: string; ours: string; theirs: string; newer: string }) {
+  fake.files[path] = { text: v.before, sha: 's1' };
+  await e.read(path);
+  fake.files[path] = { text: v.theirs, sha: 's2' };
+  await e.write(path, v.ours, kind);
+  const hold = fake.hold('put'); // der erste Upload trifft auf s2 (409), angehalten wird der zusammengeführte
+  const flushing = e.flush();
+  await hold.reached; // das Zusammengeführte ist bei GitHub, die Antwort steht noch aus
+  await e.write(path, v.newer, kind);
+  hold.release();
+  await flushing;
+  await e.flush();
+}
+
+test('svg: a stroke undone while the merged page goes up stays undone, and the local copy is what GitHub has', async () => {
+  const before = svgPage('s1');
+  // Hier kommt Strich s2 dazu, ein anderes Gerät hat s9 hochgeladen. Rückgängig nimmt s2 wieder weg, solange das
+  // Zusammengeführte (s1, s2, s9) unterwegs ist.
+  await writeWhileTheMergedTextGoesUp(S, 'svg', { before, ours: svgPage('s1', 's2'), theirs: svgPage('s1', 's9'), newer: before });
+  expect(idsOf(fake.files[S].text)).toEqual(['s1', 's9']); // s2 kommt nicht zurück, s9 bleibt
+  expect(await h.store.get('files', S)).toMatchObject({ text: fake.files[S].text, sha: fake.files[S].sha, base: fake.files[S].text });
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(h.remoteChanges).toContainEqual([S]); // die Seite liest neu und bekommt s9
+  expect(h.conflicts).toEqual([]);
+  expect(h.errors).toEqual([]);
+});
+
+test('md: a tick taken back while the merged note goes up stays taken back, and the change from elsewhere stays', async () => {
+  const ticked = toggleTask(base, lineOf(base, 'Liste Planobjekte'));
+  const unticked = toggleTask(ticked, lineOf(ticked, 'Liste Planobjekte'));
+  expect(unticked).toBe(base);
+  const theirs = base.replace('todo:AAMkTEST2%%', 'todo:AAMkTEST2 gemeldet%%');
+  await writeWhileTheMergedTextGoesUp(A, 'md', { before: base, ours: ticked, theirs, newer: unticked });
+  const text = fake.files[A].text;
+  expect(text).toBe(theirs); // ohne Haken, mit der Änderung der Routine
+  expect(await h.store.get('files', A)).toMatchObject({ text, sha: fake.files[A].sha, base: text });
+  expect(await e.read(A)).toBe(text);
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(h.conflicts).toEqual([]);
+});
+
+test('md: a further change made while the merged note goes up is put on top of it and goes up next', async () => {
+  const ticked = toggleTask(base, lineOf(base, 'Liste Planobjekte'));
+  const both = toggleTask(ticked, lineOf(ticked, 'Reorga abstimmen'));
+  const theirs = base.replace('todo:AAMkTEST2%%', 'todo:AAMkTEST2 gemeldet%%');
+  await writeWhileTheMergedTextGoesUp(A, 'md', { before: base, ours: ticked, theirs, newer: both });
+  const text = fake.files[A].text;
+  expect(text).toContain('- [x] Liste Planobjekte');
+  expect(text).toContain('- [ ] Reorga abstimmen');
+  expect(text).toContain('todo:AAMkTEST2 gemeldet');
+  // Die neuere Änderung beruhte schon auf dem Hochgeladenen: kein zweiter Umweg über einen Konflikt
+  expect(fake.log.filter((line) => line.startsWith(`put ${A} `))).toEqual([`put ${A} s1`, `put ${A} s2`, `put ${A} s101`]);
+  expect(await h.store.getAll('outbox')).toEqual([]);
+  expect(h.conflicts).toEqual([]);
+});
+
+test('svg: a newer text that cannot be put on top of the merged upload is not settled on the old base: it goes up and becomes a copy', async () => {
+  // Die Fassung auf GitHub war nicht lesbar (s1). Hier wurde eine Seite darüber geschrieben, dort eine andere hochgeladen (s2).
+  // Während die beiden vereint hochgehen, steht hier wieder genau der alte Text: Er lässt sich nicht auf das Hochgeladene
+  // setzen, darf aber auch nicht als „nichts hochzuladen“ gelten, denn GitHub hat längst etwas anderes.
+  await writeWhileTheMergedTextGoesUp(S, 'svg', { before: 'kaputt', ours: svgPage('o'), theirs: svgPage('r'), newer: 'kaputt' });
+  expect(idsOf(fake.files[S].text)).toEqual(['o', 'r']); // das Vereinte bleibt auf GitHub
+  expect(fake.files[SVG_COPY].text).toBe('kaputt'); // und die neuere Fassung steht in der Kopie, nichts ist still verworfen
+  expect(h.conflicts).toEqual([{ path: S, copyPath: SVG_COPY }]);
+  expect(await h.store.get('files', S)).toMatchObject({ text: fake.files[S].text, sha: fake.files[S].sha });
+  expect(await h.store.getAll('outbox')).toEqual([]);
+});

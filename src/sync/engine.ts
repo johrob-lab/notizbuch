@@ -160,7 +160,16 @@ export class SyncEngine {
     // Nicht abwarten: Safari fragt unter Umständen nach, die App läuft auch ohne Antwort.
     Promise.resolve(navigator.storage?.persist?.()).catch(() => undefined);
 
-    const onVisibility = () => void (document.visibilityState === 'hidden' ? this.flush() : this.pollRemote());
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        void this.flush();
+        return;
+      }
+      // Wieder sichtbar: nachsehen, was es Neues gibt, und hochladen, was noch wartet. Das Hochladen beim Verlassen kann
+      // abgebrochen worden sein, als die App in den Hintergrund ging, sonst wartete es bis zum Netz oder zum nächsten Takt.
+      void this.pollRemote();
+      if (this.#pending > 0) void this.flush();
+    };
     const onOnline = () => void this.flush();
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('online', onOnline);
@@ -291,9 +300,13 @@ export class SyncEngine {
     return null;
   }
 
-  /** Speichert sofort lokal und stellt die Änderung in die Warteschlange. Hochgeladen wird nach 2 s (Text) bzw. 10 s (Handschrift). */
+  /**
+   * Speichert sofort lokal und stellt die Änderung in die Warteschlange. Hochgeladen wird nach 2 s (Text) bzw. 10 s (Handschrift).
+   * Wirft, wenn sich der Text nicht mit einer wartenden Änderung vereinen lässt, die die Seite noch nicht gelesen hat (siehe unten).
+   */
   async write(path: string, text: string, kind: 'md' | 'svg'): Promise<void> {
     if (this.#frozen) throw new ReadOnlyError();
+    const held = this.#pageText.get(path); // der Text, auf dem die Seite diese Änderung gemacht hat
     await this.#transact(['files', 'outbox'], async (tx) => {
       const [record, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
       // Die erste Grundlage bleibt: Bei mehreren Änderungen vor dem Hochladen zählt der Stand, den GitHub zuletzt hatte.
@@ -303,9 +316,14 @@ export class SyncEngine {
       const from: PageVersion = queued
         ? { sha: queued.baseSha, baseText: queued.baseText }
         : (this.#page.get(path) ?? { sha: record?.sha ?? null, baseText: record?.base ?? null });
+      // Wartet ein anderer Text als der, den die Seite hält, wurde die wartende Änderung unter ihr auf das Hochgeladene gesetzt
+      // (siehe `#rebase`), und die Seite hat das noch nicht gelesen. Ihr Text beruht dann auf ihrem alten und kommt in den
+      // wartenden dazu, statt ihn zu ersetzen: Sonst ginge verloren, was das andere Gerät beigetragen hat.
+      const next = queued && !queued.deleted && held !== undefined && held !== queued.text ? mergeByKind(kind, held, text, queued.text) : text;
+      if (next === null) throw new Error('Die Änderung ließ sich nicht mit dem neuen Stand vereinen. Die Seite liest ihn gleich neu.');
       await Promise.all([
-        tx.objectStore('outbox').put({ path, text, kind, baseSha: from.sha, baseText: from.baseText, queuedAt: queued?.queuedAt ?? Date.now() }),
-        tx.objectStore('files').put({ path, text, sha: from.sha, base: from.baseText, syncedAt: record?.syncedAt ?? 0 }),
+        tx.objectStore('outbox').put({ path, text: next, kind, baseSha: from.sha, baseText: from.baseText, queuedAt: queued?.queuedAt ?? Date.now() }),
+        tx.objectStore('files').put({ path, text: next, sha: from.sha, base: from.baseText, syncedAt: record?.syncedAt ?? 0 }),
       ]);
     });
     this.#pageText.set(path, text);
@@ -545,8 +563,8 @@ export class SyncEngine {
   /**
    * Auf GitHub liegt jetzt `uploaded` (oder war schon). Ist seit dem Start nichts geschrieben worden, wird das die
    * lokale Kopie und die Änderung erledigt. Wurde währenddessen weitergeschrieben, bleibt die neuere Fassung in der
-   * Warteschlange: Beruht sie auf dem Hochgeladenen, wird dies ihre neue Grundlage. Wurde dagegen zusammengeführt,
-   * beruht sie auf dem alten Stand und wird beim nächsten Abgleich selbst zusammengeführt.
+   * Warteschlange: Beruht sie auf dem Hochgeladenen, wird dies ihre neue Grundlage. Wurde dagegen zusammengeführt, beruht
+   * sie auf dem Geschickten und wird auf das Hochgeladene gesetzt (siehe `#rebase`).
    */
   async #settle(sent: OutboxEntry, uploaded: Remote): Promise<void> {
     const { path } = sent;
@@ -561,6 +579,13 @@ export class SyncEngine {
       } else if (uploaded.text === sent.text) {
         writes.push(tx.objectStore('outbox').put({ ...current, baseSha: uploaded.sha, baseText: uploaded.text }));
         if (record) writes.push(tx.objectStore('files').put({ ...record, sha: uploaded.sha, base: uploaded.text, syncedAt: Date.now() }));
+      } else if (!current.deleted) {
+        // Ein Löschen bleibt, wie es ist: Es trifft auf den neuen Stand und entfällt, der Stand von GitHub bleibt.
+        const rebased = this.#rebase(sent, current, uploaded);
+        const syncedAt = rebased.baseSha === uploaded.sha ? Date.now() : (record?.syncedAt ?? 0);
+        writes.push(tx.objectStore('outbox').put(rebased));
+        writes.push(tx.objectStore('files').put({ path, text: rebased.text, sha: rebased.baseSha, base: rebased.baseText, syncedAt }));
+        text = rebased.text;
       }
       await Promise.all(writes);
       return text;
@@ -568,15 +593,31 @@ export class SyncEngine {
     const held = this.#pageText.get(path);
     // Hält die Seite genau den Text, den sie geschickt hat, und liegt er jetzt auf GitHub, ist das ihre neue Grundlage.
     // Wurde zusammengeführt, beruht ihr Text weiter auf der alten: Schreibt sie darauf weiter, wird wieder zusammengeführt.
-    // Hält sie etwas anderes (ein anderes Fenster hat die Änderung geschrieben), rückt nichts vor: Ihr nächstes Schreiben
-    // trifft auf den 409 und wird zusammengeführt, statt die Änderung des anderen Fensters zu überschreiben.
+    // Hält sie etwas anderes (ein anderes Fenster hat die Änderung geschrieben, oder die neuere Fassung kam eben auf das
+    // Hochgeladene), rückt nichts vor: Ihr nächstes Schreiben nimmt `write` in den wartenden Text auf, oder es trifft auf den
+    // 409 und wird zusammengeführt, statt die Änderung des anderen Fensters oder Geräts zu überschreiben. Ihre Fassung rückt
+    // vor, sobald sie neu liest.
     if (held === sent.text) {
       this.#page.set(path, uploaded.text === sent.text ? { sha: uploaded.sha, baseText: uploaded.text } : { sha: sent.baseSha, baseText: sent.baseText });
     }
-    // Zeigt die Seite etwas anderes, als die lokale Kopie jetzt ist (zusammengeführt, oder von einem anderen Fenster
-    // hochgeladen), soll sie neu lesen. Hat sie die Datei nie geholt, gibt es nichts zu lesen. Schrieb sie schon weiter,
-    // ist die lokale Kopie ihr Text, und es bleibt still.
+    // Zeigt die Seite etwas anderes, als die lokale Kopie jetzt ist (zusammengeführt, auf das Hochgeladene gesetzt, oder von
+    // einem anderen Fenster hochgeladen), soll sie neu lesen. Hat sie die Datei nie geholt, gibt es nichts zu lesen. Schrieb
+    // sie schon weiter, ist die lokale Kopie ihr Text, und es bleibt still.
     if (held !== undefined && localText !== null && held !== localText) this.#remoteChanged([path]);
+  }
+
+  /**
+   * Die neuere Fassung `current` entstand aus dem Geschickten, hochgeladen wurde aber das Zusammengeführte `uploaded`. Sie
+   * kommt auf das Hochgeladene: zusammengeführt mit dem Geschickten als Ausgangspunkt. So bleibt zurückgenommen, was hier
+   * nach dem Schicken zurückgenommen wurde (ein Strich, ein Haken), und was das andere Gerät beigetragen hat, bleibt auch.
+   * Lässt sich das nicht vereinen, bleibt der Text, wie er ist, und der Ausgangspunkt ist das Geschickte mit der alten sha:
+   * Der Upload trifft dann auf den neuen Stand (409) und wird wie jeder andere zusammengeführt oder zur Konfliktkopie. Nie gilt
+   * er als „nichts hochzuladen“, weil er zufällig wieder dem alten Stand gleicht.
+   */
+  #rebase(sent: OutboxEntry, current: OutboxEntry, uploaded: Remote): OutboxEntry {
+    const rebased = mergeByKind(current.kind, sent.text, current.text, uploaded.text);
+    if (rebased === null) return { ...current, baseText: sent.text };
+    return { ...current, text: rebased, baseSha: uploaded.sha, baseText: uploaded.text };
   }
 
   // ---------- Gleichzeitige Änderungen ----------
