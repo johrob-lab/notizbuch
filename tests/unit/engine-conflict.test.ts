@@ -4,7 +4,7 @@ import { parsePage } from '../../src/ink/svg';
 import { ConflictError, OfflineError } from '../../src/sync/github';
 import type { SyncEngine } from '../../src/sync/engine';
 import { fixture, lineOf } from './helpers';
-import { A, B, S, httpError, svgPage, type FakeClient, type Harness, setupHarness } from './syncHelpers';
+import { A, B, M, S, httpError, meetingPage, svgPage, type FakeClient, type Harness, setupHarness } from './syncHelpers';
 
 const base = fixture('05 Daily Notes/2026-10-29.md');
 const COPY1 = '05 Daily Notes/2026-10-29 (Konflikt).md';
@@ -395,4 +395,76 @@ test('svg: ink written while a merge is under way comes along on the next upload
   await e.flush();
   expect(parsePage(fake.files[S].text).strokes.map((s) => s.id).sort()).toEqual(['a', 'o', 'p', 'r']);
   expect(await h.store.getAll('outbox')).toEqual([]);
+});
+
+// ---------- Handschrift (SVG): Kopfdaten und Radieren ----------
+
+const idsOf = (text: string) =>
+  parsePage(text)
+    .strokes.map((stroke) => stroke.id)
+    .sort();
+
+test('svg: strokes written here and a project set elsewhere are both kept', async () => {
+  fake.files[M] = { text: meetingPage({}, 'a'), sha: 's1' };
+  await e.read(M);
+  // An einem anderen Gerät wurde das Projekt gewählt und ist schon hochgeladen. Hier warten Striche auf den Upload.
+  fake.files[M] = { text: meetingPage({ projekt: 'Beispielprojekt A' }, 'a'), sha: 's2' };
+  await e.write(M, meetingPage({}, 'a', 'o'), 'svg');
+  await e.flush();
+  const merged = fake.files[M].text;
+  expect(parsePage(merged).meta.projekt).toBe('Beispielprojekt A');
+  expect(idsOf(merged)).toEqual(['a', 'o']);
+  expect(await e.read(M)).toBe(merged);
+  expect(h.conflicts).toEqual([]); // keine Konfliktkopie, nichts geht verloren
+  expect(await h.store.getAll('outbox')).toEqual([]);
+});
+
+test('svg: a project chosen here and strokes drawn elsewhere are both kept', async () => {
+  fake.files[M] = { text: meetingPage({}, 'a'), sha: 's1' };
+  await e.read(M);
+  fake.files[M] = { text: meetingPage({}, 'a', 'r'), sha: 's2' };
+  await e.write(M, meetingPage({ projekt: 'Beispielprojekt B' }, 'a'), 'svg');
+  await e.flush();
+  const merged = fake.files[M].text;
+  expect(parsePage(merged).meta.projekt).toBe('Beispielprojekt B');
+  expect(idsOf(merged)).toEqual(['a', 'r']);
+  expect(h.conflicts).toEqual([]);
+});
+
+test('svg: the version before the first of several writes is the base of the merge', async () => {
+  fake.files[M] = { text: meetingPage({}, 'a'), sha: 's1' };
+  await e.read(M);
+  fake.files[M] = { text: meetingPage({ projekt: 'Beispielprojekt A' }, 'a'), sha: 's2' };
+  await e.write(M, meetingPage({}, 'a', 'o'), 'svg');
+  await e.write(M, meetingPage({}, 'a', 'o', 'p'), 'svg'); // weiter geschrieben, bevor etwas hochgeht
+  await e.flush();
+  expect(parsePage(fake.files[M].text).meta.projekt).toBe('Beispielprojekt A');
+  expect(idsOf(fake.files[M].text)).toEqual(['a', 'o', 'p']);
+});
+
+test('svg: a stroke erased here stays erased when another device has added one', async () => {
+  fake.files[M] = { text: meetingPage({}, 'a', 'b'), sha: 's1' };
+  await e.read(M);
+  fake.files[M] = { text: meetingPage({}, 'a', 'b', 'r'), sha: 's2' };
+  await e.write(M, meetingPage({}, 'a'), 'svg'); // b wurde hier radiert
+  await e.flush();
+  expect(idsOf(fake.files[M].text)).toEqual(['a', 'r']);
+  expect(await e.read(M)).toBe(fake.files[M].text);
+});
+
+test('svg: a stroke erased elsewhere stays erased when strokes were drawn here', async () => {
+  fake.files[M] = { text: meetingPage({}, 'a', 'b'), sha: 's1' };
+  await e.read(M);
+  fake.files[M] = { text: meetingPage({}, 'a'), sha: 's2' }; // b wurde woanders radiert
+  await e.write(M, meetingPage({}, 'a', 'b', 'o'), 'svg');
+  await e.flush();
+  expect(idsOf(fake.files[M].text)).toEqual(['a', 'o']);
+});
+
+test('svg: a page that was created on both devices has no common version: the strokes of both and the header of this device', async () => {
+  fake.files[M] = { text: meetingPage({ projekt: 'Beispielprojekt A' }, 'r'), sha: 's2' };
+  await e.write(M, meetingPage({}, 'o'), 'svg'); // hier nie gelesen: keine gemeinsame Fassung
+  await e.flush();
+  expect(idsOf(fake.files[M].text)).toEqual(['o', 'r']);
+  expect(parsePage(fake.files[M].text).meta.projekt).toBe('');
 });

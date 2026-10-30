@@ -1,7 +1,7 @@
 import { signal, type Signal } from '@preact/signals';
 import { copyPathFor, mergeByKind } from './conflicts';
 import { AuthError, ConflictError, OfflineError, RateLimitError, statusOf, type GitHubClient } from './github';
-import { PathNotAllowedError } from './paths';
+import { normalizePath, PathNotAllowedError } from './paths';
 import type { SyncState, SyncStatus } from './status';
 import { syncedRecord, type FileRecord, type OutboxEntry, type Store } from './store';
 
@@ -274,6 +274,24 @@ export class SyncEngine {
     if (alreadyQueued) return;
     this.#schedule('md');
     await this.#refreshPending();
+  }
+
+  /**
+   * Die Dateien unter `prefix` (ein Ordner mit `/` am Ende), wie dieses Gerät sie kennt. GitHub wird nicht gefragt, es geht
+   * also auch ohne Netz. `present` sind die lokalen Kopien, auch Seiten, die noch nicht hochgeladen sind und in keiner
+   * Dateiliste von GitHub stehen. `deleted` sind die Dateien, deren Löschen noch auf den Abgleich wartet: GitHub listet sie
+   * bis dahin weiter, sie zählen nicht mehr mit. Verglichen wird in der Schreibweise des Vaults (Umlaute als ein Zeichen),
+   * zurück kommen die Pfade, wie die Engine sie führt.
+   */
+  async localPaths(prefix: string): Promise<{ present: string[]; deleted: string[] }> {
+    const folder = normalizePath(prefix);
+    // Von den Kopien genügen die Pfade: Ihre Texte (viele Seiten mit Handschrift) brauchen hier nicht in den Speicher.
+    const [copies, queued] = await Promise.all([this.#store.run((db) => db.getAllKeys('files')), this.#store.getAll('outbox')]);
+    const deleted = new Set(queued.filter((entry) => entry.deleted).map((entry) => entry.path));
+    const present = new Set([...copies, ...queued.map((entry) => entry.path)]);
+    for (const path of deleted) present.delete(path); // ein wartendes Löschen schlägt jede Kopie
+    const under = (path: string) => normalizePath(path).startsWith(folder);
+    return { present: [...present].filter(under), deleted: [...deleted].filter(under) };
   }
 
   // ---------- Status ----------

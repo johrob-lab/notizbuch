@@ -3,7 +3,7 @@ import { parsePage } from '../../src/ink/svg';
 import { copyPathFor, mergeByKind } from '../../src/sync/conflicts';
 import { fixture, lineOf } from './helpers';
 import { toggleTask } from '../../src/lib/dailyNote';
-import { svgPage } from './syncHelpers';
+import { meetingPage, svgPage } from './syncHelpers';
 
 // Alles hier ist erfunden.
 
@@ -64,4 +64,24 @@ test('svg: an unreadable page cannot be merged, but equal texts never get parsed
   expect(mergeByKind('svg', null, svgPage('a'), 'kein SVG')).toBeNull();
   expect(mergeByKind('svg', null, 'kein SVG', svgPage('a'))).toBeNull();
   expect(mergeByKind('svg', null, 'kein SVG', 'kein SVG')).toBe('kein SVG');
+});
+
+test('svg: the base tells who changed what, so a header change and new strokes come together', () => {
+  const start = meetingPage({}, 'a');
+  const merged = mergeByKind('svg', start, meetingPage({}, 'a', 'o'), meetingPage({ projekt: 'Beispielprojekt A' }, 'a'));
+  expect(merged).not.toBeNull();
+  const page = parsePage(merged as string);
+  expect(page.meta.projekt).toBe('Beispielprojekt A');
+  expect(page.strokes.map((s) => s.id).sort()).toEqual(['a', 'o']);
+});
+
+test('svg: with the base a stroke erased on one side does not come back', () => {
+  const start = meetingPage({}, 'a', 'b');
+  const merged = mergeByKind('svg', start, meetingPage({}, 'a'), meetingPage({}, 'a', 'b', 'r'));
+  expect(parsePage(merged as string).strokes.map((s) => s.id).sort()).toEqual(['a', 'r']);
+});
+
+test('svg: a base that is not a page does not stop the merge', () => {
+  const merged = mergeByKind('svg', 'kein SVG', svgPage('a', 'o'), svgPage('a', 'r'));
+  expect(parsePage(merged as string).strokes.map((s) => s.id).sort()).toEqual(['a', 'o', 'r']);
 });

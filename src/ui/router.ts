@@ -11,6 +11,12 @@ export type View = 'tag' | 'woche' | 'monat' | 'besprechung' | 'einstellungen';
  */
 export type Route = { view: View; key: string; n?: number };
 
+/**
+ * Wohin ‹ und › der Leiste oben von einer Seite aus führen, wenn die Seite das selbst weiß: Die Seiten einer Besprechung
+ * hängen davon ab, welche es gibt. `null` heißt, in diese Richtung gibt es keinen Schritt.
+ */
+export type Steps = { prev: Route | null; next: Route | null };
+
 const WEEK = /^\d{4}-W\d{2}$/;
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const COUNT = /^[1-9]\d*$/;
@@ -71,7 +77,8 @@ function stepMonth(key: string, delta: number): string {
 }
 
 // Einen Tag, eine Woche oder einen Monat weiter. Am Rand des Kalenders (Jahr 0000 und 9999) und bei Besprechung und
-// Einstellungen bleibt die Seite, wo sie ist, statt einen Schlüssel zu erfinden, den es nicht gibt.
+// Einstellungen bleibt die Seite, wo sie ist, statt einen Schlüssel zu erfinden, den es nicht gibt. Die Seiten einer
+// Besprechung blättert die Seite selbst (siehe `Steps`): Welche Seiten es gibt, steht nicht in der Adresse.
 function step(r: Route, delta: 1 | -1): Route {
   if (r.view === 'besprechung' || r.view === 'einstellungen') return r;
   let key: string;

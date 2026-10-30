@@ -1,12 +1,17 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { todayVienna } from '../lib/dates';
 import type { SyncEngine } from '../sync/engine';
-import { nextRoute, prevRoute, routeHash, viewRoute, type Route } from './router';
+import { nextRoute, prevRoute, routeHash, viewRoute, type Route, type Steps } from './router';
 import { StatusPill } from './StatusPill';
 
 type Props = {
   route: Route;
   engine: Pick<SyncEngine, 'status' | 'onConflict' | 'onError'>;
+  /**
+   * Wohin ‹ und › führen, wenn die Seite das selbst bestimmt (die Seiten einer Besprechung). Ohne diese Angabe blättern sie
+   * einen Tag, eine Woche oder einen Monat. Solange eine Besprechung sie noch nicht liefert, sind beide Pfeile grau.
+   */
+  steps?: Steps;
 };
 
 type Note = { id: number; text: string; alert: boolean };
@@ -37,7 +42,7 @@ const GEAR =
 
 const fileName = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 
-/** Ein Schritt zurück oder vor. Wo es keinen gibt (Einstellungen, Besprechung, Ende des Kalenders), ist der Knopf ausgegraut. */
+/** Ein Schritt zurück oder vor. Wo es keinen gibt (Einstellungen, erste und letzte Seite einer Besprechung, Ende des Kalenders), ist der Knopf ausgegraut. */
 function Step({ label, symbol, from, to }: { label: string; symbol: string; from: Route; to: Route }) {
   if (routeHash(to) === routeHash(from)) {
     return (
@@ -57,7 +62,7 @@ function Step({ label, symbol, from, to }: { label: string; symbol: string; from
  * Die Leiste oben: Blättern, die Ansichten, der Stand des Abgleichs und die Einstellungen. Hier laufen auch die
  * Meldungen der Engine auf (Konfliktkopie, Fehler beim Abgleich) und bleiben, bis man sie schließt.
  */
-export function TopBar({ route, engine }: Props) {
+export function TopBar({ route, engine, steps }: Props) {
   const [notes, setNotes] = useState<Note[]>([]);
   const lastId = useRef(0);
   const announce = useCallback((text: string, alert: boolean) => {
@@ -80,14 +85,17 @@ export function TopBar({ route, engine }: Props) {
   }, [engine, announce]);
 
   const [prevLabel, nextLabel] = STEP_LABELS[route.view];
+  // Eine Besprechung bestimmt ihre Schritte selbst, `null` ist ein Schritt, den es nicht gibt (der Knopf bleibt grau).
+  const back = steps ? (steps.prev ?? route) : prevRoute(route);
+  const forward = steps ? (steps.next ?? route) : nextRoute(route);
   // Wer die App über Nacht offen lässt, soll mit „Heute“ im neuen Tag landen: Der Tag wird beim Tippen berechnet.
   const today = () => routeHash({ view: 'tag', key: todayVienna() });
 
   return (
     <header class="topbar">
       <div class="schritte" role="group" aria-label="Blättern">
-        <Step label={prevLabel} symbol="‹" from={route} to={prevRoute(route)} />
-        <Step label={nextLabel} symbol="›" from={route} to={nextRoute(route)} />
+        <Step label={prevLabel} symbol="‹" from={route} to={back} />
+        <Step label={nextLabel} symbol="›" from={route} to={forward} />
         <a
           class="pill"
           href={today()}

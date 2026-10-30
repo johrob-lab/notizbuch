@@ -262,27 +262,75 @@ function pathMarkup(el: Element): string {
   return `<path${attrs(Array.from(el.attributes, (a): Attr => [a.name, a.value]))}/>`;
 }
 
+/** Die `id`s aller Striche einer Seite. */
+function strokeIds(doc: Doc): Set<string> {
+  return new Set(doc.groups.flatMap((g) => g.items.map((item) => item.stroke.id)));
+}
+
+/** Die Ausgangsfassung. `null`, wenn sie sich nicht lesen lässt: Dann gibt es keine Grundlage, und es gilt die Vereinigung. */
+function readBase(svg: string): Doc | null {
+  try {
+    return readDoc(svg);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Die Kopfdaten aus drei Fassungen, Schlüssel für Schlüssel: Hat `ours` die Angabe gegenüber `base` geändert, gilt sie,
+ * sonst die von `theirs`. Haben beide dieselbe Angabe verschieden geändert, gewinnt `ours`. Eine Angabe, die `base` nicht
+ * hat, zählt dort als leer: Eine Seite aus der Zeit vor den Kopfdaten bekommt sie beim Lesen leer ergänzt, und das ist
+ * keine Änderung. Die Reihenfolge ist die von `ours`, Angaben, die nur `theirs` hat, folgen.
+ */
+function mergeMeta(ours: Record<string, string>, theirs: Record<string, string>, base: Record<string, string>): Record<string, string> {
+  const merged: Record<string, string> = {};
+  for (const key of new Set([...Object.keys(ours), ...Object.keys(theirs)])) {
+    const mine: string | undefined = ours[key];
+    const changedHere = (mine ?? '') !== (base[key] ?? '');
+    const value = changedHere ? mine : (theirs[key] ?? mine);
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged;
+}
+
 /**
  * Führt zwei Fassungen derselben Seite zusammen: alle Striche beider, ein Strich mit gleicher `id` nur einmal, und
- * zwar der von `oursSvg`. Kopfdaten und Hintergrund kommen von `oursSvg`. Ein Strich bleibt in der Feldgruppe
- * (`data-feld` und `data-datum`), in der er in seiner Datei stand. Zuerst stehen die Gruppen von `oursSvg` mit ihren
- * Strichen, dahinter die Striche von `theirsSvg`, die `oursSvg` nicht hat, jeweils am Ende ihrer Gruppe in ihrer
- * Reihenfolge. Gruppen, die nur `theirsSvg` hat, kommen hinter die von `oursSvg`, die Gruppen „frei“ zuletzt. Das
- * Ergebnis ist eine gültige Seite, und noch einmal mit derselben Fassung zusammengeführt bleibt es gleich.
- * Wirft wie `parsePage`, wenn eine der Dateien keine lesbare Seite ist.
+ * zwar der von `oursSvg`. Der Hintergrund kommt von `oursSvg`, die Kopfdaten auch, solange es keine `baseSvg` gibt (siehe
+ * unten). Ein Strich bleibt in der Feldgruppe (`data-feld` und `data-datum`), in der er in seiner Datei stand. Zuerst
+ * stehen die Gruppen von `oursSvg` mit ihren Strichen, dahinter die Striche von `theirsSvg`, die `oursSvg` nicht hat,
+ * jeweils am Ende ihrer Gruppe in ihrer Reihenfolge. Gruppen, die nur `theirsSvg` hat, kommen hinter die von `oursSvg`,
+ * die Gruppen „frei“ zuletzt. Das Ergebnis ist eine gültige Seite, und noch einmal mit derselben Fassung zusammengeführt
+ * bleibt es gleich.
+ *
+ * Mit `baseSvg`, der Fassung, aus der beide entstanden sind, wird dreiseitig zusammengeführt, damit keine Änderung der
+ * einen Seite von der anderen zurückgenommen wird, die davon nichts weiß:
+ * - Kopfdaten Schlüssel für Schlüssel: Was `oursSvg` gegenüber `baseSvg` geändert hat, gilt, alles andere kommt von
+ *   `theirsSvg`. Haben beide denselben Schlüssel verschieden geändert, gewinnt `oursSvg`. Angaben, die nur eine Seite hat,
+ *   bleiben. Seitentyp, Schlüssel, Hintergrund und Gruppen kommen weiter von `oursSvg`.
+ * - Striche sind unveränderlich, ein Strich ist da oder nicht. Steht einer in `baseSvg` und fehlt in einer der beiden
+ *   Fassungen, wurde er dort radiert und bleibt auch im Ergebnis weg. Jeder Strich, der in `baseSvg` nicht stand, bleibt.
+ * Ohne `baseSvg`, oder wenn sie sich nicht lesen lässt, werden nur die Striche vereinigt, und die Kopfdaten kommen ganz von
+ * `oursSvg`: Wer sie geändert hat, ließe sich nur raten.
+ * Wirft wie `parsePage`, wenn eine der beiden Dateien keine lesbare Seite ist.
  */
-export function mergePages(oursSvg: string, theirsSvg: string): string {
+export function mergePages(oursSvg: string, theirsSvg: string, baseSvg?: string): string {
   const ours = readDoc(oursSvg);
   const theirs = readDoc(theirsSvg);
+  const base = baseSvg === undefined ? null : readBase(baseSvg);
+  const seen = strokeIds(ours);
+  const erased = new Set<string>();
+  if (base) {
+    const theirIds = strokeIds(theirs);
+    for (const id of strokeIds(base)) if (!seen.has(id) || !theirIds.has(id)) erased.add(id);
+  }
   const groups: OutGroup[] = ours.groups.map((g) => ({
     feld: g.feld,
     datum: g.datum,
-    paths: g.items.map((item) => pathMarkup(item.el)),
+    paths: g.items.filter((item) => !erased.has(item.stroke.id)).map((item) => pathMarkup(item.el)),
   }));
-  const seen = new Set(ours.groups.flatMap((g) => g.items.map((item) => item.stroke.id)));
   for (const g of theirs.groups) {
     for (const item of g.items) {
-      if (seen.has(item.stroke.id)) continue;
+      if (seen.has(item.stroke.id) || erased.has(item.stroke.id)) continue;
       seen.add(item.stroke.id);
       let target = groups.find((x) => x.feld === g.feld && x.datum === g.datum);
       if (!target) {
@@ -294,5 +342,6 @@ export function mergePages(oursSvg: string, theirsSvg: string): string {
   }
   const ordered = [...groups.filter((g) => g.feld !== FREI), ...groups.filter((g) => g.feld === FREI)];
   const background = ours.background ? Array.from(ours.background.childNodes, (child) => markup(child)).join('') : '';
-  return writeSvg(ours.head, background, ordered);
+  const head = base ? { ...ours.head, meta: mergeMeta(ours.head.meta, theirs.head.meta, base.head.meta) } : ours.head;
+  return writeSvg(head, background, ordered);
 }

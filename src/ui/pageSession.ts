@@ -99,6 +99,13 @@ export class PageSession {
   #again = false;
   /** Meldet sich ab, wenn die Sitzung nicht mehr auf einen Anlass für einen neuen Versuch wartet. */
   #stopWaiting: (() => void) | undefined;
+  /**
+   * Der Text, den die Sitzung zuletzt von der Engine gelesen oder dorthin geschrieben hat, und von dem aus die Fläche
+   * weiterentwickelt wurde. Beim Zusammenführen ist er der gemeinsame Ausgangspunkt: Daran sieht `mergePages`, was hier
+   * und was anderswo geändert wurde. Ein Speichern, das scheiterte, rückt ihn nicht weiter. `null`, solange es ihn nicht
+   * gibt und solange die Seite gesperrt ist.
+   */
+  #base: string | null = null;
 
   constructor(o: Options) {
     this.#o = o;
@@ -184,6 +191,21 @@ export class PageSession {
     return serializePage(page, fields, background);
   }
 
+  /**
+   * Der Ausgangspunkt für `mergePages`, gelesen wie die Seite, die gezeigt wird: Was `completePage` ergänzt (Kopfdaten, die
+   * eine ältere Datei nicht hat), ist keine Änderung dieser Sitzung und darf nicht gegen die Änderung eines anderen Geräts
+   * gewinnen. Ohne Ausgangspunkt, oder wenn er sich nicht lesen lässt, gibt es keinen: Dann werden nur die Striche vereint.
+   */
+  #baseText(base: string | null): string | undefined {
+    if (base === null) return undefined;
+    try {
+      const page = readPage(base);
+      return this.#serialize(this.#o.completePage ? this.#o.completePage(page) : page);
+    } catch {
+      return undefined;
+    }
+  }
+
   #save(page: Page): void {
     this.#next = this.#serialize(page);
     void this.#startWriting();
@@ -207,6 +229,8 @@ export class PageSession {
         this.#next = null;
         try {
           await this.#o.engine.write(this.#o.path, text, 'svg');
+          // Ist die Seite inzwischen gesperrt, steht in der Engine keine Fassung, auf der dieser Text beruht (siehe `#lock`).
+          if (this.#phase === 'bereit') this.#base = text;
           if (!this.#closed) this.#o.onSaveFailed(false);
         } catch {
           if (!this.#closed) this.#o.onSaveFailed(true);
@@ -229,7 +253,9 @@ export class PageSession {
 
   // ---------- Lesen ----------
   // Was `engine.read` liefert, gilt für die Engine als der Stand der Seite: Es muss auf der Fläche landen. Wurde
-  // währenddessen geschrieben, bleiben beide Fassungen erhalten (alle Striche beider, wie beim Abgleich).
+  // währenddessen geschrieben, bleiben beide Fassungen erhalten: Zusammengeführt wird vom Text aus, den die Sitzung vor dem
+  // Lesen zuletzt kannte (`#base`). Was hier geändert wurde, bleibt, was nur die Engine geändert hat, kommt dazu, und ein
+  // Strich, der auf einer Seite radiert wurde, bleibt weg.
 
   async #readAndShow(): Promise<void> {
     if (this.#stopped()) return;
@@ -238,6 +264,10 @@ export class PageSession {
     await this.#idle(); // alles, was schon geschrieben wurde, steht dann in der Engine
     // Steht jetzt noch etwas aus, kennt die Engine die neuesten Striche der Fläche nicht: Sie bleiben zusätzlich zur Seite.
     const unsaved = this.#next !== null;
+    // Der Ausgangspunkt gilt von jetzt an, nicht erst nach dem Lesen: Was während des Lesens geschrieben wird, steht in
+    // `#base` schon, in dem gelesenen Text aber vielleicht noch nicht. Es wäre sonst ein Strich, den die Engine nicht hat,
+    // und der Strich zählte als dort radiert.
+    const base = this.#base;
     let text: string | null;
     try {
       text = await this.#o.engine.read(this.#o.path);
@@ -246,6 +276,7 @@ export class PageSession {
       return;
     }
     if (this.#stopped()) return;
+    this.#base = text;
     let page: Page;
     let united = false;
     try {
@@ -253,7 +284,7 @@ export class PageSession {
       if (this.#version !== seen || unsaved) {
         if (text === null) page = this.#o.surface.getPage();
         else {
-          page = readPage(mergePages(this.#serialize(this.#o.surface.getPage()), text));
+          page = readPage(mergePages(this.#serialize(this.#o.surface.getPage()), text, this.#baseText(base)));
           united = true;
         }
       }
@@ -280,6 +311,9 @@ export class PageSession {
   #lock(phase: 'unlesbar' | 'nichtGeladen'): void {
     if (this.#stopped()) return;
     this.#phase = phase;
+    // Eine Seite, die sich nicht lesen lässt, hat keinen Ausgangspunkt: Was die Fläche zeigt, beruht nicht auf dem, was jetzt
+    // in der Engine steht. Gelingt das Lesen wieder, kommt zusammen, was beide haben, und nichts gilt als radiert.
+    this.#base = null;
     this.#o.surface.setReadOnly(true);
     if (phase === 'nichtGeladen') this.#waitForCue();
     else this.#stopWaitingForCue();

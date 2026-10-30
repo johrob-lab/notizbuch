@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
 import { SMOOTHING } from '../ink/types';
 import { monthKey } from '../lib/dates';
 import { loadSettings, saveSettings, type Settings } from '../lib/settings';
@@ -9,7 +9,7 @@ import { BesprechungPage, type ListDir } from './BesprechungPage';
 import { MonatPage } from './MonatPage';
 import { MonthTabs } from './MonthTabs';
 import type { PageProps } from './PageView';
-import { parseRoute, routeHash, shownDay, type Route } from './router';
+import { parseRoute, routeHash, shownDay, type Route, type Steps } from './router';
 import { TagPage } from './TagPage';
 import { TopBar } from './TopBar';
 import { WochePage } from './WochePage';
@@ -40,7 +40,7 @@ function Platzhalter({ text }: { text: string }) {
   );
 }
 
-function Seite({ route, listDir, ...page }: { route: Route; listDir: ListDir } & PageProps) {
+function Seite({ route, listDir, onSteps, ...page }: { route: Route; listDir: ListDir; onSteps(steps: Steps | null): void } & PageProps) {
   switch (route.view) {
     case 'tag':
       return <TagPage day={route.key} {...page} />;
@@ -49,7 +49,7 @@ function Seite({ route, listDir, ...page }: { route: Route; listDir: ListDir } &
     case 'monat':
       return <MonatPage month={route.key} {...page} />;
     case 'besprechung':
-      return <BesprechungPage base={route.key} n={route.n ?? 1} listDir={listDir} {...page} />;
+      return <BesprechungPage base={route.key} n={route.n ?? 1} listDir={listDir} onSteps={onSteps} {...page} />;
     case 'einstellungen':
       return <Platzhalter text="Einstellungen folgen." />;
   }
@@ -61,6 +61,11 @@ export function App() {
   // Nur wenn sich die Adresse ändert: Ohne gültige Adresse gilt „heute“, und das soll sich nicht mitten im Schreiben
   // ändern, weil nach Mitternacht etwas anderes neu gezeichnet wird.
   const route = useMemo(() => parseRoute(hash), [hash]);
+  // Wohin ‹ und › von einer Besprechungsseite aus führen, mit der Adresse der Seite, für die das gilt: Beim Wechsel zur
+  // nächsten Seite gilt der Stand der alten nicht mehr, auch nicht für den Augenblick, bis die neue ihren meldet.
+  const [pageSteps, setPageSteps] = useState<{ hash: string; steps: Steps } | null>(null);
+  const here = routeHash(route);
+  const reportSteps = useCallback((steps: Steps | null) => setPageSteps(steps && { hash: here, steps }), [here]);
 
   useEffect(() => {
     let stopped = false;
@@ -111,13 +116,14 @@ export function App() {
     <main id="app">
       {boot.phase === 'bereit' ? (
         <>
-          <TopBar route={route} engine={boot.engine} />
+          <TopBar route={route} engine={boot.engine} steps={pageSteps?.hash === here ? pageSteps.steps : undefined} />
           <div class="inhalt">
             {/* Jede Seite ist ein eigenes Bauteil: Beim Wechsel wird die alte gesichert und geschlossen, die neue liest ihre Datei. */}
             <Seite
-              key={routeHash(route)}
+              key={here}
               route={route}
               listDir={boot.listDir}
+              onSteps={reportSteps}
               engine={boot.engine}
               readOnly={boot.settings.device === 'Firmen-PC'}
               sigma={SMOOTHING[boot.settings.smoothing] ?? SMOOTHING.mittel}

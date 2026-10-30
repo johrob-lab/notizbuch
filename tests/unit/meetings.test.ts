@@ -7,7 +7,10 @@ import {
   listMeetings,
   meetingMeta,
   meetingPageText,
+  meetingPages,
+  neighbourPages,
   pageAfterDelete,
+  pageLabel,
   parseMeetingBase,
   projectNames,
 } from '../../src/lib/meetings';
@@ -276,6 +279,47 @@ test('after deleting the only page there is no page to open', () => {
 test('when the pages are not known the previous number is the guess', () => {
   expect(pageAfterDelete(null, 3)).toBe(2);
   expect(pageAfterDelete(null, 1)).toBeNull();
+});
+
+test('the pages of a meeting are the listed ones and the ones this device has, without those waiting for their delete', () => {
+  expect(meetingPages({ listed: [1, 2], local: [2, 3], deleted: [], n: 2 })).toEqual([1, 2, 3]);
+  expect(meetingPages({ listed: [1, 2, 3], local: [1, 3], deleted: [2], n: 1 })).toEqual([1, 3]); // GitHub listet 2 noch
+  expect(meetingPages({ listed: [3, 1], local: [], deleted: [], n: 1 })).toEqual([1, 3]); // aufsteigend
+});
+
+test('the open page counts as a page even when neither GitHub nor this device lists it yet', () => {
+  expect(meetingPages({ listed: [1], local: [], deleted: [], n: 2 })).toEqual([1, 2]);
+  expect(meetingPages({ listed: null, local: [], deleted: [], n: 4 })).toEqual([4]);
+  expect(meetingPages({ listed: [1, 2], local: [], deleted: [2], n: 2 })).toEqual([1, 2]); // wer die Adresse einer gelöschten Seite öffnet, sieht eine neue
+});
+
+test('without the list from GitHub the pages are the ones this device has', () => {
+  expect(meetingPages({ listed: null, local: [3, 1], deleted: [], n: 3 })).toEqual([1, 3]);
+  expect(meetingPages({ listed: null, local: [1, 2, 3], deleted: [2], n: 3 })).toEqual([1, 3]);
+});
+
+test('the neighbours of a page are the known pages before and after it', () => {
+  expect(neighbourPages([1, 2, 3], 2, true)).toEqual({ prev: 1, next: 3 });
+  expect(neighbourPages([1, 3], 3, true)).toEqual({ prev: 1, next: null }); // 2 gibt es nicht
+  expect(neighbourPages([1, 3], 1, true)).toEqual({ prev: null, next: 3 });
+  expect(neighbourPages([2, 3], 2, true)).toEqual({ prev: null, next: 3 }); // vor 2 ist nichts
+  expect(neighbourPages([1], 1, true)).toEqual({ prev: null, next: null });
+  expect(neighbourPages([1, 2, 3, 4, 5], 3, true)).toEqual({ prev: 2, next: 4 }); // die nächste, nicht die erste und letzte
+  expect(neighbourPages([1, 2, 3, 4, 5], 3, false)).toEqual({ prev: 2, next: 4 });
+});
+
+test('without the list from GitHub the page before is the number before when this device has no earlier page, and the page after only if it is known', () => {
+  expect(neighbourPages([2], 2, false)).toEqual({ prev: 1, next: null });
+  expect(neighbourPages([1], 1, false)).toEqual({ prev: null, next: null });
+  expect(neighbourPages([2, 4], 4, false)).toEqual({ prev: 2, next: null }); // die nächste Seite, die dieses Gerät hat
+  expect(neighbourPages([3, 4], 3, false)).toEqual({ prev: 2, next: 4 });
+});
+
+test('the label is the position among the pages, or only the number of the page when the list is missing', () => {
+  expect(pageLabel([1, 2, 3], 2, true)).toBe('Seite 2 von 3');
+  expect(pageLabel([1, 3], 3, true)).toBe('Seite 2 von 2'); // die Seite dazwischen gibt es nicht mehr
+  expect(pageLabel([1], 1, true)).toBe('Seite 1 von 1');
+  expect(pageLabel([1, 2], 2, false)).toBe('Seite 2'); // die Zahl der Seiten wäre geraten
 });
 
 test('a new page takes the first number that is free, so no page is overwritten', async () => {

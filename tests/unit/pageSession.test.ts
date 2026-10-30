@@ -1060,3 +1060,168 @@ test('a read that is running when the page is retired does not unlock it', async
   expect(surface.readOnly).toBe(true);
   expect(surface.sets).toHaveLength(1); // nur das erste Anzeigen
 });
+
+// ---------- Zusammenführen mit dem Stand, den die Sitzung zuletzt kannte ----------
+// Die Sitzung merkt sich den Text, den sie zuletzt gelesen oder gespeichert hat. Davon aus sieht sie, wer was geändert hat:
+// Kopfdaten und Striche, die hier nicht angefasst wurden, kommen von der Engine, und was hier radiert wurde, bleibt es.
+
+test('a header change made elsewhere is not undone by a stroke made while the page is being read', async () => {
+  const engine = fakeEngine(serializePage(withThema('Eins', stroke('a', 1000)), FIELDS, BACKGROUND));
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+
+  // Ein anderes Gerät hat das Thema geändert und hochgeladen, die Engine hat es übernommen. Die Seite liest es gerade.
+  engine.text = serializePage(withThema('Zwei', stroke('a', 1000)), FIELDS, BACKGROUND);
+  const slow = engine.holdRead();
+  const reading = session.reload();
+  await slow.reached;
+  surface.page = withThema('Eins', stroke('a', 1000), stroke('mine', 5000, 400)); // der Stift schreibt noch mit dem alten Kopf
+  session.changed(surface.page);
+  slow.release();
+  await reading;
+
+  expect(surface.page.meta).toEqual({ thema: 'Zwei' });
+  expect(ids(surface.page)).toEqual(['a', 'mine']);
+  const saved = engine.writes.at(-1)!;
+  expect(parsePage(saved).meta).toEqual({ thema: 'Zwei' });
+  expect(ids(saved).sort()).toEqual(['a', 'mine']);
+});
+
+test('a header change made here while the page is read stays, and the strokes made elsewhere come along', async () => {
+  const engine = fakeEngine(serializePage(withThema('Eins', stroke('a', 1000)), FIELDS, BACKGROUND));
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+
+  engine.text = serializePage(withThema('Eins', stroke('a', 1000), stroke('b', 500, 200)), FIELDS, BACKGROUND);
+  const slow = engine.holdRead();
+  const reading = session.reload();
+  await slow.reached;
+  surface.page = withThema('Zwei', stroke('a', 1000));
+  session.changed(surface.page);
+  slow.release();
+  await reading;
+
+  expect(surface.page.meta).toEqual({ thema: 'Zwei' });
+  expect(ids(surface.page)).toEqual(['b', 'a']);
+  expect(parsePage(engine.writes.at(-1)!).meta).toEqual({ thema: 'Zwei' });
+});
+
+test('a stroke erased while the page is being read stays erased when another device has added one', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000), stroke('b', 2000, 300)));
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+
+  engine.text = svgOf(stroke('a', 1000), stroke('b', 2000, 300), stroke('c', 500, 500));
+  const slow = engine.holdRead();
+  const reading = session.reload();
+  await slow.reached;
+  surface.page = pageOf(stroke('a', 1000)); // b wird radiert
+  session.changed(surface.page);
+  slow.release();
+  await reading;
+
+  expect(ids(surface.page)).toEqual(['c', 'a']);
+  expect(ids(engine.text ?? '').sort()).toEqual(['a', 'c']);
+});
+
+test('what the session saved is the base of the next merge: a stroke saved here and erased elsewhere stays erased', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+  surface.page = pageOf(stroke('a', 1000), stroke('b', 2000, 300));
+  session.changed(surface.page);
+  await settle();
+  expect(ids(engine.text ?? '')).toEqual(['a', 'b']);
+
+  // Ein anderes Gerät hat b radiert, die Engine hat das übernommen. Hier entsteht währenddessen ein neuer Strich.
+  engine.text = svgOf(stroke('a', 1000));
+  const slow = engine.holdRead();
+  const reading = session.reload();
+  await slow.reached;
+  surface.page = pageOf(stroke('a', 1000), stroke('b', 2000, 300), stroke('c', 3000, 500));
+  session.changed(surface.page);
+  slow.release();
+  await reading;
+
+  expect(ids(surface.page)).toEqual(['a', 'c']);
+  expect(ids(engine.text ?? '')).toEqual(['a', 'c']);
+});
+
+test('a header that the session completed is no change against the page it read: a header change elsewhere is not undone', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000))); // eine Seite aus der Zeit vor den Kopfdaten
+  const surface = fakeSurface();
+  const { session } = open(engine, surface, { completePage: completeThema });
+  await session.reload();
+  expect(surface.page.meta).toEqual({ thema: 'Muster' }); // beim Lesen ergänzt, nicht geschrieben
+
+  // Ein anderes Gerät hat die Seite ebenfalls ergänzt und das Thema geändert.
+  engine.text = serializePage(withThema('Zwei', stroke('a', 1000)), FIELDS, BACKGROUND);
+  const slow = engine.holdRead();
+  const reading = session.reload();
+  await slow.reached;
+  surface.page = withThema('Muster', stroke('a', 1000), stroke('mine', 5000, 400));
+  session.changed(surface.page);
+  slow.release();
+  await reading;
+
+  expect(surface.page.meta).toEqual({ thema: 'Zwei' });
+  expect(ids(surface.page)).toEqual(['a', 'mine']);
+});
+
+test('a page that could not be read before has no base: strokes of both come together and the header stays ours', async () => {
+  const engine = fakeEngine(null); // die Datei gibt es noch nicht
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+
+  // Ein anderes Gerät legt die Seite an. Hier wird währenddessen schon geschrieben.
+  engine.text = serializePage(withThema('Deren', stroke('r', 500, 200)), FIELDS, BACKGROUND);
+  const slow = engine.holdRead();
+  const reading = session.reload();
+  await slow.reached;
+  surface.page = withThema('Meins', stroke('mine', 5000, 400));
+  session.changed(surface.page);
+  slow.release();
+  await reading;
+
+  expect(ids(surface.page)).toEqual(['r', 'mine']);
+  expect(surface.page.meta).toEqual({ thema: 'Meins' });
+});
+
+// Eine Seite, die sich zwischendurch nicht lesen ließ, hat keinen Ausgangspunkt mehr: Was inzwischen mit ihr geschah, weiß
+// die Sitzung nicht. Ein Strich, den die wieder lesbare Seite nicht hat, gilt deshalb nicht als radiert (ein verlorener
+// Strich wöge schwerer als einer, der wiederkommt).
+for (const cause of [
+  { name: 'unreadable', phase: 'unlesbar', lock: (e: ReturnType<typeof fakeEngine>) => void (e.text = BROKEN), unlock: (e: ReturnType<typeof fakeEngine>) => e.notify([PATH]) },
+  { name: 'not loaded', phase: 'nichtGeladen', lock: (e: ReturnType<typeof fakeEngine>) => void (e.readError = new Error('GitHub antwortete mit Status 500.')), unlock: (e: ReturnType<typeof fakeEngine>) => void (e.readError = undefined) },
+]) {
+  test(`a page that was ${cause.name} in between has no base any more: a stroke the repaired page lacks is not taken for erased`, async () => {
+    const engine = fakeEngine(svgOf(stroke('a', 1000), stroke('x', 2000, 300)));
+    const cues = fakeCues();
+    const surface = fakeSurface();
+    const { session, phases } = open(engine, surface, { cues });
+    await session.reload();
+    engine.failWrites = 2;
+    surface.page = pageOf(stroke('a', 1000), stroke('x', 2000, 300), stroke('mine', 5000, 400));
+    session.changed(surface.page);
+    await settle(); // das Speichern scheitert, die Striche warten
+
+    cause.lock(engine);
+    engine.notify([PATH]);
+    await settle();
+    expect(phases.at(-1)).toBe(cause.phase);
+
+    // Die Seite ist wieder da. Was sie enthält, ging nicht aus dem Text von vorhin hervor: 'x' fehlt, 'b' ist neu.
+    engine.text = svgOf(stroke('a', 1000), stroke('b', 3000, 200));
+    cause.unlock(engine);
+    cues.fire();
+    await settle();
+    expect(phases.at(-1)).toBe('bereit');
+    expect(ids(surface.page).sort()).toEqual(['a', 'b', 'mine', 'x']);
+    expect(ids(engine.text ?? '').sort()).toEqual(['a', 'b', 'mine', 'x']);
+  });
+}

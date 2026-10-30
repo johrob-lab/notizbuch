@@ -5,9 +5,11 @@ import { mergeText } from '../lib/merge';
 // Die reinen Teile der Konfliktbehandlung: Sie kennen weder Speicher noch GitHub und lassen sich einzeln prüfen.
 
 /**
- * Führt unsere Fassung mit der fremden zusammen. `baseText` ist der gemeinsame Ausgangspunkt (bei Text nötig, um zu
- * sehen, wer was geändert hat). Das Ergebnis ist der zusammengeführte Text, oder `null`, wenn sich beide Fassungen nicht
- * sicher vereinen lassen: Text, der an derselben Stelle verschieden geändert wurde, oder eine Seite, die nicht lesbar ist.
+ * Führt unsere Fassung mit der fremden zusammen. `baseText` ist der gemeinsame Ausgangspunkt, nötig, um zu sehen, wer was
+ * geändert hat: bei Text, welche Zeilen, bei einer Seite, welche Kopfdaten und welche Striche (ein radierter Strich kommt
+ * nicht zurück). Ohne ihn werden bei einer Seite nur die Striche vereint. Das Ergebnis ist der zusammengeführte Text,
+ * oder `null`, wenn sich beide Fassungen nicht sicher vereinen lassen: Text, der an derselben Stelle verschieden
+ * geändert wurde, oder eine Seite, die nicht lesbar ist.
  */
 export function mergeByKind(kind: 'md' | 'svg', baseText: string | null, ours: string, theirs: string): string | null {
   if (ours === theirs) return theirs;
@@ -16,7 +18,7 @@ export function mergeByKind(kind: 'md' | 'svg', baseText: string | null, ours: s
     return result.ok ? result.text : null;
   }
   try {
-    return mergePages(ours, theirs);
+    return mergePages(ours, theirs, baseText ?? undefined);
   } catch {
     return null; // eine der beiden Seiten ist nicht lesbar
   }

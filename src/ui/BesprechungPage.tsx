@@ -2,17 +2,30 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Page } from '../ink/types';
 import { isValidDay } from '../lib/dates';
 import { besprechungPagePath } from '../lib/filenames';
-import { firstFreePage, isValidTime, listMeetings, meetingMeta, meetingPageText, pageAfterDelete, projectNames } from '../lib/meetings';
+import {
+  firstFreePage,
+  isValidTime,
+  listMeetings,
+  meetingMeta,
+  meetingPages,
+  meetingPageText,
+  neighbourPages,
+  pageAfterDelete,
+  pageLabel,
+  projectNames,
+} from '../lib/meetings';
 import { besprechungLayout } from '../pages/layouts';
 import type { DirEntry } from '../sync/github';
+import { normalizePath } from '../sync/paths';
 import { confirmDialog } from './Dialog';
 import { PageView, type Kopf, type KopfTools, type PageProps } from './PageView';
-import { routeHash } from './router';
+import { routeHash, type Steps } from './router';
 
 // Eine Seite einer Besprechung: Über der Schreibfläche steht ein Formular für Thema, Datum, Zeit, Ort und Projekt, daneben
 // die Leiste für die Seiten (welche Seite von wie vielen, neue Seite, Seite löschen). Das Formular ist HTML und nicht auf
 // die Fläche gezeichnet: Es lässt sich mit dem Stift (Scribble) und mit der Tastatur ausfüllen. Die Fläche zeigt den
 // Kopf im Hintergrund der Seite, geschrieben wird er mit der Seite in dieselbe Datei. Der Dateiname ändert sich dabei nie.
+// Geblättert wird mit ‹ und › der Leiste oben: Diese Seite weiß, welche Seiten es gibt, und meldet der App, wohin sie führen.
 
 /** Die Dateiliste eines Ordners im Vault. */
 export type ListDir = (folder: string) => Promise<DirEntry[]>;
@@ -22,6 +35,8 @@ type Props = PageProps & {
   base: string;
   n: number;
   listDir: ListDir;
+  /** Meldet, wohin ‹ und › der Leiste oben von dieser Seite aus führen. `null`, sobald die Seite geht. */
+  onSteps(steps: Steps | null): void;
 };
 
 const PROJECTS = '02 Projekte';
@@ -29,17 +44,20 @@ const QUESTION = 'Seite wirklich löschen?';
 const ADD_FAILED = 'Die neue Seite konnte nicht angelegt werden. Bitte noch einmal versuchen.';
 const DELETE_FAILED = 'Die Seite konnte nicht gelöscht werden. Bitte noch einmal versuchen.';
 
-/**
- * Seiten, die in dieser Sitzung gelöscht wurden. Bei GitHub steht eine Seite noch in der Dateiliste, solange das Löschen
- * dort nicht angekommen ist (zum Beispiel ohne Netz): Gezählt wird sie dann nicht mit.
- */
-const deleted = new Set<string>();
+/** Die Nummern der Seiten dieser Besprechung unter den Dateinamen. */
+const pagesOf = (names: string[], base: string): number[] => listMeetings(names, base.slice(0, 10)).find((meeting) => meeting.base === base)?.pages ?? [];
+
+/** Die Namen der Dateien, die direkt in diesem Ordner liegen (nicht in einem Unterordner darin). */
+function namesIn(folder: string, paths: string[]): string[] {
+  const prefix = `${normalizePath(folder)}/`;
+  return paths.map(normalizePath).filter((path) => path.startsWith(prefix) && !path.slice(prefix.length).includes('/')).map((path) => path.slice(prefix.length));
+}
 
 type FormProps = {
   tools: KopfTools;
   /** Die Projekte aus `02 Projekte`. `null`, solange die Liste fehlt: Dann gibt es nur „kein Projekt“ und das Projekt der Seite. */
   projects: string[] | null;
-  /** „Seite 2 von 3“, oder „Seite 2“, wenn die Seiten nicht bekannt sind. */
+  /** „Seite 2 von 3“, oder „Seite 2“, wenn die Liste der Seiten fehlt. */
   label: string;
   /** Am Firmen-PC lässt sich der Kopf tippen, aber keine Seite anlegen oder löschen. */
   readOnly: boolean;
@@ -59,6 +77,14 @@ function Form({ tools, projects, label, readOnly, problem, onAdd, onDelete }: Fo
   const restore = (key: 'datum' | 'zeit') => (e: Event) => {
     (e.currentTarget as HTMLInputElement).value = tools.current().meta[key] ?? '';
   };
+  // Datum und Zeit werden gespeichert, sobald die Eingabe gültig ist, bei `input` wie bei `change`: Manche Auswahlfenster
+  // (iPadOS) melden nur `change`, andere beides. Derselbe Wert wird nur einmal geschrieben.
+  const save = (key: 'datum' | 'zeit', valid: (value: string) => boolean) => (e: Event) => {
+    const { value } = e.currentTarget as HTMLInputElement;
+    if (valid(value) && value !== tools.current().meta[key]) tools.edit({ [key]: value });
+  };
+  const saveDay = save('datum', isValidDay);
+  const saveTime = save('zeit', isValidTime);
 
   return (
     <form class="kopfdaten" aria-label="Kopfdaten der Besprechung" onSubmit={(e) => e.preventDefault()}>
@@ -73,7 +99,8 @@ function Form({ tools, projects, label, readOnly, problem, onAdd, onDelete }: Fo
           type="date"
           value={meta.datum ?? ''}
           disabled={!ready}
-          onInput={(e) => isValidDay(e.currentTarget.value) && tools.edit({ datum: e.currentTarget.value })}
+          onInput={saveDay}
+          onChange={saveDay}
           onBlur={restore('datum')}
         />
       </div>
@@ -84,7 +111,8 @@ function Form({ tools, projects, label, readOnly, problem, onAdd, onDelete }: Fo
           type="time"
           value={meta.zeit ?? ''}
           disabled={!ready}
-          onInput={(e) => isValidTime(e.currentTarget.value) && tools.edit({ zeit: e.currentTarget.value })}
+          onInput={saveTime}
+          onChange={saveTime}
           onBlur={restore('zeit')}
         />
       </div>
@@ -125,14 +153,16 @@ function Form({ tools, projects, label, readOnly, problem, onAdd, onDelete }: Fo
   );
 }
 
-export function BesprechungPage({ base: address, n, listDir, ...rest }: Props) {
+export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }: Props) {
   const { engine, readOnly } = rest;
   // Der Vault schreibt Umlaute als ein Zeichen: Auch eine Adresse mit Buchstabe plus Trema führt zu derselben Datei.
   const base = address.normalize('NFC');
   const path = besprechungPagePath(base, n);
   const folder = path.slice(0, path.lastIndexOf('/'));
   const [projects, setProjects] = useState<string[] | null>(null);
+  // Die Seiten, die GitHub listet (`null`, solange die Liste fehlt), und die, die dieses Gerät hat oder zum Löschen vorgemerkt hat.
   const [listed, setListed] = useState<number[] | null>(null);
+  const [local, setLocal] = useState<{ present: number[]; deleted: number[] }>({ present: [], deleted: [] });
   const [problem, setProblem] = useState('');
   // Zählt die Versuche, die Seite neu zu öffnen: Scheitert das Löschen, ist die Sitzung der Seite beendet.
   const [attempt, setAttempt] = useState(0);
@@ -154,14 +184,15 @@ export function BesprechungPage({ base: address, n, listDir, ...rest }: Props) {
     };
   }, [listDir]);
 
-  // Die Seiten der Besprechung stehen als Dateien im Ordner des Jahres.
+  // Die Seiten der Besprechung stehen als Dateien im Ordner des Jahres. Die Liste von GitHub kommt erst nach einer Anfrage und
+  // fehlt ohne Netz.
   useEffect(() => {
     let current = true;
     listDir(folder).then(
       (entries) => {
         if (!current) return;
         const names = entries.filter((entry) => entry.type === 'file').map((entry) => entry.name);
-        setListed(listMeetings(names, base.slice(0, 10)).find((meeting) => meeting.base === base)?.pages ?? []);
+        setListed(pagesOf(names, base));
       },
       () => undefined,
     );
@@ -170,13 +201,32 @@ export function BesprechungPage({ base: address, n, listDir, ...rest }: Props) {
     };
   }, [listDir, folder, base]);
 
-  // Die Seiten, die es gibt: die der Liste ohne die gelöschten, und diese Seite, auch wenn die Liste sie noch nicht kennt.
-  const pages = useMemo(() => {
-    if (listed === null) return null;
-    const present = listed.filter((page) => !deleted.has(besprechungPagePath(base, page)));
-    return [...new Set([...present, n])].sort((a, b) => a - b);
-  }, [listed, base, n]);
-  const last = pages === null ? n : pages[pages.length - 1];
+  // Was dieses Gerät hat, braucht kein Netz: auch Seiten, die noch nicht hochgeladen sind und in keiner Liste von GitHub stehen,
+  // und die Seiten, deren Löschen noch auf den Abgleich wartet. GitHub listet sie bis dahin weiter, sie zählen nicht mit.
+  useEffect(() => {
+    let current = true;
+    engine.localPaths(`${folder}/`).then(
+      ({ present, deleted }) => current && setLocal({ present: pagesOf(namesIn(folder, present), base), deleted: pagesOf(namesIn(folder, deleted), base) }),
+      () => undefined,
+    );
+    return () => {
+      current = false;
+    };
+  }, [engine, folder, base]);
+
+  // Die Seiten, die es gibt, und wohin man von dieser Seite blättert. Ohne die Liste von GitHub sind nur die Seiten bekannt, die
+  // dieses Gerät hat: Dann steht im Titel nur die Nummer, und › führt nur auf eine Seite, die dieses Gerät hat.
+  const complete = listed !== null;
+  const pages = useMemo(() => meetingPages({ listed, local: local.present, deleted: local.deleted, n }), [listed, local, n]);
+  const { prev, next } = useMemo(() => neighbourPages(pages, n, complete), [pages, n, complete]);
+  const last = pages[pages.length - 1];
+
+  // Die Leiste oben blättert mit ‹ und ›: Sie erfährt von dieser Seite, wohin.
+  useEffect(() => {
+    const route = (page: number | null) => (page === null ? null : ({ view: 'besprechung', key: base, n: page } as const));
+    onSteps({ prev: route(prev), next: route(next) });
+    return () => onSteps(null);
+  }, [onSteps, base, prev, next]);
 
   const layout = useMemo(() => ({ ...besprechungLayout(meetingMeta(base, n, {})), key: base }), [base, n]);
   const kopf = useMemo(
@@ -193,19 +243,22 @@ export function BesprechungPage({ base: address, n, listDir, ...rest }: Props) {
 
   // Eine neue Seite hat die Kopfdaten dieser Seite, wie sie jetzt sind, und die nächste freie Nummer: Eine Seite, die es nur
   // auf diesem Gerät gibt, wird nie überschrieben.
+  // Bekannte Grenze: Ob eine Nummer frei ist, sagt `engine.read`. Ohne Netz kennt sie nur Seiten, die dieses Gerät hat, eine
+  // Seite, die es nur auf GitHub gibt, gilt dann als frei. Die neue Seite trägt deren Nummer, und beim Abgleich trifft sie
+  // auf die vorhandene Datei: `mergePages` führt beide zusammen. Es geht kein Strich verloren, nur die Kopfdaten kommen
+  // dann von der neuen Seite, weil es keine gemeinsame Fassung gibt.
   const addPage = async (tools: KopfTools) => {
     if (busy.current) return;
     busy.current = true;
     setProblem('');
     try {
-      const next = await firstFreePage(base, last + 1, async (candidate) => (await engine.read(candidate)) !== null);
+      const created = await firstFreePage(base, last + 1, async (candidate) => (await engine.read(candidate)) !== null);
       // Wer inzwischen woanders ist, bekommt weder eine leere Seite noch einen Sprung zurück hierher.
       if (away.signal.aborted) return;
-      const nextPath = besprechungPagePath(base, next);
-      const page: Page = { kind: 'besprechung', key: base, meta: meetingMeta(base, next, tools.current().meta), strokes: [] };
-      await engine.write(nextPath, meetingPageText(page), 'svg');
-      deleted.delete(nextPath);
-      if (!away.signal.aborted) window.location.hash = routeHash({ view: 'besprechung', key: base, n: next });
+      const createdPath = besprechungPagePath(base, created);
+      const page: Page = { kind: 'besprechung', key: base, meta: meetingMeta(base, created, tools.current().meta), strokes: [] };
+      await engine.write(createdPath, meetingPageText(page), 'svg');
+      if (!away.signal.aborted) window.location.hash = routeHash({ view: 'besprechung', key: base, n: created });
     } catch {
       setProblem(ADD_FAILED);
     } finally {
@@ -213,8 +266,8 @@ export function BesprechungPage({ base: address, n, listDir, ...rest }: Props) {
     }
   };
 
-  // Gelöscht wird nur nach der Rückfrage der App und nur mit „Löschen“. Danach geht die Seite davor auf, bei der einzigen
-  // Seite der Tag der Besprechung.
+  // Gelöscht wird nur nach der Rückfrage der App und nur mit „Löschen“. Danach geht die Seite davor auf, sonst die nächste,
+  // bei der einzigen Seite der Tag der Besprechung.
   const deletePage = async (tools: KopfTools) => {
     if (busy.current) return;
     busy.current = true;
@@ -229,7 +282,6 @@ export function BesprechungPage({ base: address, n, listDir, ...rest }: Props) {
         setAttempt((count) => count + 1); // Die Sitzung der Seite ist beendet: Die Seite wird neu geöffnet.
         throw error;
       }
-      deleted.add(path);
       const target = pageAfterDelete(pages, n);
       // Wer inzwischen woanders ist (die Rückfrage war schon beantwortet), bleibt dort.
       if (!away.signal.aborted) {
@@ -248,7 +300,7 @@ export function BesprechungPage({ base: address, n, listDir, ...rest }: Props) {
       <Form
         tools={tools}
         projects={projects}
-        label={pages === null ? `Seite ${n}` : `Seite ${n} von ${last}`}
+        label={pageLabel(pages, n, complete)}
         readOnly={readOnly}
         problem={problem}
         onAdd={() => void addPage(tools)}

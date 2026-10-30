@@ -1,5 +1,6 @@
 import { expect, test as base, type Page, type Route } from '@playwright/test';
 import { serializePage } from '../../src/ink/svg';
+import type { Stroke } from '../../src/ink/types';
 import { besprechungLayout } from '../../src/pages/layouts';
 import { openSeeded, queued, sendToBackground } from './helpers/app';
 import { mouse, pen } from './helpers/pointer';
@@ -71,6 +72,7 @@ const hashOf = (base: string, n: number) => `#/besprechung/${encodeURIComponent(
 const hash = (page: Page) => page.evaluate(() => window.location.hash);
 const go = (page: Page, next: string) => page.evaluate((h) => void (window.location.hash = h), next);
 const button = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
+const link = (page: Page, name: string) => page.getByRole('link', { name, exact: true });
 const field = (page: Page, label: string) => page.getByLabel(label, { exact: true });
 const strokeCount = (page: Page) => page.evaluate(() => window.__notizbuch.currentPage().strokes.length);
 const headerOf = (page: Page) => page.evaluate(() => window.__notizbuch.currentPage().meta);
@@ -85,11 +87,16 @@ const waitForPageOf = (page: Page, kind: string, key: string) =>
 const waitForPageNumber = (page: Page, n: number) =>
   page.waitForFunction((want) => window.__notizbuch?.currentPage?.().meta.seitennr === want, String(n));
 
+/** Ein Strich im Schreibfeld der Seite, wie ihn ein anderes Gerät geschrieben hätte. */
+function strokeOf(id: string): Stroke {
+  return { id, tool: 'kugel', color: 'schwarz', widthMm: 0.2, t: 1000, w: 1.2, pts: [{ x: 200, y: 900, w: 1.2 }, { x: 260, y: 920, w: 1.2 }] };
+}
+
 /** Eine Seite der Besprechung als Datei, so wie die App sie schreibt (Kopfdaten und der Hintergrund, der sie zeigt). */
-function pageText(n: number, meta: Record<string, string> = {}, base = BASE): string {
+function pageText(n: number, meta: Record<string, string> = {}, base = BASE, strokes: Stroke[] = []): string {
   const full = { thema: THEMA, datum: TODAY, zeit: '08:00', ort: '', projekt: '', ...meta, seitennr: String(n) };
   const layout = besprechungLayout(full);
-  return serializePage({ kind: 'besprechung', key: base, meta: full, strokes: [] }, layout.fields, layout.background());
+  return serializePage({ kind: 'besprechung', key: base, meta: full, strokes }, layout.fields, layout.background());
 }
 
 /** Eine Seite aus der Zeit vor den Kopfdaten: ohne jede Angabe. */
@@ -213,6 +220,29 @@ test('the header shows what the file says, and a field that is not valid is not 
   expect(repo.puts).toEqual([]);
 });
 
+test('a date or a time that the picker reports with a change event only is saved too', async ({ page }) => {
+  // Manche Auswahlfenster (iPadOS) melden nur `change`, nicht `input`.
+  const repo = await openSeeded(page, hashOf(BASE, 1), { files: { [PAGE1]: pageText(1) } });
+  const pick = (label: string, value: string) =>
+    field(page, label).evaluate((el, v) => {
+      (el as HTMLInputElement).value = v;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, value);
+  await pick('Datum', '2026-10-30');
+  await pick('Zeit', '09:15');
+  await waitUntilQueued(page, PAGE1, 'data-zeit="09:15"');
+  expect(await headerOf(page)).toMatchObject({ datum: '2026-10-30', zeit: '09:15' });
+
+  // Beim Verlassen der Felder zeigen sie, was die Seite hat: die Auswahl, nicht den alten Wert.
+  await field(page, 'Thema').focus();
+  await expect(field(page, 'Datum')).toHaveValue('2026-10-30');
+  await expect(field(page, 'Zeit')).toHaveValue('09:15');
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.length).toBeGreaterThan(0);
+  expect(repo.read(PAGE1)).toContain('data-datum="2026-10-30"');
+  expect(repo.read(PAGE1)).toContain('data-zeit="09:15"');
+});
+
 test('a page that does not exist yet starts with the header from its name', async ({ page }) => {
   const base = '2026-10-29 1430 Muster anrufen';
   const path = `${FILES}/${base} S1.svg`;
@@ -311,6 +341,40 @@ test('a stroke that is just being drawn when the header changes is kept and carr
   await expect.poll(() => repo.puts.length).toBe(1);
   expect(repo.puts[0].text).toContain(STROKE);
   expect(repo.puts[0].text).toContain('data-ort="Raum 7"');
+});
+
+test('strokes queued on this device and a project set on another device are both kept when the page goes up', async ({ page }) => {
+  const repo = await openSeeded(page, hashOf(BASE, 1), { files: { [PAGE1]: pageText(1) } });
+  await pen(page).stroke(LINE);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  await waitUntilQueued(page, PAGE1, STROKE);
+
+  // Am Firmen-PC wird das Projekt gewählt und hochgeladen, bevor dieses Gerät etwas hochgeladen hat.
+  repo.commit(PAGE1, pageText(1, { projekt: 'Beispielprojekt A' }));
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.length).toBe(1);
+  const text = repo.read(PAGE1)!;
+  expect(text).toContain('data-projekt="Beispielprojekt A"');
+  expect(text.split(STROKE).length - 1).toBe(1);
+  // Und die Seite zeigt es: das Projekt vom PC und den eigenen Strich.
+  await expect(field(page, 'Projekt')).toHaveValue('Beispielprojekt A');
+  expect(await strokeCount(page)).toBe(1);
+  expect(repo.puts.map((p) => p.path)).toEqual([PAGE1]); // keine Konfliktkopie
+});
+
+test('a project chosen on this device and a stroke drawn on another device are both kept when the page goes up', async ({ page }) => {
+  const repo = await openSeeded(page, hashOf(BASE, 1), { files: { [PAGE1]: pageText(1) } });
+  await field(page, 'Projekt').selectOption('Beispielprojekt B');
+  await waitUntilQueued(page, PAGE1, 'data-projekt="Beispielprojekt B"');
+
+  repo.commit(PAGE1, pageText(1, {}, BASE, [strokeOf('fremd')]));
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.length).toBe(1);
+  const text = repo.read(PAGE1)!;
+  expect(text).toContain('data-projekt="Beispielprojekt B"');
+  expect(text).toContain('data-id="fremd"');
+  await expect.poll(() => strokeCount(page)).toBe(1); // der Strich vom anderen Gerät ist zu sehen
+  await expect(field(page, 'Projekt')).toHaveValue('Beispielprojekt B');
 });
 
 const UNUSABLE = [
@@ -459,15 +523,128 @@ test('a new page never takes the number of a page that exists on this device onl
 
   await go(page, hashOf(BASE, 1));
   await waitForPageNumber(page, 1);
-  await expect(page.getByText('Seite 1 von 1', { exact: true })).toBeVisible();
+  // Gezählt wird auch die Seite, die GitHub nicht listet und die es nur auf diesem Gerät gibt.
+  await expect(page.getByText('Seite 1 von 2', { exact: true })).toBeVisible();
   await button(page, '+ Seite').click();
   await expect.poll(() => hash(page)).toBe(hashOf(BASE, 3));
   await waitForPageNumber(page, 3);
+  await expect(page.getByText('Seite 3 von 3', { exact: true })).toBeVisible();
   expect(await strokeCount(page)).toBe(0);
 
   await go(page, hashOf(BASE, 2));
   await waitForPageNumber(page, 2);
   expect(await strokeCount(page)).toBe(1); // Seite 2 hat ihren Strich noch
+});
+
+// ---------- Blättern ----------
+
+test('the arrows of the top bar page through the pages: ‹ on S2 opens S1 with its strokes', async ({ page }) => {
+  await openSeeded(page, hashOf(BASE, 1), { files: { [PAGE1]: pageText(1) } });
+  await pen(page).stroke(LINE);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  await waitUntilQueued(page, PAGE1, STROKE);
+  await button(page, '+ Seite').click();
+  await expect.poll(() => hash(page)).toBe(hashOf(BASE, 2));
+  await waitForPageNumber(page, 2);
+  expect(await strokeCount(page)).toBe(0);
+
+  // Vorher gab es von Seite 2 keinen Weg zurück.
+  await link(page, 'Vorige Seite').click();
+  await expect.poll(() => hash(page)).toBe(hashOf(BASE, 1));
+  await waitForPageNumber(page, 1);
+  expect(await strokeCount(page)).toBe(1);
+  await expect(page.getByText('Seite 1 von 2', { exact: true })).toBeVisible();
+
+  // Und wieder vor.
+  await link(page, 'Nächste Seite').click();
+  await expect.poll(() => hash(page)).toBe(hashOf(BASE, 2));
+  await waitForPageNumber(page, 2);
+  await expect(page.getByText('Seite 2 von 2', { exact: true })).toBeVisible();
+});
+
+test('› on the last page is disabled, and ‹ on the first page too', async ({ page }) => {
+  await openSeeded(page, hashOf(BASE, 3), { files: { [PAGE1]: pageText(1), [PAGE2]: pageText(2), [PAGE3]: pageText(3) } });
+  await expect(page.getByText('Seite 3 von 3', { exact: true })).toBeVisible();
+  await expect(button(page, 'Nächste Seite')).toHaveAttribute('aria-disabled', 'true');
+  await expect(link(page, 'Vorige Seite')).toHaveAttribute('href', hashOf(BASE, 2));
+
+  await link(page, 'Vorige Seite').click();
+  await waitForPageNumber(page, 2);
+  await expect(link(page, 'Vorige Seite')).toHaveAttribute('href', hashOf(BASE, 1));
+  await expect(link(page, 'Nächste Seite')).toHaveAttribute('href', hashOf(BASE, 3));
+
+  await link(page, 'Vorige Seite').click();
+  await waitForPageNumber(page, 1);
+  await expect(button(page, 'Vorige Seite')).toHaveAttribute('aria-disabled', 'true');
+  await expect(link(page, 'Nächste Seite')).toHaveAttribute('href', hashOf(BASE, 2));
+  // Ein grauer Pfeil führt nirgends hin.
+  await button(page, 'Vorige Seite').click({ force: true });
+  expect(await hash(page)).toBe(hashOf(BASE, 1));
+});
+
+test('a page that is only opened and exists nowhere yet is the last page: › is grey, ‹ leads to the page before', async ({ page }) => {
+  // Seite 2 wird nur geöffnet: weder GitHub noch dieses Gerät kennen Seite 3. Die Seite davor gibt es.
+  await openSeeded(page, hashOf(BASE, 2), { files: { [PAGE1]: pageText(1) } });
+  await expect(page.getByText('Seite 2 von 2', { exact: true })).toBeVisible();
+  await expect(button(page, 'Nächste Seite')).toHaveAttribute('aria-disabled', 'true');
+  await expect(link(page, 'Vorige Seite')).toHaveAttribute('href', hashOf(BASE, 1));
+});
+
+test('a missing page in between is skipped, and the label counts the pages that are there', async ({ page }) => {
+  await openSeeded(page, hashOf(BASE, 3), { files: { [PAGE1]: pageText(1), [PAGE3]: pageText(3) } });
+  await expect(page.getByText('Seite 2 von 2', { exact: true })).toBeVisible();
+  await expect(link(page, 'Vorige Seite')).toHaveAttribute('href', hashOf(BASE, 1));
+  await link(page, 'Vorige Seite').click();
+  await waitForPageNumber(page, 1);
+  await expect(page.getByText('Seite 1 von 2', { exact: true })).toBeVisible();
+  await expect(link(page, 'Nächste Seite')).toHaveAttribute('href', hashOf(BASE, 3));
+});
+
+test('without network ‹ opens the page before from this device, and › stays grey where the next page is unknown', async ({ page }) => {
+  await openSeeded(page, hashOf(BASE, 1), { files: { [PAGE1]: pageText(1) } });
+  await pen(page).stroke(LINE);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  await waitUntilQueued(page, PAGE1, STROKE);
+  await button(page, '+ Seite').click();
+  await waitForPageNumber(page, 2);
+
+  // Ab jetzt ist GitHub nicht mehr zu erreichen, und die App startet neu: Es gibt nur, was dieses Gerät hat.
+  await page.route('https://api.github.com/**', (route) => route.abort('internetdisconnected'));
+  await page.reload();
+  await waitForPageNumber(page, 2);
+  await expect(page.getByText('Seite 2', { exact: true })).toBeVisible(); // ohne Liste nur die Nummer
+  await expect(page.getByText(/ von /)).toHaveCount(0);
+  await expect(button(page, 'Nächste Seite')).toHaveAttribute('aria-disabled', 'true');
+
+  await link(page, 'Vorige Seite').click();
+  await expect.poll(() => hash(page)).toBe(hashOf(BASE, 1));
+  await waitForPageNumber(page, 1);
+  expect(await strokeCount(page)).toBe(1);
+  // Seite 2 hat dieses Gerät, also führt › dorthin.
+  await expect(link(page, 'Nächste Seite')).toHaveAttribute('href', hashOf(BASE, 2));
+});
+
+test('without network and without a copy of the page before, ‹ still goes to the number before, and › stays grey', async ({ page }) => {
+  await openSeeded(page, hashOf(BASE, 2), { offline: true });
+  await expect(page.getByText('Seite 2', { exact: true })).toBeVisible();
+  await expect(link(page, 'Vorige Seite')).toHaveAttribute('href', hashOf(BASE, 1));
+  await expect(button(page, 'Nächste Seite')).toHaveAttribute('aria-disabled', 'true');
+});
+
+test('after a middle page is deleted the label counts the pages that are left, and the arrows skip it', async ({ page }) => {
+  // Das Löschen kommt bei GitHub nicht an (Schreiben scheitert): Dort steht Seite 2 noch, hier ist sie weg.
+  await openSeeded(page, hashOf(BASE, 2), { files: { [PAGE1]: pageText(1), [PAGE2]: pageText(2), [PAGE3]: pageText(3) }, failWrites: true });
+  await expect(page.getByText('Seite 2 von 3', { exact: true })).toBeVisible();
+  await button(page, 'Seite löschen').click();
+  await page.getByRole('dialog', { name: QUESTION }).getByRole('button', { name: 'Löschen', exact: true }).click();
+  await expect.poll(() => hash(page)).toBe(hashOf(BASE, 1));
+  await expect(page.getByText('Seite 1 von 2', { exact: true })).toBeVisible();
+  await expect(link(page, 'Nächste Seite')).toHaveAttribute('href', hashOf(BASE, 3));
+
+  await link(page, 'Nächste Seite').click();
+  await waitForPageNumber(page, 3);
+  await expect(page.getByText('Seite 2 von 2', { exact: true })).toBeVisible();
+  await expect(link(page, 'Vorige Seite')).toHaveAttribute('href', hashOf(BASE, 1));
 });
 
 test('plus page does not pull the user back when they have left the page in the meantime', async ({ page }) => {
@@ -638,6 +815,19 @@ test('deleting the only page opens the day of the meeting', async ({ page }) => 
   await sendToBackground(page);
   await expect.poll(() => repo.deletes.map((d) => d.path)).toEqual([PAGE1]);
   expect(repo.read(PAGE1)).toBeUndefined();
+});
+
+test('deleting the first of several pages opens the next one, not the day', async ({ page }) => {
+  const repo = await openSeeded(page, hashOf(BASE, 1), { files: { [PAGE1]: pageText(1), [PAGE2]: pageText(2) } });
+  await expect(page.getByText('Seite 1 von 2', { exact: true })).toBeVisible();
+  await button(page, 'Seite löschen').click();
+  await page.getByRole('dialog', { name: QUESTION }).getByRole('button', { name: 'Löschen', exact: true }).click();
+  await expect.poll(() => hash(page)).toBe(hashOf(BASE, 2));
+  await waitForPageNumber(page, 2);
+  await expect(page.getByText('Seite 1 von 1', { exact: true })).toBeVisible();
+  await sendToBackground(page);
+  await expect.poll(() => repo.deletes.map((d) => d.path)).toEqual([PAGE1]);
+  expect(repo.read(PAGE2)).toBeDefined();
 });
 
 test('deleting a page of a meeting from another day opens that day', async ({ page }) => {

@@ -437,3 +437,80 @@ test('deletes and uploads never run at the same time', async () => {
   expect(fake.files[A].text).toBe('x');
   expect(fake.files[B].text).toBe('y');
 });
+
+// ---------- Lokale Dateien ----------
+
+const FOLDER = '07 Anhänge/Notizbuch/2026';
+const P1 = `${FOLDER}/2026-10-29 0800 Muster S1.svg`;
+const P2 = `${FOLDER}/2026-10-29 0800 Muster S2.svg`;
+const P3 = `${FOLDER}/2026-10-29 0800 Muster S3.svg`;
+
+test('localPaths lists the copies this device has under a folder, also a page that was never uploaded', async () => {
+  fake.files[P1] = { text: svgPage('a'), sha: 's1' };
+  await e.read(P1); // eine Kopie von GitHub
+  await e.write(P2, svgPage('b'), 'svg'); // eine Seite, die es nur hier gibt
+  await e.write(A, 'Notiz', 'md'); // ein anderer Ordner
+  const local = await e.localPaths(`${FOLDER}/`);
+  expect([...local.present].sort()).toEqual([P1, P2]);
+  expect(local.deleted).toEqual([]);
+});
+
+test('localPaths names a file that waits for its delete as deleted, and does not list it as present', async () => {
+  fake.files[P1] = { text: svgPage('a'), sha: 's1' };
+  fake.files[P2] = { text: svgPage('b'), sha: 's2' };
+  await e.read(P1);
+  await e.read(P2);
+  await e.remove(P2); // das Löschen wartet auf den nächsten Abgleich: GitHub listet die Seite noch
+  expect(await e.localPaths(`${FOLDER}/`)).toEqual({ present: [P1], deleted: [P2] });
+});
+
+test('localPaths knows nothing of a page that was removed before it ever went up', async () => {
+  await e.write(P3, svgPage('c'), 'svg');
+  await e.remove(P3);
+  expect(await e.localPaths(`${FOLDER}/`)).toEqual({ present: [], deleted: [] });
+});
+
+test('localPaths lists a file again that was written after its remove', async () => {
+  fake.files[P1] = { text: svgPage('a'), sha: 's1' };
+  await e.read(P1);
+  await e.remove(P1);
+  await e.write(P1, svgPage('a', 'b'), 'svg');
+  expect(await e.localPaths(`${FOLDER}/`)).toEqual({ present: [P1], deleted: [] });
+});
+
+test('localPaths forgets a delete once it is done', async () => {
+  fake.files[P1] = { text: svgPage('a'), sha: 's1' };
+  await e.read(P1);
+  await e.remove(P1);
+  await e.flush();
+  expect(fake.files[P1]).toBeUndefined();
+  expect(await e.localPaths(`${FOLDER}/`)).toEqual({ present: [], deleted: [] });
+});
+
+test('localPaths compares the folder in its composed form and leaves out other folders', async () => {
+  fake.files[P1] = { text: svgPage('a'), sha: 's1' };
+  await e.read(P1);
+  await e.write('07 Anhänge/Notizbuch/2027/2027-01-02 0800 Muster S1.svg', svgPage('z'), 'svg');
+  await e.write('07 Anhänge/Notizbuch/2026 alt/x.svg', svgPage('y'), 'svg');
+  expect(await e.localPaths(`${FOLDER}/`.normalize('NFD'))).toEqual({ present: [P1], deleted: [] });
+});
+
+test('localPaths finds a file that the engine holds under a decomposed name, and returns the name as the engine holds it', async () => {
+  const decomposed = `${FOLDER}/2026-10-29 0800 Gespräch S1.svg`.normalize('NFD');
+  await e.write(decomposed, svgPage('a'), 'svg');
+  expect(await e.localPaths(`${FOLDER}/`)).toEqual({ present: [decomposed], deleted: [] });
+});
+
+// Die beiden folgenden Zustände entstehen im Betrieb nicht (`write` legt Kopie und Eintrag zusammen an, `remove` nimmt die
+// Kopie weg). Zugesagt ist trotzdem: Ein wartendes Löschen schlägt jede Kopie, und eine wartende Änderung zählt als da.
+
+test('localPaths lists a file as deleted, not as present, whatever copy the store still holds', async () => {
+  await h.store.put('files', { path: P1, text: svgPage('a'), sha: 's1', base: svgPage('a'), syncedAt: 1 });
+  await h.store.put('outbox', { path: P1, text: svgPage('a'), kind: 'svg', baseSha: 's1', baseText: svgPage('a'), queuedAt: 1, deleted: true });
+  expect(await e.localPaths(`${FOLDER}/`)).toEqual({ present: [], deleted: [P1] });
+});
+
+test('localPaths lists a queued change as present, also without a stored copy', async () => {
+  await h.store.put('outbox', { path: P2, text: svgPage('b'), kind: 'svg', baseSha: null, baseText: null, queuedAt: 1 });
+  expect(await e.localPaths(`${FOLDER}/`)).toEqual({ present: [P2], deleted: [] });
+});

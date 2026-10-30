@@ -191,7 +191,7 @@ test('a meeting address opens the meeting page, with the top bar and the month t
   await expect(page.getByTestId('surface')).toHaveCount(1);
   await expect(page.getByTestId('status')).toHaveText('Gesichert');
   await expect(page.locator('.reiter[aria-current="true"]')).toHaveText('NOV');
-  // Die Seiten einer Besprechung blättert die Seite selbst, nicht die Leiste oben.
+  // Die Pfeile blättern die Seiten der Besprechung (siehe besprechung.spec.ts). Diese Besprechung hat nur eine Seite, also sind beide grau.
   await expect(button(page, 'Vorige Seite')).toHaveAttribute('aria-disabled', 'true');
   await expect(button(page, 'Nächste Seite')).toHaveAttribute('aria-disabled', 'true');
 });

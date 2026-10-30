@@ -121,8 +121,48 @@ export function projectNames(entries: { name: string; type: 'file' | 'dir' }[]):
 }
 
 /**
- * Die Seite, die nach dem Löschen von Seite `n` aufgeht: die davor, sonst die nächste. `null`, wenn es keine andere
- * gibt (dann geht der Tag der Besprechung auf). Sind die Seiten nicht bekannt (`null`), gilt die Nummer davor.
+ * Die Seiten einer Besprechung, die es gibt, aufsteigend: was GitHub listet (`listed`, `null`, solange die Liste fehlt) und
+ * was dieses Gerät hat (`local`), ohne die Seiten, deren Löschen noch auf den Abgleich wartet (`deleted`): GitHub listet sie
+ * bis dahin weiter. Die offene Seite `n` zählt immer mit, auch wenn noch keine Liste sie kennt.
+ */
+export function meetingPages(o: { listed: number[] | null; local: number[]; deleted: number[]; n: number }): number[] {
+  const pages = new Set([...(o.listed ?? []), ...o.local]);
+  for (const page of o.deleted) pages.delete(page);
+  pages.add(o.n);
+  return [...pages].sort((a, b) => a - b);
+}
+
+/**
+ * Wohin ‹ und › von der Seite `n` führen: `prev` ist die nächste bekannte Seite davor, `next` die danach, `null`, wenn es
+ * keine gibt. `pages` sind die Seiten, die es gibt (siehe `meetingPages`, mit `n`). Eine Lücke, etwa eine gelöschte
+ * Seite, wird übersprungen. `complete` heißt, die Liste von GitHub liegt vor und alle Seiten sind bekannt. Fehlt sie, kann es
+ * eine Seite geben, die nur auf GitHub liegt. Dann gilt für `prev` ohne bekannte Seite davor die Nummer davor (ohne Netz
+ * soll man zurückkommen, die Seite ist leer, wenn dieses Gerät sie nicht hat). `next` gibt es nur für eine bekannte Seite,
+ * sonst führte der Pfeil auf eine leere Seite ohne Kopfdaten.
+ */
+export function neighbourPages(pages: number[], n: number, complete: boolean): { prev: number | null; next: number | null } {
+  const before = pages.filter((page) => page < n);
+  const after = pages.filter((page) => page > n);
+  const guess = !complete && n > 1 ? n - 1 : null;
+  return {
+    prev: before.length > 0 ? Math.max(...before) : guess,
+    next: after.length > 0 ? Math.min(...after) : null,
+  };
+}
+
+/**
+ * „Seite 2 von 3“: die Stelle der Seite `n` unter den Seiten, die es gibt (`pages` enthält `n`), und wie viele es sind.
+ * Fehlt die Liste von GitHub (`complete` ist falsch), wäre die Zahl geraten: Dann steht nur „Seite 2“.
+ */
+export function pageLabel(pages: number[], n: number, complete: boolean): string {
+  return complete ? `Seite ${pages.indexOf(n) + 1} von ${pages.length}` : `Seite ${n}`;
+}
+
+/**
+ * Die Seite, die nach dem Löschen von Seite `n` aufgeht: die Seite davor, sonst die nächste Seite, sonst der Tag der
+ * Besprechung (`null`). Gemeint ist die nächste Seite, die es gibt, nicht `n - 1`: Eine Lücke wird übersprungen. Wird also
+ * die erste Seite einer Besprechung mit mehreren gelöscht, geht die zweite auf. Sind die Seiten nicht bekannt (`null`),
+ * gilt die Nummer davor.
  */
 export function pageAfterDelete(pages: number[] | null, n: number): number | null {
   if (pages === null) return n > 1 ? n - 1 : null;

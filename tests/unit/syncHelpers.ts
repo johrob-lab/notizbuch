@@ -216,6 +216,17 @@ export function svgPage(...ids: string[]): string {
   return serializePage({ kind: 'tag', key: '2026-10-29', meta: {}, strokes }, [], '<rect width="10" height="10"/>');
 }
 
+/** Die erste Seite einer Besprechung am selben Tag. */
+export const M = '07 Anhänge/Notizbuch/2026/2026-10-29 0800 Abstimmung Beispiel 2027 S1.svg';
+const MEETING = '2026-10-29 0800 Abstimmung Beispiel 2027';
+
+/** Eine Besprechungsseite mit den Kopfdaten, die die App schreibt, und Strichen (ohne Felder, wie `svgPage`). */
+export function meetingPage(meta: Record<string, string>, ...ids: string[]): string {
+  const full = { thema: 'Abstimmung Beispiel 2027', datum: '2026-10-29', zeit: '08:00', ort: '', projekt: '', seitennr: '1', ...meta };
+  const strokes = ids.map((id, i) => stroke(id, 10 + i * 20, 10 + i * 20));
+  return serializePage({ kind: 'besprechung', key: MEETING, meta: full, strokes }, [], '<rect width="10" height="10"/>');
+}
+
 export type Harness = {
   fake: FakeClient;
   store: Store;

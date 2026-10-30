@@ -525,3 +525,145 @@ test('mergePages reads both sides strictly: an unreadable file throws', () => {
   expect(() => mergePages('kaputt', svgWith('s1'))).toThrow(/SVG/);
   expect(() => mergePages(svgWith('s1'), '<svg xmlns="http://www.w3.org/2000/svg"/>')).toThrow(/Notizbuchs/);
 });
+
+// ---------- Zusammenführen mit gemeinsamem Ausgangspunkt ----------
+
+const MEETING = '2026-10-29 0800 Abstimmung Beispiel 2027';
+/** Die Reihenfolge der Kopfdaten, wie die App sie schreibt. */
+const HEADER_ORDER = ['thema', 'datum', 'zeit', 'ort', 'projekt', 'seitennr'];
+
+/** Eine Besprechungsseite mit den Kopfdaten, die die App schreibt, und je einem Strich pro `id`. */
+function meetingSvg(meta: Record<string, string>, ...ids: string[]): string {
+  const full = { thema: 'Abstimmung Beispiel 2027', datum: DAY, zeit: '08:00', ort: '', projekt: '', seitennr: '1', ...meta };
+  const strokes = ids.map((id) => strokeAt(300, 400, 'schwarz', id));
+  return serializePage({ kind: 'besprechung', key: MEETING, meta: full, strokes }, FIELDS, '');
+}
+
+const strokeIds = (svg: string): string[] =>
+  parsePage(svg)
+    .strokes.map((s) => s.id)
+    .sort();
+
+test('with a base, a header change on theirs survives although ours only added strokes', () => {
+  const base = meetingSvg({}, 'a');
+  const ours = meetingSvg({}, 'a', 'o1');
+  const theirs = meetingSvg({ projekt: 'Beispielprojekt A' }, 'a');
+  const merged = mergePages(ours, theirs, base);
+  expect(parsePage(merged).meta.projekt).toBe('Beispielprojekt A');
+  expect(strokeIds(merged)).toEqual(['a', 'o1']);
+});
+
+test('with a base, a header change on ours survives although theirs only added strokes', () => {
+  const base = meetingSvg({}, 'a');
+  const ours = meetingSvg({ projekt: 'Beispielprojekt A' }, 'a');
+  const theirs = meetingSvg({}, 'a', 't1');
+  const merged = mergePages(ours, theirs, base);
+  expect(parsePage(merged).meta.projekt).toBe('Beispielprojekt A');
+  expect(strokeIds(merged)).toEqual(['a', 't1']);
+});
+
+test('with a base, the header is merged key by key: each side keeps what it changed', () => {
+  const base = meetingSvg({ ort: 'Raum 1' });
+  const ours = meetingSvg({ ort: 'Raum 3' }); // ours hat den Ort geändert
+  const theirs = meetingSvg({ ort: 'Raum 1', projekt: 'Beispielprojekt B', zeit: '09:30' }); // theirs Projekt und Zeit
+  const meta = parsePage(mergePages(ours, theirs, base)).meta;
+  expect(meta).toEqual({ thema: 'Abstimmung Beispiel 2027', datum: DAY, zeit: '09:30', ort: 'Raum 3', projekt: 'Beispielprojekt B', seitennr: '1' });
+  expect(Object.keys(meta)).toEqual(HEADER_ORDER); // die Reihenfolge bleibt, die Sitzung vergleicht Kopfdaten als Text
+});
+
+test('with a base, a key that both sides changed takes the value of ours', () => {
+  // Gleichzeitig dasselbe Feld verschieden geändert: Eine der beiden Eingaben muss weichen, die dieses Geräts bleibt.
+  const base = meetingSvg({ thema: 'Alt' });
+  const ours = meetingSvg({ thema: 'Meins' });
+  const theirs = meetingSvg({ thema: 'Deren', ort: 'Raum 2' });
+  const meta = parsePage(mergePages(ours, theirs, base)).meta;
+  expect(meta.thema).toBe('Meins');
+  expect(meta.ort).toBe('Raum 2'); // was nur theirs geändert hat, kommt trotzdem
+});
+
+test('with a base, a key that only one side has is kept', () => {
+  const base = meetingSvg({});
+  const ours = meetingSvg({ farbe: 'rot' });
+  const theirs = meetingSvg({ raum: 'B' });
+  const meta = parsePage(mergePages(ours, theirs, base)).meta;
+  expect(meta).toMatchObject({ farbe: 'rot', raum: 'B' });
+  expect(Object.keys(meta)).toEqual([...HEADER_ORDER, 'farbe', 'raum']);
+});
+
+test('with a base, a key the base does not have counts as empty', () => {
+  // Eine Seite aus der Zeit vor den Kopfdaten: Dieses Gerät hat sie beim Lesen ergänzt (Projekt leer), geändert hat es nichts.
+  const old = serializePage({ kind: 'besprechung', key: MEETING, meta: { thema: 'Abstimmung Beispiel 2027' }, strokes: [] }, FIELDS, '');
+  const ours = meetingSvg({}, 'o1');
+  const theirs = meetingSvg({ projekt: 'Beispielprojekt A' });
+  expect(parsePage(mergePages(ours, theirs, old)).meta.projekt).toBe('Beispielprojekt A');
+});
+
+test('with a base, a stroke erased on ours stays gone and a stroke only theirs has is kept', () => {
+  const base = meetingSvg({}, 'a', 'b');
+  const ours = meetingSvg({}, 'a'); // b wurde hier radiert
+  const theirs = meetingSvg({}, 'a', 'b', 't1'); // dort ist t1 dazugekommen
+  expect(strokeIds(mergePages(ours, theirs, base))).toEqual(['a', 't1']);
+});
+
+test('with a base, a stroke erased on theirs stays gone and a stroke only ours has is kept', () => {
+  const base = meetingSvg({}, 'a', 'b');
+  const ours = meetingSvg({}, 'a', 'b', 'o1');
+  const theirs = meetingSvg({}, 'a'); // b wurde dort radiert
+  expect(strokeIds(mergePages(ours, theirs, base))).toEqual(['a', 'o1']);
+});
+
+test('with a base, a stroke erased on both sides is gone, and a group that loses its last stroke disappears', () => {
+  const base = serializePage(tagPage([strokeAt(300, 400, 'rot', 'a'), strokeAt(900, 400, 'rot', 'x')]), FIELDS, '');
+  const ours = serializePage(tagPage([strokeAt(300, 400, 'rot', 'a')]), FIELDS, '');
+  const theirs = serializePage(tagPage([strokeAt(300, 400, 'rot', 'a')]), FIELDS, '');
+  const merged = mergePages(ours, theirs, base);
+  expect(groupsOf(merged).map((g) => [g.feld, g.ids])).toEqual([['notizen', ['a']]]);
+  // Auch wenn nur eine Seite radiert hat, bleibt die Gruppe nicht leer in der Datei stehen.
+  const stillThere = serializePage(tagPage([strokeAt(300, 400, 'rot', 'a'), strokeAt(900, 400, 'rot', 'x')]), FIELDS, '');
+  expect(groupsOf(mergePages(ours, stillThere, base)).map((g) => [g.feld, g.ids])).toEqual([['notizen', ['a']]]);
+});
+
+test('with a base, a stroke that is new on one side is never taken for an erase on the other', () => {
+  const base = meetingSvg({}, 'a');
+  const merged = mergePages(meetingSvg({}, 'a', 'o1'), meetingSvg({}, 'a', 't1'), base);
+  expect(strokeIds(merged)).toEqual(['a', 'o1', 't1']);
+});
+
+test('with a base, nothing changes on either side: the result is the page', () => {
+  const page = meetingSvg({ ort: 'Raum 1' }, 'a', 'b');
+  expect(mergePages(page, page, page)).toBe(page);
+});
+
+test('without a base the merge is the plain union: the header is ours, an erased stroke comes back', () => {
+  const ours = meetingSvg({ projekt: '' }, 'a');
+  const theirs = meetingSvg({ projekt: 'Beispielprojekt A' }, 'a', 'b');
+  const merged = mergePages(ours, theirs);
+  expect(parsePage(merged).meta.projekt).toBe('');
+  expect(strokeIds(merged)).toEqual(['a', 'b']);
+  expect(mergePages(ours, theirs, undefined)).toBe(merged);
+});
+
+test('a base that is not a readable page is no base: the merge is the plain union', () => {
+  const ours = meetingSvg({}, 'a');
+  const theirs = meetingSvg({ projekt: 'Beispielprojekt A' }, 'a', 'b');
+  const union = mergePages(ours, theirs);
+  for (const bad of ['', 'kaputt', '<svg xmlns="http://www.w3.org/2000/svg"/>']) expect(mergePages(ours, theirs, bad), bad).toBe(union);
+});
+
+test('merging again with a base changes nothing', () => {
+  const base = meetingSvg({ ort: 'Raum 1' }, 'a', 'b');
+  const ours = meetingSvg({ ort: 'Raum 3' }, 'a', 'o1'); // Ort geändert, b radiert, o1 dazu
+  const theirs = meetingSvg({ ort: 'Raum 1', projekt: 'Beispielprojekt A' }, 'a', 'b', 't1');
+  const once = mergePages(ours, theirs, base);
+  expect(strokeIds(once)).toEqual(['a', 'o1', 't1']);
+  expect(parsePage(once).meta).toMatchObject({ ort: 'Raum 3', projekt: 'Beispielprojekt A' });
+  expect(mergePages(once, theirs, base)).toBe(once);
+  expect(mergePages(once, ours, base)).toBe(once);
+  expect(mergePages(once, once, base)).toBe(once);
+});
+
+test('mergePages reads the base strictly only when it needs it: an unreadable page on either side still throws', () => {
+  const base = meetingSvg({}, 'a');
+  expect(() => mergePages('kaputt', meetingSvg({}, 'a'), base)).toThrow(/SVG/);
+  expect(() => mergePages(meetingSvg({}, 'a'), 'kaputt', base)).toThrow(/SVG/);
+});
