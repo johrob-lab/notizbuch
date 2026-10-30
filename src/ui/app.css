@@ -1,0 +1,1469 @@
+:root {
+  --gruen: #44634c;
+  --linie: #d9d5ca;
+  --leiste: #fbfaf6;
+  --hinweis: #fff4d6;
+  --fehler: #fde4e1;
+}
+
+html,
+body {
+  overscroll-behavior: none;
+}
+
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#root {
+  height: 100%;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+#app > h1 {
+  margin: 0;
+  padding: 16px 16px 4px;
+  font-size: 20px;
+}
+
+#app > p {
+  margin: 0;
+  padding: 0 16px;
+}
+
+.seite {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Die Leiste mit den Werkzeugen unter der Leiste oben. Sie behält ihre Höhe, auch wenn die Werkzeuge ausgeblendet sind. */
+.leiste {
+  touch-action: manipulation; /* kein Doppeltipp-Zoom auf den Knöpfen */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  box-sizing: border-box;
+  min-height: 61px; /* Knopf 44 + Rand 2 x 8 + Linie 1 */
+  padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  background: var(--leiste);
+  border-bottom: 1px solid var(--linie);
+}
+
+.werkzeuge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/*
+ * Der Kopf einer Besprechung unter der Leiste mit den Werkzeugen: Thema, Datum, Zeit, Ort, Projekt und die Seiten. Rechts
+ * bleibt der Streifen der Monatsreiter frei, sonst lägen Felder unter ihnen und ein Tipp träfe den Reiter.
+ */
+.kopf {
+  touch-action: manipulation;
+  padding: 8px max(56px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  background: var(--leiste);
+  border-bottom: 1px solid var(--linie);
+}
+
+.kopfdaten {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px 12px;
+}
+
+.feld {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.feld.thema {
+  flex: 2 1 240px;
+}
+
+.feld.ort {
+  flex: 1 1 140px;
+}
+
+.feld label {
+  font-size: 12px;
+  color: #4a5160;
+}
+
+/* 16 Punkte und mehr: Darunter zoomt Safari beim Antippen in die Seite. Der Text lässt sich markieren, auch wenn die App es sonst sperrt. */
+.feld input,
+.feld select {
+  box-sizing: border-box;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--linie);
+  border-radius: 10px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.feld input:disabled,
+.feld select:disabled {
+  opacity: 0.6;
+}
+
+.feld input:focus-visible,
+.feld select:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 1px;
+}
+
+.seitenleiste {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.seitenzahl {
+  font-size: 15px;
+  color: #4a5160;
+  white-space: nowrap;
+}
+
+.kopfhinweis {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 14px;
+  color: #a32a24;
+}
+
+.grp {
+  display: flex;
+  gap: 2px;
+}
+
+.sep {
+  width: 1px;
+  height: 28px;
+  margin: 0 6px;
+  background: var(--linie);
+}
+
+.tb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tb svg,
+.schnellwechsel svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tb[aria-pressed='true'] {
+  background: rgb(68 99 76 / 0.14);
+  border-color: var(--gruen);
+}
+
+.tb:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.tb:focus-visible,
+.schnellwechsel:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+.swatch span {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.2);
+}
+
+.dot {
+  display: block;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/*
+ * Oben: Blättern, Ansichten, Stand des Abgleichs, Einstellungen. Die Leiste hat immer dieselbe Höhe: Wird sie höher
+ * (der Status bekommt einen längeren Text, eine Meldung kommt), springt die Seite darunter, auch unter dem Stift.
+ * Darum bricht sie nicht um, nur der Text des Status darf umbrechen. Meldungen schweben darüber.
+ */
+.topbar {
+  touch-action: manipulation;
+  position: relative;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: max(6px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left));
+  background: var(--leiste);
+  border-bottom: 1px solid var(--linie);
+}
+
+.schritte,
+.ansichten {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--linie);
+  border-radius: 22px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.pill[aria-current='page'] {
+  border-color: var(--gruen);
+  background: var(--gruen);
+  color: #fff;
+}
+
+/* Ausgegraut, aber nicht tot: Ein Tipp sagt, wann es kommt. */
+.pill[aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pill:focus-visible,
+.reiter:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+/* Unter der Leiste, über der Werkzeugleiste und der Seite. Der Streifen fängt keine Berührung ab, nur die Meldungen. */
+.meldungen {
+  position: absolute;
+  top: 100%;
+  right: max(12px, env(safe-area-inset-right));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: min(440px, calc(100% - 24px));
+  margin-top: 4px;
+  pointer-events: none;
+}
+
+.meldung {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-left: 14px;
+  border: 1px solid #ecd9a0;
+  border-radius: 10px;
+  background: var(--hinweis);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+  font-size: 14px;
+  pointer-events: auto;
+}
+
+.meldung[role='alert'] {
+  border-color: #f0b4ad;
+  background: var(--fehler);
+}
+
+.meldung .tb {
+  flex: none;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.status {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  font-size: 14px;
+  line-height: 1.15;
+  text-align: right;
+  color: #4a5160;
+}
+
+.status-wartet {
+  color: #8a5a00;
+}
+
+.status-zugang {
+  color: #a32a24;
+  font-weight: 600;
+}
+
+/* Auf schmalen Bildschirmen (kleines iPad, geteilter Bildschirm) rücken die Knöpfe zusammen, damit der Status Platz hat. */
+@media (max-width: 780px) {
+  .pill {
+    padding: 0 8px;
+    font-size: 14px;
+  }
+
+  .status {
+    font-size: 12px;
+  }
+}
+
+/* Erst wenn es gar nicht mehr passt, bricht die Leiste um. */
+@media (max-width: 670px) {
+  .topbar {
+    flex-wrap: wrap;
+  }
+}
+
+/* Die quadratischen Knöpfe behalten auf jeder Breite ihre Größe, darum stehen sie nach den Regeln für schmale Bildschirme. */
+.pfeil {
+  width: 44px;
+  padding: 0;
+  font-size: 26px;
+}
+
+.zahnrad {
+  width: 44px;
+  padding: 0;
+}
+
+.zahnrad svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+
+.hinweis {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  z-index: 1;
+  box-sizing: border-box;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 8px 16px;
+  border: 1px solid #ecd9a0;
+  border-radius: 10px;
+  background: var(--hinweis);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+  font-size: 14px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.hinweis.fehler {
+  top: 56px;
+  border-color: #f0b4ad;
+  background: var(--fehler);
+}
+
+/* Unter der Leiste oben: die Seite und, über ihr schwebend, die Monatsreiter am rechten Rand. */
+.inhalt {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/*
+ * Das Fenster hat Sperre und Hinweis: Das zweite Fenster eines Geräts liest nur, und das steht gleich unter der Leiste,
+ * nicht als Meldung, die verschwindet. Es schiebt die Seite nach unten (anders als die Meldungen), denn es bleibt. Dasselbe Feld
+ * sagt, dass der Zugang umgestellt wird. Mit `#app >` gilt es vor der Regel für Absätze der App (sonst fehlen die Abstände).
+ */
+#app > .fensterhinweis {
+  flex: none;
+  margin: 0;
+  padding: 10px max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left));
+  border-bottom: 1px solid #ecd9a0;
+  background: var(--hinweis);
+  font-size: 15px;
+}
+
+/* Mit Hinweis (das Fenster liest nur, oder der Zugang wird umgestellt) schweben die Meldungen unter dem Hinweis, damit sie ihn nicht verdecken. */
+.mit-hinweis .meldungen {
+  margin-top: 48px;
+}
+
+/* Solange der Zugang umgestellt wird, ist die Leiste und die Seite gesperrt (`inert`): blasser, denn die App ist nicht kaputt, sie wartet. */
+.umstellen .topbar,
+.umstellen .inhalt {
+  opacity: 0.55;
+}
+
+/*
+ * Einrichtung und Einstellungen: Seiten zum Lesen und Antippen, ohne Schreibfläche. Sie scrollen, wenn der Bildschirm zu klein
+ * ist (kleines iPad, Tastatur eingeblendet). Die Schrift ist 16 Punkte oder größer, sonst zoomt Safari beim Antippen.
+ */
+.einrichten,
+.einstellungen {
+  box-sizing: border-box;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px max(16px, env(safe-area-inset-right)) 32px max(16px, env(safe-area-inset-left));
+  touch-action: manipulation;
+  -webkit-overflow-scrolling: touch;
+}
+
+.einrichten > *,
+.einstellungen > * {
+  max-width: 560px;
+}
+
+.einrichten h1,
+.einstellungen h1 {
+  margin: 0 0 12px;
+  font-size: 22px;
+}
+
+.einrichten > p {
+  margin: 0 0 16px;
+  font-size: 16px;
+  line-height: 1.4;
+  color: #4a5160;
+}
+
+/* Die Gruppe, die im zweiten Fenster alles sperrt, sieht aus wie kein Rahmen. */
+.einstellungen-gruppe {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.einstellungen-gruppe:disabled {
+  opacity: 0.6;
+}
+
+/* Eine Wahl aus wenigen: Jede Möglichkeit ist eine Fläche von mindestens 44 mal 44 Punkten. */
+.wahl {
+  min-width: 0;
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+}
+
+.wahl legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 14px;
+  color: #4a5160;
+}
+
+.wahl-flaechen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wahl-flaechen label {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Der Knopf selbst ist unsichtbar, aber für Tastatur und Sprachausgabe da; sichtbar ist die Fläche darüber. */
+.wahl-flaechen input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.wahl-flaechen span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--linie);
+  border-radius: 22px;
+  background: #fff;
+  font-size: 16px;
+}
+
+.wahl-flaechen input:checked + span {
+  border-color: var(--gruen);
+  background: var(--gruen);
+  color: #fff;
+}
+
+.wahl-flaechen input:focus-visible + span {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+.wahl-flaechen input:disabled {
+  cursor: default;
+}
+
+.zugang {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--linie);
+}
+
+.zugang h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.zugang-daten {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.zugang-daten > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  padding: 6px 0;
+}
+
+.zugang-daten dt {
+  flex: 0 0 104px;
+  color: #4a5160;
+}
+
+.zugang-daten dd {
+  flex: 1 1 200px;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Läuft der Zugang bald ab: gelb wie ein Hinweis, damit es auffällt, aber ohne Alarm. */
+.ablauf {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px solid #ecd9a0;
+  border-radius: 10px;
+  background: var(--hinweis);
+  font-size: 15px;
+}
+
+.zugang-formular {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.zugang-formular .feld label {
+  font-size: 14px;
+}
+
+/* Die Felder des Zugangs füllen die Breite: Der Token ist lang. */
+.zugang-formular .feld input,
+.zugang-formular .feld select {
+  width: 100%;
+}
+
+/* Leer nimmt sie keinen Platz, bleibt aber im Baum: Eine Meldung, die erst später erscheint, wird so von der Sprachausgabe gelesen. */
+.zugang-fehler,
+.einstellungen-fehler {
+  margin: 0;
+  font-size: 15px;
+  color: #a32a24;
+}
+
+.zugang-fehler:empty,
+.einstellungen-fehler:empty {
+  display: none;
+}
+
+.zugang-knoepfe {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.zugang-prueft {
+  font-size: 14px;
+  color: #4a5160;
+}
+
+/* Der Link „Zugang erneuern“ im Status: Er ist so groß wie ein Knopf, auch wenn nur Text zu sehen ist. */
+.status a {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 44px;
+  color: inherit;
+  text-decoration: underline;
+}
+
+.status a:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+/*
+ * Die Reiter liegen über der Seite und nehmen ihr keine Breite: Der Rand rechts neben dem Inhalt ist dafür frei.
+ * Der Streifen selbst fängt keine Berührung ab, nur die Reiter.
+ */
+.monatsreiter {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 44px;
+  pointer-events: none;
+}
+
+.reiter {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 44px;
+  border: 1px solid var(--linie);
+  border-right: 0;
+  border-radius: 10px 0 0 10px;
+  background: var(--leiste);
+  color: #4a5160;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  touch-action: manipulation;
+  pointer-events: auto;
+}
+
+.reiter[aria-current='true'] {
+  border-color: var(--gruen);
+  background: var(--gruen);
+  color: #fff;
+}
+
+/* Die Tageszahlen als Links: unsichtbar, solange niemand mit der Tastatur hineinspringt. */
+.tage {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.tage:focus-within {
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  width: auto;
+  height: auto;
+  max-height: calc(100% - 16px);
+  overflow: auto;
+  clip-path: none;
+  border: 1px solid var(--linie);
+  border-radius: 10px;
+  background: var(--leiste);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+}
+
+.tage a {
+  display: block;
+  padding: 10px 14px;
+  color: inherit;
+  font-size: 15px;
+  text-decoration: none;
+}
+
+.tage a:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: -2px;
+}
+
+/* Die Bühne ist die Fläche unter den Leisten. Die Schreibfläche füllt sie, der Schnellwechsel schwimmt darüber. */
+.buehne {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #e6e3da;
+}
+
+.flaeche {
+  position: absolute;
+  inset: 0;
+}
+
+.schnellwechsel {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 1px solid rgb(0 0 0 / 0.15);
+  border-radius: 50%;
+  background: var(--gruen);
+  color: #fff;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  touch-action: none;
+  cursor: grab;
+}
+
+.schnellwechsel[data-tool='eraser'] {
+  background: #7a3b36;
+}
+
+/*
+ * Der Weg zurück zur ganzen Seite, wo es keine Werkzeugleiste gibt (Firmen-PC, Seite nicht lesbar oder nicht geladen). Er liegt
+ * unten links auf der Bühne: Der Schnellwechsel (unten rechts) und die Werkzeuge gibt es in diesen Fällen nicht, und die
+ * Monatsreiter stehen am rechten Rand.
+ */
+.ganze-seite {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 1;
+  border-color: var(--linie);
+  background: var(--leiste);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.2);
+  touch-action: manipulation;
+}
+
+/* Knöpfe außerhalb der Leisten (Kopf der Besprechung, Rückfrage): mit Finger, Stift und Maus gleich zu treffen. */
+.knopf {
+  box-sizing: border-box;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--linie);
+  border-radius: 22px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.knopf:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.knopf:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+.knopf.gefahr {
+  border-color: #a32a24;
+  background: #a32a24;
+  color: #fff;
+}
+
+/* Die Rückfrage der App (Dialog.tsx): mitten auf dem Bildschirm, dahinter nichts zu treffen. */
+.rueckfrage {
+  box-sizing: border-box;
+  width: min(360px, calc(100% - 32px));
+  padding: 20px;
+  border: 1px solid var(--linie);
+  border-radius: 14px;
+  background: var(--leiste);
+  color: inherit;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.3);
+}
+
+.rueckfrage::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+
+.rueckfrage-text {
+  margin: 0 0 16px;
+  font-size: 18px;
+}
+
+.rueckfrage-knoepfe {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+/* Das Feld zum Anlegen in der Rückfrage (Dialog.tsx, `formDialog`): beschriftet, mit Fehlermeldung darunter. */
+.rueckfrage-feld {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: #4a5160;
+}
+
+.rueckfrage-feld input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--linie);
+  border-radius: 10px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.rueckfrage-feld input:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 1px;
+}
+
+.rueckfrage-feld input:disabled {
+  opacity: 0.6;
+}
+
+/* Leer nimmt sie keinen Platz, bleibt aber im Baum: Eine Meldung, die erst später erscheint, wird so von der Sprachausgabe gelesen. */
+.rueckfrage-fehler {
+  margin: 0 0 12px;
+  font-size: 15px;
+  color: #a32a24;
+}
+
+.rueckfrage-fehler:empty {
+  margin: 0;
+}
+
+.knopf.primaer {
+  border-color: var(--gruen);
+  background: var(--gruen);
+  color: #fff;
+}
+
+/*
+ * Die Karten der Tagesseite (TagPage.tsx): echte Bedienelemente über der Schreibfläche. Sie liegen in einer Ebene in
+ * Seiteneinheiten (1192 mal 1590), auf die PageView Maßstab und Versatz der Fläche legt: Sie wandern und zoomen mit der
+ * Seite. Alle Maße darin sind Seiteneinheiten. Auf einem iPad 11 Zoll im Hochformat ist eine Einheit etwa 0,67 Punkte
+ * groß: Schrift ab 17 Einheiten bleibt über 11 Punkten, und 68 Einheiten sind 44 Punkte, so groß wie eine Fläche zum
+ * Treffen mit Finger oder Stift sein soll.
+ */
+.karten-rahmen {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  overflow: clip; /* clip lässt auch kein Scrollen von Hand zu: Ein Feld im Fokus verschiebt die Karten nicht gegen die Seite */
+  pointer-events: none; /* nur die Karten selbst fangen Berührungen ab, der Rest gehört der Schreibfläche */
+}
+
+.karten {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1192px;
+  height: 1590px;
+  transform-origin: 0 0;
+}
+
+/* Bis die Fläche Maßstab und Versatz gemeldet hat, läge die Ebene an der falschen Stelle. */
+.karten:not([data-bereit]) {
+  visibility: hidden;
+}
+
+.karte {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: 44px 12px 10px; /* oben der Name der Karte, den die Seite in den Rahmen zeichnet */
+  overflow: hidden;
+  overflow: clip;
+  color: #2e3630;
+  font-size: 20px;
+  line-height: 1.35;
+  pointer-events: auto;
+  /*
+   * Eine Karte fängt Berührungen ab, die Schreibfläche darunter sieht sie nicht. Mit dem Standardwert würde ein Zwei-Finger-
+   * Zoom, der auf einer Karte beginnt, die ganze Oberfläche im Browser vergrößern (Leiste und Werkzeuge mit). Hier ist nur
+   * das senkrechte Blättern erlaubt. Verschieben und Zoomen mit Fingern übernimmt die Seite, wo immer die Finger beginnen
+   * (cardGestures.ts): Was die Karte nicht selbst blättern kann, geht an die Fläche.
+   */
+  touch-action: pan-y;
+}
+
+.karte p {
+  margin: 4px 0;
+}
+
+.karte button,
+.karte a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.karte button:focus-visible,
+.karte a:focus-visible,
+.karte input:focus-visible,
+.karte textarea:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 1px;
+}
+
+.karte .leer {
+  margin: 0;
+  padding: 12px 8px;
+  color: #5f6862;
+}
+
+/* Was man in einer Karte blättern kann, scrollt mit dem Finger senkrecht; alles andere an den Karten ist zum Tippen, und ein Finger, der zieht, gehört der Seite. */
+.karte .karten-inhalt,
+.karte .eintraege {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+/* ----- Eingaben und Knöpfe in den Karten ----- */
+
+.karte .knopf {
+  min-width: 68px;
+  height: 68px;
+  padding: 0 24px;
+  border-radius: 34px;
+  font-size: 20px;
+}
+
+.karte input[type='text'] {
+  box-sizing: border-box;
+  min-width: 0;
+  height: 68px;
+  padding: 0 14px;
+  border: 1px solid var(--linie);
+  border-radius: 12px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 20px; /* über 16 Punkten, sonst zoomt Safari beim Antippen in die Seite */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* ----- Morgenbriefing ----- */
+
+.karte .vorspann {
+  padding: 0 8px;
+}
+
+/* Die Zwischenüberschriften der Notiz (### im Markdown): klein und dicht über dem, was sie ankündigen. */
+.karte h4:not(.abschnitt) {
+  margin: 10px 8px 0;
+  color: #5f6862;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.karte .abschnitt {
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.karte .abschnitt button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 68px;
+  padding: 0 8px;
+  border: 0;
+  border-top: 1px solid #e3e8e4;
+  background: transparent;
+  color: var(--gruen);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.karte .abschnitt-pfeil {
+  flex: none;
+  width: 24px;
+  text-align: center;
+}
+
+.karte .abschnitt-inhalt {
+  padding: 0 0 8px;
+}
+
+.karte ul,
+.karte ol {
+  margin: 0;
+  padding: 0 0 0 28px;
+}
+
+.karte .abschnitt-inhalt > ul,
+.karte .vorspann > ul {
+  padding-left: 0;
+}
+
+.karte li {
+  margin: 0;
+}
+
+.karte li:not(.eintrag) {
+  list-style-position: inside;
+}
+
+.karte blockquote {
+  margin: 4px 0;
+  padding: 0 0 0 14px;
+  border-left: 4px solid #c9d3cb;
+  color: #5f6862;
+}
+
+.karte pre {
+  margin: 4px 0;
+  overflow-x: auto;
+  font-size: 17px;
+}
+
+.karte code {
+  font-size: 17px;
+}
+
+.karte table {
+  border-collapse: collapse;
+  font-size: 17px;
+}
+
+.karte th,
+.karte td {
+  padding: 2px 8px;
+  border: 1px solid #c9d3cb;
+}
+
+.karte hr {
+  border: 0;
+  border-top: 1px solid #c9d3cb;
+}
+
+.karte .karten-inhalt a {
+  color: #2f5f7a;
+}
+
+.karte .anhang {
+  display: inline-block;
+  padding: 0 10px;
+  border: 1px dashed #b3bdb5;
+  border-radius: 8px;
+  color: #5f6862;
+  font-size: 17px;
+}
+
+/* Ein Eintrag: Kästchen (oder Punkt), Text, Stift. Was darunter gehört (eine Untergliederung), steht in einer eigenen Zeile. */
+.karte li.eintrag {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  list-style: none;
+}
+
+.karte li.eintrag > ul,
+.karte li.eintrag > ol,
+.karte li.eintrag > p,
+.karte li.eintrag > blockquote,
+.karte li.eintrag > pre,
+.karte li.eintrag > table,
+.karte li.eintrag > hr {
+  box-sizing: border-box;
+  flex: 0 0 100%;
+  padding-left: 68px;
+}
+
+.karte li.eintrag > .text {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 4px 0;
+  overflow-wrap: anywhere;
+}
+
+.karte .haken-flaeche,
+.karte .punkt {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 68px;
+  height: 68px;
+}
+
+.karte .haken-flaeche {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.karte .haken-flaeche input {
+  width: 30px;
+  height: 30px;
+  margin: 0;
+  accent-color: var(--gruen);
+  cursor: pointer;
+}
+
+.karte .punkt::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #7d877f;
+}
+
+.karte .stift {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 68px;
+  height: 68px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #5f6862;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.karte .stift svg {
+  width: 28px;
+  height: 28px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.karte .stift:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.karte .bearbeiten {
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.karte .bearbeiten input {
+  flex: 1 1 100%;
+}
+
+.karte .karten-hinweis {
+  flex: none;
+  margin: 6px 0 0;
+  padding: 8px 12px;
+  border: 1px solid #ecd9a0;
+  border-radius: 10px;
+  background: var(--hinweis);
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.karte .karten-hinweis.fehler {
+  border-color: #f0b4ad;
+  background: var(--fehler);
+}
+
+/* Leer nimmt die Meldung keinen Platz, bleibt aber im Baum: Eine Meldung, die erst später erscheint, liest die Sprachausgabe nur vor, wenn es sie schon gab. */
+.karte .karten-hinweis:empty {
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+}
+
+/* Der Text einer Bearbeitung, deren Zeile es nicht mehr gibt: bleibt stehen, damit man ihn kopieren kann. */
+.karte .gerettet {
+  display: flex;
+  flex: none;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.karte .gerettet label {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: #5f6862;
+  font-size: 18px;
+}
+
+.karte .gerettet textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 14px;
+  border: 1px solid var(--linie);
+  border-radius: 12px;
+  background: #fff;
+  color: #2e3630;
+  font: inherit;
+  font-size: 20px; /* über 16 Punkten, sonst zoomt Safari beim Antippen in die Seite */
+  resize: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.karte .ergaenzen {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.karte .ergaenzen input[type='text'] {
+  flex: 1 1 0;
+}
+
+.karte .schalter {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 68px;
+  font-size: 18px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.karte .schalter input {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 52px;
+  height: 30px;
+  margin: 0;
+  border-radius: 15px;
+  background: #b3bdb5;
+  cursor: pointer;
+}
+
+.karte .schalter input::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+}
+
+.karte .schalter input:checked {
+  background: var(--gruen);
+}
+
+.karte .schalter input:checked::after {
+  transform: translateX(22px);
+}
+
+/* ----- Kalender ----- */
+
+.karte .monat {
+  margin: 0 0 2px;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.karte .wochentage {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  color: #5f6862;
+  font-size: 17px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.karte .raster {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  min-height: 0;
+}
+
+/*
+ * Die Tage im Kalender sind die einzige Ausnahme von den 44 pt für Bedienelemente in den Karten: Auf dem iPad (11 Zoll hochkant,
+ * ganze Seite) ist ein Tag etwa 34 mal 16 bis 19 pt groß. Ein ganzer Monat mit bis zu sechs Wochen muss in diese Karte passen
+ * (388 mal 256 Einheiten, siehe `tagLayout`), und eine höhere Karte schöbe die darunter weg. Mit dem Stift trifft man einen Tag
+ * sicher, mit dem Finger hilft ein Zoom: Die Karte zoomt mit der Seite. Das ist so gewollt und wird nicht größer gemacht.
+ */
+.karte .tag {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  border-radius: 8px;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  text-decoration: none;
+  touch-action: manipulation;
+}
+
+.karte .tag.aussen {
+  color: #a3aca5;
+}
+
+/* Feiertage wie im Planer. */
+.karte .tag.feiertag {
+  background: #f8efea;
+  color: #a8674f;
+}
+
+.karte .tag.termine::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.karte .tag.heute {
+  box-shadow: inset 0 0 0 2px var(--gruen);
+  font-weight: 700;
+}
+
+.karte .tag.gezeigt {
+  background: var(--gruen);
+  color: #fff;
+  font-weight: 700;
+}
+
+/* ----- Besprechungen ----- */
+
+.karte .eintraege {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.karte .eintrag-zeile {
+  display: grid;
+  grid-template-columns: 104px 1fr;
+  align-items: center;
+  column-gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 68px;
+  padding: 4px 8px;
+  border: 0;
+  border-bottom: 1px solid #e3e8e4;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.karte .eintrag-zeile .zeit {
+  grid-column: 1;
+  color: var(--gruen);
+  font-weight: 700;
+}
+
+.karte .eintrag-zeile .titel {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.karte .eintrag-zeile .zusatz {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #5f6862;
+  font-size: 17px;
+}
+
+.karte .knopf.neu {
+  flex: none;
+  margin-top: 6px;
+  border-style: dashed;
+}
