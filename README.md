@@ -14,6 +14,10 @@ Voraussetzung ist Node.js 22. Einmalig `npm install`, danach:
 | `npm test` | Unit-Tests mit Vitest |
 | `npm run e2e` | Ende-zu-Ende-Tests mit Playwright (baut die App vorher selbst) |
 
+## Änderungen erkennen
+
+Ob sich im Vault etwas geändert hat, fragt die App bei GitHub mit der Vergleichs-API (`compare`) ab: Sie vergleicht den zuletzt gesehenen Commit mit dem neuesten. GitHub schickt dabei zu jeder geänderten Datei auch den geänderten Text mit, auch für Dateien außerhalb der vier Ordner, die die App nutzt (`02 Projekte/`, `04 Ressourcen/Kalender/`, `05 Daily Notes/` und `07 Anhänge/Notizbuch/`). Die App nimmt aus der Antwort nur die Dateinamen. Den Text verwirft sie, sie speichert ihn nie und zeigt ihn nie an.
+
 ## Veröffentlichung
 
 Bei jedem Push auf `main` baut GitHub Actions die App und veröffentlicht sie mit GitHub Pages unter dem Pfad `/notizbuch/`.

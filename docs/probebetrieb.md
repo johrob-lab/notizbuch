@@ -137,21 +137,21 @@ Wo: Testkopie, iPad und ein PC. Dauer: etwa 15 Minuten. In der Testkopie ersetzt
 **Teil A: Verschiedene Zeilen**
 
 1. Schalte am iPad den Flugmodus ein (wie in 2.3).
-2. Tippe in der App am 29.10.2026 auf das Kästchen vor **Urlaube im Plan nachziehen**. Oben steht **Wartet auf Netz** mit einer Zahl.
+2. Tippe in der App am 29.10.2026 auf das Kästchen vor **Urlaube im Plan nachziehen**. Seit 1.4 ist es abgehakt, der Haken geht also weg. Auch das ist eine Änderung am Kästchen. Oben steht **Wartet auf Netz** mit einer Zahl.
 3. Öffne am PC github.com, das Test-Repo und die Datei `05 Daily Notes/2026-10-29.md`. Klicke über dem Dateiinhalt auf das Stift-Symbol (**Edit file**).
 4. Hänge an die Mail-Zeile (`- Max Muster, Freigabe Beispiel …`) ein paar Wörter an. Das ist eine andere Zeile als der Haken. Klicke auf **Commit changes…** und im Fenster auf **Commit changes**.
 5. Schalte am iPad den Flugmodus aus und warte, bis **Gesichert** dasteht.
 
-Erwartet: In der Karte **Morgenbriefing** stehen beide Änderungen, dein Haken und die Wörter vom PC. Es gibt keine Meldung über eine Konfliktkopie.
+Erwartet: In der Karte **Morgenbriefing** stehen beide Änderungen, deine Änderung am Kästchen und die Wörter vom PC. Es gibt keine Meldung über eine Konfliktkopie.
 
 **Teil B: Dieselbe Zeile**
 
 1. Schalte am iPad den Flugmodus wieder ein.
-2. Tippe in der App auf das Kästchen vor **Liste Planobjekte ergänzen**.
+2. Tippe in der App auf das Kästchen vor **Liste Planobjekte ergänzen**. Seit 2.1 ist es abgehakt, der Haken geht also weg. Auch das ist eine Änderung am Kästchen.
 3. Ändere am PC bei GitHub in der Datei genau diese Zeile (die mit `Liste Planobjekte ergänzen`), zum Beispiel ein Wort im Text, aber nichts zwischen den `%%`. Speichere mit **Commit changes**.
 4. Schalte am iPad den Flugmodus aus und warte einen Moment.
 
-Erwartet: Oben erscheint die Meldung **Konfliktkopie angelegt: 2026-10-29 (Konflikt).md**. Sie bleibt, bis du auf das **×** daneben tippst. Die Datei `2026-10-29.md` behält die Fassung vom PC. Deine Fassung aus der App steht in der neuen Datei `05 Daily Notes/2026-10-29 (Konflikt).md`. Nichts wird still überschrieben.
+Erwartet: Oben erscheint die Meldung **Konfliktkopie angelegt: 2026-10-29 (Konflikt).md**. Sie bleibt, bis du auf das **×** daneben tippst. Die Datei `2026-10-29.md` behält die Fassung vom PC. Deine Fassung aus der App, mit deiner Änderung am Kästchen, steht in der neuen Datei `05 Daily Notes/2026-10-29 (Konflikt).md`. Nichts wird still überschrieben.
 
 Im echten Vault holst du Änderungen aus der App in Obsidian mit dem Befehl **Git: Pull** (Befehlspalette öffnen, „Git: Pull“ tippen).
 
@@ -186,7 +186,26 @@ Wo: echtes Vault. Dieser Punkt braucht zwei Tage: einen Abend zum Schreiben und 
 4. Füge den neuen Token ein, wähle bei **Repository** `johrob-lab/2-gehirn`, stelle **Gültig bis** ein und tippe auf **Prüfen und speichern**.
 5. Die App leert dabei ihre Kopien der Testkopie, damit nichts davon im echten Vault landet. Dann lädt sie das echte Vault. Tippe auf **Heute**.
 
-Ab jetzt sind es echte Daten. Die App schreibt nur in `05 Daily Notes/` und `07 Anhänge/Notizbuch/`, alles andere ist für sie gesperrt. Jede Änderung ist ein Commit, den du bei GitHub zurückholen kannst. Am PC machst du denselben Wechsel mit **Zahnrad → Zugang → Zugang ändern**.
+Ab jetzt sind es echte Daten. Die App schreibt nur in `05 Daily Notes/` und `07 Anhänge/Notizbuch/`, alles andere ist für sie gesperrt. Jede Änderung ist ein Commit, den du bei GitHub zurückholen kannst.
+
+**Am PC ins echte Vault wechseln**
+
+Der Token `Notizbuch PC` aus 2.5 sieht nur das Test-Repo. Für das echte Vault bekommt der PC einen eigenen Token mit eigenem Namen und eigenem Ablaufdatum. So kannst du ihn einzeln widerrufen.
+
+1. Öffne am PC github.com und melde dich an.
+2. Klicke oben rechts auf dein Profilbild und dann auf **Settings**.
+3. Scrolle in der linken Spalte ganz nach unten und klicke auf **Developer settings**.
+4. Klicke auf **Personal access tokens** und dann auf **Fine-grained tokens**.
+5. Klicke auf **Generate new token**.
+6. Trage bei **Token name** `Notizbuch PC Vault` ein.
+7. Wähle bei **Expiration** den Eintrag **Custom** und ein Datum in einem Jahr. Merk dir das Datum, die App fragt gleich danach.
+8. Wähle bei **Resource owner** den Eintrag `johrob-lab`.
+9. Wähle bei **Repository access** den Eintrag **Only select repositories** und dann nur `johrob-lab/2-gehirn`.
+10. Öffne **Permissions** (bei manchen Ansichten heißt der Knopf **Add permissions**), suche bei **Repository permissions** den Eintrag **Contents** und stelle **Access** auf **Read and write**. Alles andere bleibt, wie es ist.
+11. Klicke unten auf **Generate token** und bestätige im Fenster noch einmal mit **Generate token**.
+12. Klicke auf das Kopier-Symbol neben dem Token. Er beginnt mit `github_pat_`. GitHub zeigt ihn nur dieses eine Mal.
+13. Wechsle in Edge zum Notizbuch und warte, bis oben **Gesichert** steht. Klicke auf das Zahnrad und dann bei **Zugang** auf **Zugang ändern**.
+14. Füge den Token mit **Strg + V** ein, wähle bei **Repository** `johrob-lab/2-gehirn`, stelle bei **Gültig bis** das Datum aus Schritt 7 ein und klicke auf **Prüfen und speichern**. Die App leert dabei ihre Kopien der Testkopie und lädt das echte Vault.
 
 **Am Abend**
 
@@ -205,6 +224,8 @@ Ab jetzt sind es echte Daten. Die App schreibt nur in `05 Daily Notes/` und `07 
 6. Öffne Outlook. Die Punkte, die du gestern in der App abgehakt hast, sind dort erledigt, so wie sonst nach dem Abhaken in Obsidian.
 
 Erwartet: Die Handschrift steht richtig abgetippt in der richtigen Tagesnotiz, und die Haken sind in Outlook angekommen.
+
+Gut zu wissen: Schreibst du dieselbe Seite an zwei Geräten und bleibt eines davon bis nach dem Abendlauf ohne Netz, übernimmt die Abendroutine die Striche dieses Geräts nicht mehr. Dann öffne in Obsidian die Datei `07 Anhänge/Notizbuch/_Verarbeitet.md`, lösche die Zeile mit dem Namen dieser Seite und lade die Änderung mit dem Git-Plugin hoch. Das ist die eine Ausnahme von „Nicht von Hand ändern“, das in der Datei steht. Am nächsten Abend vergleicht die Routine die ganze Seite mit der Tagesnotiz und ergänzt, was fehlt.
 
 - [ ] Klappt
 
