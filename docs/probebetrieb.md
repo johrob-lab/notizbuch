@@ -347,7 +347,8 @@ Deine Änderungen liegen zuerst auf dem Gerät und gehen erst danach zu GitHub. 
 | **Zugang erneuern** im Feld des Abgleichs | Der Token ist abgelaufen oder wurde widerrufen. | Tippe darauf. Du landest in den Einstellungen. Tippe auf **Zugang ändern** und trage einen neuen Token ein. Was noch wartet, bleibt erhalten. |
 | **Wartet auf Netz · n Änderungen** bleibt stehen | Die Änderungen sind auf dem Gerät gesichert, aber noch nicht bei GitHub. | Prüfe das Netz. Die App versucht es von selbst, wenn das Netz zurück ist, wenn du sie verlässt und wieder öffnest, und alle 3 Minuten. |
 | *Konfliktkopie angelegt: …* | Dieselbe Zeile wurde an zwei Orten geändert. | Siehe 2.4. Vergleiche beide Dateien und übernimm von Hand, was du behalten willst. |
-| *Speichern hat nicht geklappt: …* | Eine Datei ließ sich nicht abgleichen. | Schreib dir den Dateinamen und die Uhrzeit auf (siehe Abschnitt 4). Arbeite an anderen Seiten normal weiter. |
+| *Abgleich hat nicht geklappt: …* | Eine Datei ließ sich nicht hochladen oder holen. | Schreib dir den Dateinamen und die Uhrzeit auf (siehe Abschnitt 4). Arbeite an anderen Seiten normal weiter. |
+| *Abgleich hat nicht geklappt. Neuer Versuch folgt.* | Beim Abgleich ging etwas schief, das keine einzelne Datei betrifft. | Nichts weiter tun, die App versucht es von selbst wieder. Kommt die Meldung immer wieder, schreib dir die Uhrzeit auf (siehe Abschnitt 4). |
 | *Das Notizbuch ist schon in einem anderen Fenster offen.* | Dieses Fenster liest nur. | Schließe das andere Fenster und lade dieses neu. |
 | *Noch kein Briefing für diesen Tag* | Für diesen Tag gibt es keine Tagesnotiz. | Im Test-Repo: Öffne den 29.10.2026. Im echten Vault: Prüfe, ob die Morgenroutine gelaufen ist. |
 | *Briefing offline nicht verfügbar* | Die Tagesnotiz liegt noch nicht auf dem Gerät, und es gibt kein Netz. | Schalte das Netz ein und öffne die Seite noch einmal. |

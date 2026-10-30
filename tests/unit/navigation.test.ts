@@ -233,14 +233,83 @@ test('a conflict copy is announced with its file name, and the note can be close
   expect(all('.meldung')).toHaveLength(0);
 });
 
-test('an error with a file is announced with the file name, an error without a file is not', async () => {
+test('an error with a file is announced with the file name, an error without a file with a neutral notice of its own', async () => {
   const engine = fakeEngine();
   await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine }));
+  // Der Fehler kann auch beim Lesen kommen: Die Meldung sagt „Abgleich“, nicht „Speichern“.
   await act(() => engine.onError?.({ path: '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg', error: new Error('500') }));
-  expect(all('.meldung').map((n) => n.textContent)).toEqual([expect.stringContaining('Speichern hat nicht geklappt: 2026-10-29 Tag.svg')]);
-  // Ohne Datei weiß niemand, was gemeint wäre: die Statusanzeige sagt, was los ist
-  await act(() => engine.onError?.({ path: '', error: new Error('Netz') }));
-  expect(all('.meldung')).toHaveLength(1);
+  expect(all('.meldung').map((n) => n.textContent)).toEqual([expect.stringContaining('Abgleich hat nicht geklappt: 2026-10-29 Tag.svg')]);
+  // Ohne Datei geht der Fehler nicht verloren, er bekommt eine eigene Meldung, und die nur einmal
+  await act(() => {
+    engine.onError?.({ path: '', error: new Error('Netz') });
+    engine.onError?.({ path: '', error: new Error('noch einmal') });
+  });
+  const notes = all('.meldung');
+  expect(notes.map((n) => n.textContent)).toEqual([
+    expect.stringContaining('Abgleich hat nicht geklappt: 2026-10-29 Tag.svg'),
+    expect.stringContaining('Abgleich hat nicht geklappt. Neuer Versuch folgt.'),
+  ]);
+  expect(notes.map((n) => n.getAttribute('role'))).toEqual(['alert', 'alert']);
+  for (const note of notes) expect(note.textContent).not.toMatch(/[–—]/);
+  // Jede Meldung lässt sich mit einem Tipp schließen
+  await act(() => (notes[1].querySelector('button') as HTMLElement).click());
+  await act(() => (notes[0].querySelector('button') as HTMLElement).click());
+  expect(all('.meldung')).toHaveLength(0);
+});
+
+test('a note that only informs goes away by itself after 8 seconds, alerts and the start notice stay until tapped away', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+  vi.setSystemTime(new Date('2026-10-29T10:00:00Z'));
+  const engine = fakeEngine();
+  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine, startNotice: EXPIRY }));
+  await act(() => {
+    item('Index').click(); // nur ein Hinweis
+    engine.onConflict?.({ path: '05 Daily Notes/2026-10-29.md', copyPath: '05 Daily Notes/2026-10-29 (Konflikt).md' });
+    engine.onError?.({ path: '05 Daily Notes/2026-10-29.md', error: new Error('500') });
+    engine.onError?.({ path: '', error: new Error('Netz') });
+  });
+  const texts = () => all('.meldung').map((n) => n.textContent ?? '');
+  expect(texts()).toHaveLength(5);
+  await act(() => {
+    vi.advanceTimersByTime(7_999);
+  });
+  expect(texts().some((t) => t.includes('Index kommt mit Stufe C'))).toBe(true);
+  await act(() => {
+    vi.advanceTimersByTime(1);
+  });
+  expect(texts()).toEqual([
+    expect.stringContaining(EXPIRY),
+    expect.stringContaining('Konfliktkopie angelegt'),
+    expect.stringContaining('Abgleich hat nicht geklappt: 2026-10-29.md'),
+    expect.stringContaining('Abgleich hat nicht geklappt. Neuer Versuch folgt.'),
+  ]);
+  // auch viel später noch da
+  await act(() => {
+    vi.advanceTimersByTime(600_000);
+  });
+  expect(texts()).toHaveLength(4);
+  // Ein Hinweis, der vorher geschlossen wurde, lässt nichts zurück, und ein neuer bekommt wieder seine 8 Sekunden
+  await act(() => item('Jahr').click());
+  await act(() => (all('.meldung').at(-1)!.querySelector('button') as HTMLElement).click());
+  await act(() => item('Index').click());
+  await act(() => {
+    vi.advanceTimersByTime(7_000);
+  });
+  expect(texts().some((t) => t.includes('Index kommt mit Stufe C'))).toBe(true);
+  await act(() => {
+    vi.advanceTimersByTime(1_000);
+  });
+  expect(texts()).toHaveLength(4);
+});
+
+test('a bar that goes away leaves no timer behind', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+  vi.setSystemTime(new Date('2026-10-29T10:00:00Z'));
+  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
+  await act(() => item('Index').click());
+  expect(vi.getTimerCount()).toBe(1);
+  await act(() => render(null, host));
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 test('the same note twice is shown once', async () => {

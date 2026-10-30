@@ -483,7 +483,7 @@ test('a notice floats over the page and does not move it', async ({ page }) => {
   const before = await barAndSurface(page);
   await pen(page).stroke(LINE);
   await sendToBackground(page);
-  await expect(page.getByRole('alert').filter({ hasText: 'Speichern hat nicht geklappt' })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'Abgleich hat nicht geklappt' })).toBeVisible();
   expect(await barAndSurface(page)).toEqual(before);
 });
 
@@ -493,7 +493,7 @@ test('a save that fails is announced and the notice can be closed', async ({ pag
   const repo = await openSeeded(page, DAY, { failWrites: true });
   await pen(page).stroke(LINE);
   await sendToBackground(page);
-  const notice = page.getByRole('alert').filter({ hasText: 'Speichern hat nicht geklappt: 2026-10-29 Tag.svg' });
+  const notice = page.getByRole('alert').filter({ hasText: 'Abgleich hat nicht geklappt: 2026-10-29 Tag.svg' });
   await expect(notice).toBeVisible();
 
   await button(page, 'Hinweis schließen').click();

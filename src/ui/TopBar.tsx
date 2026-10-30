@@ -27,6 +27,10 @@ type Props = {
 type Note = { id: number; text: string; alert: boolean; start?: boolean };
 
 const SOON = 'kommt mit Stufe C';
+/** So lange steht ein Hinweis, der nur informiert. Meldungen über Fehler und Konflikte und der Hinweis zum Start bleiben, bis man sie schließt. */
+const INFO_MS = 8000;
+/** Ein Fehler beim Abgleich, der keine Datei betrifft. Es gibt ihn höchstens einmal, auch wenn er sich wiederholt. */
+const FAILED_WITHOUT_FILE = 'Abgleich hat nicht geklappt. Neuer Versuch folgt.';
 
 type Item = { name: string; view?: 'monat' | 'woche' | 'tag' };
 const ITEMS: Item[] = [
@@ -70,14 +74,30 @@ function Step({ label, symbol, from, to }: { label: string; symbol: string; from
 
 /**
  * Die Leiste oben: Blättern, die Ansichten, der Stand des Abgleichs und die Einstellungen. Hier laufen auch die
- * Meldungen der Engine auf (Konfliktkopie, Fehler beim Abgleich) und bleiben, bis man sie schließt.
+ * Meldungen der Engine auf (Konfliktkopie, Fehler beim Abgleich) und bleiben, bis man sie schließt. Ein Hinweis, der nur
+ * informiert, verschwindet nach 8 Sekunden von selbst.
  */
 export function TopBar({ route, engine, steps, startNotice, passive, blocked }: Props) {
   const [notes, setNotes] = useState<Note[]>([]);
   const lastId = useRef(0);
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const announce = useCallback((text: string, alert: boolean) => {
+    const id = ++lastId.current;
     // Dieselbe Meldung nur einmal: Ein Fehler, der sich wiederholt, soll die Leiste nicht füllen.
-    setNotes((list) => (list.some((n) => n.text === text) ? list : [...list, { id: ++lastId.current, text, alert }]));
+    setNotes((list) => (list.some((n) => n.text === text) ? list : [...list, { id, text, alert }]));
+    if (alert) return;
+    const timer = setTimeout(() => {
+      timers.current.delete(timer);
+      setNotes((list) => list.filter((n) => n.id !== id));
+    }, INFO_MS);
+    timers.current.add(timer);
+  }, []);
+  useEffect(() => {
+    const running = timers.current;
+    return () => {
+      for (const timer of running) clearTimeout(timer);
+      running.clear();
+    };
   }, []);
 
   // Der Hinweis zum Start läuft nur, wenn sich sein Text ändert (nicht bei jeder Seite): Wer ihn geschlossen hat, sieht ihn
@@ -95,8 +115,8 @@ export function TopBar({ route, engine, steps, startNotice, passive, blocked }: 
   // dem Anmelden kommt, ginge verloren.
   useLayoutEffect(() => {
     const conflict = ({ copyPath }: { copyPath: string }) => announce(`Konfliktkopie angelegt: ${fileName(copyPath)}`, true);
-    // Ohne Datei weiß niemand, was gemeint wäre. Dann sagt die Statusanzeige, was los ist.
-    const failed = ({ path }: { path: string }) => path && announce(`Speichern hat nicht geklappt: ${fileName(path)}`, true);
+    // Der Fehler kann beim Hochladen und beim Lesen kommen, darum heißt es „Abgleich“. Ohne Datei bleibt der Text allgemein.
+    const failed = ({ path }: { path: string }) => announce(path ? `Abgleich hat nicht geklappt: ${fileName(path)}` : FAILED_WITHOUT_FILE, true);
     engine.onConflict = conflict;
     engine.onError = failed;
     return () => {
