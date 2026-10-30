@@ -43,6 +43,38 @@ export class RateLimitError extends Error {
   }
 }
 
+/** So lange darf eine Anfrage an GitHub dauern. Danach gilt sie als fehlende Verbindung. */
+export const CALL_TIMEOUT_MS = 30_000;
+
+/**
+ * Führt eine Anfrage aus und wertet sie nach `ms` als fehlende Verbindung (`OfflineError`), wenn sie bis dahin nicht
+ * geantwortet hat. Die Anfrage selbst läuft weiter, ihre späte Antwort wird verworfen und lässt nichts hängen.
+ */
+export function withTimeout<T>(run: () => Promise<T>, ms = CALL_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new OfflineError('Zeitüberschreitung bei der Verbindung zu GitHub.')), ms);
+    const done = () => clearTimeout(timer);
+    let request: Promise<T>;
+    try {
+      request = run();
+    } catch (error) {
+      done();
+      reject(error);
+      return;
+    }
+    request.then(
+      (value) => {
+        done();
+        resolve(value);
+      },
+      (error: unknown) => {
+        done();
+        reject(error);
+      },
+    );
+  });
+}
+
 export type DirEntry = { name: string; path: string; sha: string; type: 'file' | 'dir' };
 
 /** Die Dateiliste eines Ordners im Vault. */

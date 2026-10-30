@@ -1,6 +1,6 @@
 import { signal, type Signal } from '@preact/signals';
 import { copyPathFor, mergeByKind } from './conflicts';
-import { AuthError, ConflictError, OfflineError, RateLimitError, statusOf, type GitHubClient } from './github';
+import { AuthError, ConflictError, OfflineError, RateLimitError, statusOf, withTimeout, type GitHubClient } from './github';
 import { normalizePath, PathNotAllowedError } from './paths';
 import type { SyncState, SyncStatus } from './status';
 import { syncedRecord, type FileRecord, type OutboxEntry, type Store, type StoreTx } from './store';
@@ -16,7 +16,6 @@ export type SyncClient = Pick<GitHubClient, 'getFile' | 'putFile' | 'deleteFile'
 const TEXT_DELAY_MS = 2000;
 const INK_DELAY_MS = 10_000;
 const POLL_INTERVAL_MS = 180_000;
-const CALL_TIMEOUT_MS = 30_000;
 /** So oft versucht ein Abgleich eine Datei zusammenzuführen, die sich währenddessen schon wieder geändert hat. */
 const CONFLICT_ATTEMPTS = 3;
 const MAX_COPY_NUMBER = 99;
@@ -397,31 +396,11 @@ export class SyncEngine {
 
   // ---------- Zugriff auf GitHub ----------
 
-  /** Jede Anfrage bekommt 30 s. Danach gilt sie als fehlende Verbindung. Eine gelungene Anfrage beweist, dass der Zugang geht. */
-  #call<T>(run: () => Promise<T>): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new OfflineError('Zeitüberschreitung bei der Verbindung zu GitHub.')), CALL_TIMEOUT_MS);
-      const done = () => clearTimeout(timer);
-      let request: Promise<T>;
-      try {
-        request = run();
-      } catch (error) {
-        done();
-        reject(error);
-        return;
-      }
-      request.then(
-        (value) => {
-          done();
-          if (this.#state === 'zugang') this.#setState('gesichert');
-          resolve(value);
-        },
-        (error: unknown) => {
-          done();
-          reject(error);
-        },
-      );
-    });
+  /** Jede Anfrage bekommt 30 s (`withTimeout`). Danach gilt sie als fehlende Verbindung. Eine gelungene Anfrage beweist, dass der Zugang geht. */
+  async #call<T>(run: () => Promise<T>): Promise<T> {
+    const value = await withTimeout(run);
+    if (this.#state === 'zugang') this.#setState('gesichert');
+    return value;
   }
 
   /**
@@ -442,7 +421,12 @@ export class SyncEngine {
    */
   #transact<T>(areas: Areas, work: (tx: StoreTx) => Promise<T>): Promise<T> {
     if (this.#frozen) return Promise.reject(new ReadOnlyError());
-    return this.#store.transact(areas, work);
+    // Verliert der Speicher die Verbindung mitten im Lauf, führt er `work` ein zweites Mal aus (`Store.run`), und bis dahin kann
+    // die Engine beendet worden sein: Auch dieser Versuch schreibt nichts mehr.
+    return this.#store.transact(areas, (tx) => {
+      if (this.#frozen) throw new ReadOnlyError();
+      return work(tx);
+    });
   }
 
   #message(path: string): string {
@@ -685,7 +669,7 @@ export class SyncEngine {
       await this.#settleDelete(entry);
     } catch (error) {
       if (error instanceof ConflictError) return this.#cancelDelete(entry);
-      if (isStop(error) || error instanceof PathNotAllowedError) throw error;
+      if (isStop(error) || error instanceof PathNotAllowedError || error instanceof ReadOnlyError) throw error; // beendet: keine Anfrage mehr
       // Eine fehlende Datei meldet der Client als allgemeinen Fehler (404). Ist sie weg, ist das Löschen erledigt.
       if ((await this.#call(() => this.#client.getFile(path))) === null) return this.#settleDelete(entry);
       throw error;

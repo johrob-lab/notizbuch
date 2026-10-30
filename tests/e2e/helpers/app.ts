@@ -473,6 +473,41 @@ export async function queueChange(page: Page, path: string, text: string): Promi
   );
 }
 
+/**
+ * Ändert die gespeicherten Einstellungen von außen, wie ein anderes Fenster es täte: Die Felder aus `patch` ersetzen die
+ * gespeicherten, alle anderen bleiben. Die Speicher in `clear` werden im selben Zug geleert (so tut es der Wechsel des
+ * Repositorys: Dateien, Warteschlange und Merkzettel gehören zum alten). Schreibt direkt in die IndexedDB (nur für Tests).
+ */
+export async function changeStoredSettings(page: Page, patch: Record<string, unknown>, clear: string[] = []): Promise<void> {
+  await page.evaluate(
+    ({ changes, stores }) =>
+      new Promise<void>((resolve, reject) => {
+        const open = indexedDB.open('notizbuch');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const tx = db.transaction(['settings', ...stores], 'readwrite');
+          const objects = tx.objectStore('settings');
+          const request = objects.get('settings');
+          request.onsuccess = () => objects.put({ ...request.result, ...changes }, 'settings');
+          for (const name of stores) tx.objectStore(name).clear();
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+          tx.onerror = () => {
+            db.close();
+            reject(tx.error);
+          };
+        };
+      }),
+    { changes: patch, stores: clear },
+  );
+}
+
+/** Wie oft die App seit Beginn nach dem neuesten Commit auf `main` gefragt hat: je laufender Engine einmal, wenn sie in den Vordergrund kommt. */
+export const headPolls = (repo: RepoMock): number => repo.requests.filter((request) => request.endsWith('/branches/main')).length;
+
 /** Die gespeicherten Einstellungen dieses Geräts. */
 export async function savedSettings(page: Page): Promise<Record<string, unknown> | null> {
   return (await idbRead(page, 'settings', 'settings')) as Record<string, unknown> | null;

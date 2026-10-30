@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { afterEach, beforeEach, expect, test } from 'vitest';
-import { accessProblem, cleanToken, expiryProblem, PendingChangesError, REPOS, saveAccess, tokenProblem, waitingText } from '../../src/lib/access';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { AccessChangedError, accessProblem, cleanToken, expiryProblem, PendingChangesError, REPOS, saveAccess, tokenProblem, waitingText } from '../../src/lib/access';
 import { loadSettings, saveSettings, type Settings } from '../../src/lib/settings';
 import { AuthError, errorFor, OfflineError, RateLimitError } from '../../src/sync/github';
 import { openStore, type Store } from '../../src/sync/store';
@@ -117,6 +117,41 @@ test('no problem text contains the token', async () => {
   expect(await accessProblem(clientThat(async () => ({ canWrite: false })))).not.toContain(TOKEN);
 });
 
+// ---------- GitHub antwortet nicht ----------
+
+test('a check that GitHub never answers ends as no connection after 30 seconds', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    const check = accessProblem(clientThat(() => new Promise<never>(() => undefined)));
+    let settled = false;
+    void check.then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await check).toBe('Keine Verbindung. Bitte später noch einmal.');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('an answer in time leaves no timer behind, and a late answer changes nothing', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    expect(await accessProblem(clientThat(async () => ({ canWrite: true })))).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+
+    let answer!: (value: { canWrite: boolean }) => void;
+    const slow = accessProblem(clientThat(() => new Promise<{ canWrite: boolean }>((resolve) => (answer = resolve))));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await slow).toBe('Keine Verbindung. Bitte später noch einmal.');
+    answer({ canWrite: true }); // zu spät: Das Ergebnis steht schon fest, und nichts bleibt hängen
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 // ---------- Warten Änderungen? ----------
 
 test('the refusal counts the changes that still wait', () => {
@@ -152,8 +187,8 @@ async function deviceWithData(o: { waiting?: string[] } = {}): Promise<Settings>
 }
 
 test('the first setup saves the settings with the defaults', async () => {
-  const saved = await saveAccess(store, input, 'iPad');
-  expect(saved).toEqual({
+  const { settings, switched } = await saveAccess(store, input, 'iPad', null);
+  expect(settings).toEqual({
     token: TOKEN,
     repo: 'johrob-lab/2-gehirn-test',
     device: 'iPad',
@@ -161,17 +196,18 @@ test('the first setup saves the settings with the defaults', async () => {
     prediction: true,
     tokenExpiry: '2027-10-29',
   });
-  expect(await loadSettings(store)).toEqual(saved);
+  expect(switched).toBe(false); // es gab nichts, was zu einem anderen Repo gehörte
+  expect(await loadSettings(store)).toEqual(settings);
 });
 
 test('the first setup keeps the device that was chosen', async () => {
-  const saved = await saveAccess(store, input, 'Firmen-PC');
-  expect(saved.device).toBe('Firmen-PC');
+  const { settings } = await saveAccess(store, input, 'Firmen-PC', null);
+  expect(settings.device).toBe('Firmen-PC');
   expect((await loadSettings(store))?.device).toBe('Firmen-PC');
 });
 
 test('the token is saved in the settings area of IndexedDB and nowhere else', async () => {
-  await saveAccess(store, input, 'iPad');
+  await saveAccess(store, input, 'iPad', null);
   expect(await store.getAll('files')).toEqual([]);
   expect(await store.getAll('outbox')).toEqual([]);
   expect(await store.getAll('meta')).toEqual([]);
@@ -181,20 +217,22 @@ test('the token is saved in the settings area of IndexedDB and nowhere else', as
 
 test('a new token for the same repository keeps the local data and the other settings', async () => {
   const old = await deviceWithData({ waiting: ['05 Daily Notes/2026-10-30.md'] });
-  const saved = await saveAccess(store, { token: TOKEN, repo: old.repo, expiry: '2027-11-30' }, 'iPad');
+  const { settings, switched } = await saveAccess(store, { token: TOKEN, repo: old.repo, expiry: '2027-11-30' }, 'iPad', old.repo);
   // Nur Token und Ablaufdatum ändern sich, auch wenn noch Änderungen warten. Das Gerät der Einrichtung zählt nicht mehr.
-  expect(saved).toEqual({ ...old, token: TOKEN, tokenExpiry: '2027-11-30' });
-  expect(await loadSettings(store)).toEqual(saved);
+  expect(settings).toEqual({ ...old, token: TOKEN, tokenExpiry: '2027-11-30' });
+  expect(switched).toBe(false);
+  expect(await loadSettings(store)).toEqual(settings);
   expect((await store.getAll('files')).map((f) => f.path).sort()).toEqual(['05 Daily Notes/2026-10-28.md', '05 Daily Notes/2026-10-29.md']);
   expect((await store.getAll('outbox')).map((e) => e.path)).toEqual(['05 Daily Notes/2026-10-30.md']);
   expect(await store.get('meta', 'lastHead')).toBe('abc123');
 });
 
-test('another repository clears the files, the queue and the notes of the old one', async () => {
+test('another repository clears the files, the queue and the notes of the old one, and says so', async () => {
   const old = await deviceWithData();
-  const saved = await saveAccess(store, input, 'iPad');
-  expect(saved).toEqual({ ...old, token: TOKEN, repo: 'johrob-lab/2-gehirn-test', tokenExpiry: '2027-10-29' });
-  expect(await loadSettings(store)).toEqual(saved);
+  const { settings, switched } = await saveAccess(store, input, 'iPad', old.repo);
+  expect(settings).toEqual({ ...old, token: TOKEN, repo: 'johrob-lab/2-gehirn-test', tokenExpiry: '2027-10-29' });
+  expect(switched).toBe(true);
+  expect(await loadSettings(store)).toEqual(settings);
   expect(await store.getAll('files')).toEqual([]);
   expect(await store.getAll('outbox')).toEqual([]);
   expect(await store.getAll('meta')).toEqual([]);
@@ -202,7 +240,7 @@ test('another repository clears the files, the queue and the notes of the old on
 
 test('another repository is refused while changes wait, and nothing changes', async () => {
   const old = await deviceWithData({ waiting: ['05 Daily Notes/2026-10-30.md', '05 Daily Notes/2026-10-31.md'] });
-  const refused = await saveAccess(store, input, 'iPad').catch((error: unknown) => error);
+  const refused = await saveAccess(store, input, 'iPad', old.repo).catch((error: unknown) => error);
   expect(refused).toBeInstanceOf(PendingChangesError);
   expect((refused as PendingChangesError).count).toBe(2);
   expect((refused as PendingChangesError).message).toBe(waitingText(2));
@@ -216,7 +254,7 @@ test('a change that is queued before the switch is seen by the switch', async ()
   const old = await deviceWithData();
   // Der Eintrag wird zuerst abgeschickt, das Umschalten gleich danach, ohne dazwischen zu warten.
   const queuing = store.put('outbox', entry('05 Daily Notes/2026-10-30.md'));
-  const switching = saveAccess(store, input, 'iPad');
+  const switching = saveAccess(store, input, 'iPad', old.repo);
   await queuing;
   await expect(switching).rejects.toBeInstanceOf(PendingChangesError);
   expect(await loadSettings(store)).toEqual(old);
@@ -226,13 +264,52 @@ test('a change that is queued before the switch is seen by the switch', async ()
 test('the same repository is no switch', async () => {
   const old = await deviceWithData({ waiting: ['05 Daily Notes/2026-10-30.md'] });
   // Dasselbe Repo: nichts wird gelöscht, auch nicht bei wartenden Änderungen.
-  await saveAccess(store, { token: TOKEN, repo: old.repo, expiry: '2027-10-29' }, 'iPad');
+  await saveAccess(store, { token: TOKEN, repo: old.repo, expiry: '2027-10-29' }, 'iPad', old.repo);
   expect(await store.getAll('outbox')).toHaveLength(1);
   expect(await store.getAll('files')).toHaveLength(2);
 });
 
 test('a refused switch does not leave the new token behind', async () => {
-  await deviceWithData({ waiting: ['05 Daily Notes/2026-10-30.md'] });
-  await expect(saveAccess(store, input, 'iPad')).rejects.toBeInstanceOf(PendingChangesError);
+  const old = await deviceWithData({ waiting: ['05 Daily Notes/2026-10-30.md'] });
+  await expect(saveAccess(store, input, 'iPad', old.repo)).rejects.toBeInstanceOf(PendingChangesError);
   expect(JSON.stringify(await loadSettings(store))).not.toContain(TOKEN);
+});
+
+// ---------- Der Zugang hat sich unterdessen geändert ----------
+
+test('the setup is refused when another window has set the device up meanwhile, and nothing is touched', async () => {
+  const old = await deviceWithData({ waiting: ['05 Daily Notes/2026-10-30.md'] });
+  const refused = await saveAccess(store, input, 'iPad', null).catch((error: unknown) => error);
+  expect(refused).toBeInstanceOf(AccessChangedError);
+  expect(await loadSettings(store)).toEqual(old); // die Einstellungen des anderen Fensters bleiben
+  expect(await store.getAll('files')).toHaveLength(2); // nichts wurde geleert
+  expect(await store.getAll('outbox')).toHaveLength(1);
+  expect(await store.get('meta', 'lastHead')).toBe('abc123');
+  expect(JSON.stringify(await loadSettings(store))).not.toContain(TOKEN);
+});
+
+test('a change is refused when the stored repository is not the one the caller works with', async () => {
+  // Ein anderes Fenster hat das Repo schon gewechselt; dieses Fenster glaubt noch, das Test-Repo sei in Gebrauch.
+  const old = await deviceWithData();
+  const refused = await saveAccess(store, { token: TOKEN, repo: 'johrob-lab/2-gehirn-test', expiry: '2027-10-29' }, 'iPad', 'johrob-lab/2-gehirn-test').catch(
+    (error: unknown) => error,
+  );
+  expect(refused).toBeInstanceOf(AccessChangedError);
+  expect(await loadSettings(store)).toEqual(old);
+  expect(await store.getAll('files')).toHaveLength(2); // der Wechsel zurück hätte die Dateien des anderen Repos geleert
+  expect(await store.get('meta', 'lastHead')).toBe('abc123');
+});
+
+test('a change on a device without settings is refused', async () => {
+  const refused = await saveAccess(store, input, 'iPad', 'johrob-lab/2-gehirn').catch((error: unknown) => error);
+  expect(refused).toBeInstanceOf(AccessChangedError);
+  expect(await loadSettings(store)).toBeNull();
+});
+
+test('the refusal has a German text and no token in it', async () => {
+  await deviceWithData();
+  const refused = (await saveAccess(store, input, 'iPad', null).catch((error: unknown) => error)) as Error;
+  expect(refused.name).toBe('AccessChangedError');
+  expect(refused.message).toBe('Der Zugang wurde inzwischen in einem anderen Fenster geändert.');
+  expect(refused.message).not.toContain(TOKEN);
 });

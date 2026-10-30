@@ -131,8 +131,9 @@ export function AccessForm({ repo: initialRepo, device: initialDevice, onSubmit,
         <button type="submit" class="knopf primaer" disabled={busy}>
           Prüfen und speichern
         </button>
+        {/* Solange GitHub gefragt wird, lässt sich nichts abbrechen: Die Prüfung läuft weiter, und ein neues Formular daneben wäre ein zweiter Versuch. */}
         {onCancel && (
-          <button type="button" class="knopf" onClick={onCancel}>
+          <button type="button" class="knopf" disabled={busy} onClick={onCancel}>
             Abbrechen
           </button>
         )}

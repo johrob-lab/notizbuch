@@ -176,6 +176,54 @@ test('a refresh that is still on its way when the engine closes is not taken ove
   expect((await h.store.get('files', A))?.sha).toBe('s1');
 });
 
+test('an upload that GitHub accepts after the engine closed leaves its entry in the queue', async () => {
+  await h.e.write(A, 'x', 'md');
+  const gate = h.fake.pause('put'); // der Upload ist unterwegs
+  const flushing = h.e.flush();
+  await gate.reached;
+  h.e.close(); // das Repo wird gewechselt
+  gate.release(); // GitHub nimmt den Upload danach noch an
+  await flushing;
+  expect(h.fake.files[A]?.text).toBe('x'); // er ist angekommen ...
+  // ... aber die beendete Engine erledigt nichts mehr: Der Eintrag bleibt, und die Prüfung beim Wechsel sieht ihn.
+  expect((await h.store.getAll('outbox')).map((e) => e.path)).toEqual([A]);
+  expect((await h.store.get('files', A))?.sha).toBeNull();
+});
+
+test('a write that the store repeats after a lost connection is refused when the engine closed meanwhile', async () => {
+  const real = h.store.transact.bind(h.store);
+  let first = true;
+  vi.spyOn(h.store, 'transact').mockImplementation((areas, work) =>
+    real(areas, async (tx) => {
+      if (first) {
+        first = false;
+        h.e.close(); // während des ersten Versuchs wird die Engine beendet ...
+        throw new DOMException('Die Verbindung ist zu.', 'InvalidStateError'); // ... und der Browser beendet die Verbindung
+      }
+      return work(tx); // der Speicher versucht es noch einmal und führt den Auftrag der Engine ein zweites Mal aus
+    }),
+  );
+  await expect(h.e.write(A, 'x', 'md')).rejects.toBeInstanceOf(ReadOnlyError);
+  expect(await h.store.getAll('files')).toEqual([]);
+  expect(await h.store.getAll('outbox')).toEqual([]);
+});
+
+test('a closed engine that was about to delete a file sends no further request', async () => {
+  h.fake.files[A] = { text: 'x', sha: 's1' };
+  // Das Löschen wartet, und das Gerät kennt die Fassung auf GitHub nicht: Der Abgleich fragt zuerst danach.
+  await h.store.put('outbox', { path: A, text: 'x', kind: 'md', baseSha: null, baseText: null, queuedAt: 1, deleted: true });
+  const gate = h.fake.pause('get');
+  const flushing = h.e.flush();
+  await gate.reached;
+  h.e.close(); // das Repo wird gewechselt, während die Frage unterwegs ist
+  gate.release();
+  await flushing;
+  await quiet();
+  expect(h.fake.log).toEqual([`get ${A}`]); // nur die Frage, die schon unterwegs war: kein Löschen, keine zweite Frage
+  expect(h.fake.files[A]).toBeDefined();
+  expect(await h.store.count('outbox')).toBe(1);
+});
+
 // ---------- Gerät und Zugang ändern ----------
 
 test('the device in the commit message can change while the engine runs', async () => {

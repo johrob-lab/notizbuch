@@ -1,5 +1,19 @@
 import { expect, test as base, type Locator, type Page } from '@playwright/test';
-import { addRepo, bringToForeground, lastHead, localFiles, networkBack, openSeeded, queueChange, queued, savedSettings, sendToBackground, type OpenOptions } from './helpers/app';
+import {
+  addRepo,
+  bringToForeground,
+  changeStoredSettings,
+  headPolls,
+  lastHead,
+  localFiles,
+  networkBack,
+  openSeeded,
+  queueChange,
+  queued,
+  savedSettings,
+  sendToBackground,
+  type OpenOptions,
+} from './helpers/app';
 import { pen } from './helpers/pointer';
 
 // Die Einstellungen: Glättung, Vorhersage, Gerät und der Zugang. GitHub antwortet aus Repos im Speicher
@@ -46,6 +60,7 @@ const OLD_REPO = 'johrob-lab/2-gehirn-test';
 const NEW_REPO = 'johrob-lab/2-gehirn';
 const OLD_TOKEN = 'github_pat_TEST_ALT_0123456789';
 const NEW_TOKEN = 'github_pat_TEST_NEU_0123456789';
+const RENEWED_TOKEN = 'github_pat_TEST_ERNEUERT_0123456789';
 const DAY = '#/tag/2026-10-29';
 const NOTE = '05 Daily Notes/2026-10-29.md';
 const TAG = '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg';
@@ -60,6 +75,10 @@ const LINE: [number, number][] = [
 ];
 /** Ein Zickzack mit Ausschlägen von 40 Einheiten: Je stärker die Glättung, desto flacher wird er. */
 const zigzag = (y: number): [number, number][] => Array.from({ length: 21 }, (_, i): [number, number] => [200 + i * 20, y + (i % 2 === 0 ? 0 : 40)]);
+/** Solange das Repository gewechselt wird, wartet die App und sagt es. */
+const SWITCHING = 'Zugang wird umgestellt …';
+/** Eine zweite Änderung des Zugangs, während die erste noch geprüft wird. */
+const BUSY = 'Es läuft schon eine Änderung des Zugangs. Bitte kurz warten.';
 const WARNING = (day: string) => `Dein Zugang läuft am ${day} ab. Bitte rechtzeitig erneuern.`;
 /** Die Notiz des Tages in dem Repo, zu dem gewechselt wird. */
 const OTHER_NOTE = ['---', 'date: 2026-10-29', 'tags: [daily]', '---', '# 2026-10-29', '', '## Morgenbriefing (automatisch)', '', '- [ ] Aufgabe aus dem anderen Repo %%todo:AAMkNEU1%%', ''].join('\n');
@@ -295,6 +314,38 @@ test('an expiry that has passed is warned about, too', async ({ page }) => {
 test('a device saved without an expiry has no notice', async ({ page }) => {
   await openSeeded(page, DAY, { repo: OLD_REPO, token: OLD_TOKEN });
   await expect(status(page)).toHaveText('Gesichert');
+  await expect(page.locator('.meldung')).toHaveCount(0);
+});
+
+test('the settings show the warning of the day they are opened on, also after the app has been open for days', async ({ page }) => {
+  await open(page, { settings: { tokenExpiry: '2026-11-13' } }); // am 29.10. noch 15 Tage
+  await expect(status(page)).toHaveText('Gesichert');
+  await expect(page.locator('.meldung')).toHaveCount(0);
+  // Einen Tag später (die App war die ganze Zeit offen): noch 14 Tage. Die Einstellungen rechnen beim Öffnen, nicht beim Start.
+  await page.clock.setFixedTime(new Date('2026-10-30T12:00:00+01:00'));
+  await toSettings(page);
+  await expect(page.locator('.einstellungen .ablauf')).toHaveText(WARNING('13.11.2026'));
+});
+
+test('an app that comes back to the foreground on a later day shows the expiry notice then, once', async ({ page }) => {
+  await open(page, { settings: { tokenExpiry: '2026-11-13' } });
+  await expect(status(page)).toHaveText('Gesichert');
+  await expect(page.locator('.meldung')).toHaveCount(0);
+  // Gleicher Tag: Zurück in den Vordergrund bringt keinen Hinweis
+  await sendToBackground(page);
+  await bringToForeground(page);
+  await page.waitForTimeout(200);
+  await expect(page.locator('.meldung')).toHaveCount(0);
+  // Am nächsten Tag liegt der Ablauf 14 Tage entfernt: Der Hinweis kommt, ohne dass die App neu startet
+  await page.clock.setFixedTime(new Date('2026-10-30T12:00:00+01:00'));
+  await sendToBackground(page);
+  await bringToForeground(page);
+  await expect(notice(page, WARNING('13.11.2026'))).toBeVisible();
+  // Geschlossen bleibt er weg, auch wenn die App wieder in den Vordergrund kommt
+  await notice(page, WARNING('13.11.2026')).getByRole('button', { name: 'Hinweis schließen' }).click();
+  await sendToBackground(page);
+  await bringToForeground(page);
+  await page.waitForTimeout(200);
   await expect(page.locator('.meldung')).toHaveCount(0);
 });
 
@@ -585,4 +636,210 @@ test('a token that may not write into the new repository is refused with its own
   await submit(page).click();
   await expect(problem(page)).toHaveText('Der Token darf nicht schreiben. Bitte beim Token „Contents: Read and write“ wählen.');
   expect(await savedSettings(page)).toMatchObject({ token: OLD_TOKEN, repo: OLD_REPO });
+});
+
+// ---------- Nur eine Änderung des Zugangs zugleich ----------
+
+test('a switch of the repository can not be cancelled while GitHub is asked, and afterwards exactly one engine runs on the new repository', async ({ page }) => {
+  const oldRepo = await open(page);
+  const newRepo = await addRepo(page, NEW_REPO);
+  await expect.poll(() => localFiles(page)).toContain(NOTE);
+  await toSettings(page);
+  await change(page).click();
+  await token(page).fill(NEW_TOKEN);
+  await repository(page).selectOption(NEW_REPO);
+  let answer!: () => void;
+  newRepo.checkGate = new Promise<void>((resolve) => (answer = resolve));
+  await submit(page).click();
+  await expect.poll(() => newRepo.requests).toEqual([`GET /repos/${NEW_REPO}`]);
+
+  // GitHub hat noch nicht geantwortet: Der Wechsel lässt sich nicht abbrechen, und die App sagt, dass sie wartet
+  await expect(page.getByText(SWITCHING, { exact: true })).toBeVisible();
+  await expect(page.locator('.zugang-knoepfe button', { hasText: 'Abbrechen' })).toBeDisabled();
+  await expect(page.locator('.zugang-knoepfe button', { hasText: 'Prüfen und speichern' })).toBeDisabled();
+
+  answer();
+  await expect(page.getByText(NEW_REPO, { exact: true })).toBeVisible();
+  await expect(page.getByText(SWITCHING)).toHaveCount(0);
+  expect(await savedSettings(page)).toMatchObject({ token: NEW_TOKEN, repo: NEW_REPO });
+
+  // Es läuft genau eine Engine, und sie gehört zum neuen Repo: Ein Zurückkommen in den Vordergrund fragt es einmal, das alte nie
+  await expect.poll(() => lastHead(page)).not.toBeNull(); // die neue Engine hat ihre erste Abfrage hinter sich
+  const [oldPolls, newPolls] = [headPolls(oldRepo), headPolls(newRepo)];
+  await bringToForeground(page);
+  await expect.poll(() => headPolls(newRepo)).toBe(newPolls + 1);
+  await page.waitForTimeout(300);
+  expect(headPolls(newRepo)).toBe(newPolls + 1);
+  expect(headPolls(oldRepo)).toBe(oldPolls);
+
+  // Und das Fenster schreibt: Ein Strich geht ins neue Repo
+  await toDay(page);
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await expect(page.getByRole('toolbar', { name: 'Werkzeuge' })).toBeVisible();
+  await pen(page).stroke(LINE);
+  await sendToBackground(page);
+  await expect.poll(() => newRepo.puts.map((p) => p.path)).toEqual([TAG]);
+  await expect(status(page)).toHaveText('Gesichert');
+  expect(oldRepo.puts).toEqual([]);
+  expect(newRepo.used.every((used) => used === NEW_TOKEN)).toBe(true);
+});
+
+test('a change of the access that starts while another one is still checked is refused, and nothing runs twice afterwards', async ({ page }) => {
+  const oldRepo = await open(page);
+  const newRepo = await addRepo(page, NEW_REPO);
+  await expect.poll(() => localFiles(page)).toContain(NOTE);
+  await toSettings(page);
+  // Zuerst ein neuer Token für das Repo in Gebrauch; GitHub antwortet erst, wenn der Test es erlaubt
+  let renewed!: () => void;
+  oldRepo.checkGate = new Promise<void>((resolve) => (renewed = resolve));
+  await change(page).click();
+  await token(page).fill(RENEWED_TOKEN);
+  await submit(page).click();
+  await expect.poll(() => oldRepo.requests.filter((request) => request === `GET /repos/${OLD_REPO}`)).toHaveLength(1);
+
+  // Ein neuer Token sperrt die App nicht: Man verlässt die Seite und kommt wieder, das Formular ist dann ein neues
+  await toDay(page);
+  await toSettings(page);
+  await change(page).click();
+  await token(page).fill(NEW_TOKEN);
+  await repository(page).selectOption(NEW_REPO);
+  await submit(page).click();
+  await expect(problem(page)).toHaveText(BUSY);
+  expect(newRepo.requests).toEqual([]); // das andere Repo wurde nicht einmal gefragt
+  expect(await savedSettings(page)).toMatchObject({ token: OLD_TOKEN, repo: OLD_REPO });
+
+  // Jetzt antwortet GitHub: Die erste Änderung gilt, die App arbeitet mit dem neuen Token weiter
+  renewed();
+  await expect.poll(() => saved(page, 'token')).toBe(RENEWED_TOKEN);
+  expect(await savedSettings(page)).toMatchObject({ token: RENEWED_TOKEN, repo: OLD_REPO });
+  await expect(status(page)).toHaveText('Gesichert');
+
+  // Die zweite war nur abgewiesen: Das Formular ist noch offen, und nun geht sie
+  await expect(submit(page)).toBeEnabled();
+  await submit(page).click();
+  await expect(page.getByText(NEW_REPO, { exact: true })).toBeVisible();
+  expect(await savedSettings(page)).toMatchObject({ token: NEW_TOKEN, repo: NEW_REPO });
+  expect(newRepo.puts).toEqual([]);
+
+  // Genau eine Engine läuft, für das neue Repo, und das Fenster schreibt
+  await expect.poll(() => lastHead(page)).not.toBeNull();
+  const [oldPolls, newPolls] = [headPolls(oldRepo), headPolls(newRepo)];
+  await bringToForeground(page);
+  await expect.poll(() => headPolls(newRepo)).toBe(newPolls + 1);
+  await page.waitForTimeout(300);
+  expect(headPolls(newRepo)).toBe(newPolls + 1);
+  expect(headPolls(oldRepo)).toBe(oldPolls);
+  await toDay(page);
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await expect(page.getByRole('toolbar', { name: 'Werkzeuge' })).toBeVisible();
+  await pen(page).stroke(LINE);
+  await sendToBackground(page);
+  await expect.poll(() => newRepo.puts.map((p) => p.path)).toEqual([TAG]);
+  await expect(status(page)).toHaveText('Gesichert');
+  expect(oldRepo.puts).toEqual([]);
+});
+
+test('while the repository is switched the app waits: no page can be opened and nothing can be written', async ({ page }) => {
+  await open(page);
+  const newRepo = await addRepo(page, NEW_REPO);
+  await expect.poll(() => localFiles(page)).toContain(NOTE);
+  await toSettings(page);
+  await change(page).click();
+  await token(page).fill(NEW_TOKEN);
+  await repository(page).selectOption(NEW_REPO);
+  let answer!: () => void;
+  newRepo.checkGate = new Promise<void>((resolve) => (answer = resolve));
+  await submit(page).click();
+  await expect.poll(() => newRepo.requests).toEqual([`GET /repos/${NEW_REPO}`]);
+  await expect(page.getByText(SWITCHING, { exact: true })).toBeVisible();
+
+  // Ein Tipp auf einen Link der Leiste führt nirgends hin: Die Adresse bleibt, nach jedem einzelnen Tipp
+  for (const link of [page.locator('.ansichten a', { hasText: 'Tag' }), page.getByRole('link', { name: 'Heute', exact: true })]) {
+    const box = (await link.boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(150);
+    expect(await hash(page)).toBe('#/einstellungen');
+  }
+  // Auch eine Adresse von anderswoher (Zurückwischen, getippt) öffnet keine Seite: Es erscheint keine Schreibfläche
+  await page.evaluate(() => {
+    window.location.hash = '#/tag/2026-10-29';
+  });
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId('surface')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Einstellungen' })).toBeVisible();
+  await expect(page.getByText(SWITCHING, { exact: true })).toBeVisible();
+
+  // Danach öffnet sich die Seite, nach der gefragt wurde, mit dem neuen Repo
+  answer();
+  await expect(page.getByTestId('surface')).toBeVisible();
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await expect(page.getByText(SWITCHING)).toHaveCount(0);
+  await expect(page.getByRole('toolbar', { name: 'Werkzeuge' })).toBeVisible();
+  expect(await hash(page)).toBe(DAY);
+  await pen(page).stroke(LINE);
+  await sendToBackground(page);
+  await expect.poll(() => newRepo.puts.map((p) => p.path)).toEqual([TAG]);
+});
+
+test('after a refused switch the app goes on with the settings that are stored, not with those it read before', async ({ page }) => {
+  const oldRepo = await open(page);
+  const newRepo = await addRepo(page, NEW_REPO);
+  await expect.poll(() => localFiles(page)).toContain(NOTE);
+  await toSettings(page);
+  await change(page).click();
+  await token(page).fill(NEW_TOKEN);
+  await repository(page).selectOption(NEW_REPO);
+  let answer!: () => void;
+  newRepo.checkGate = new Promise<void>((resolve) => (answer = resolve));
+  await submit(page).click();
+  await expect.poll(() => newRepo.requests).toEqual([`GET /repos/${NEW_REPO}`]);
+  // Währenddessen kommt eine Änderung in die Warteschlange und eine Einstellung ändert sich anderswo
+  await queueChange(page, LATE, 'Nachtrag');
+  await changeStoredSettings(page, { smoothing: 'stark' });
+  answer();
+
+  await expect(problem(page)).toHaveText('Erst sichern: Es wartet noch 1 Änderung.');
+  await expect(group(page, 'Glättung').getByRole('radio', { name: 'stark' })).toBeChecked();
+  expect(await saved(page, 'smoothing')).toBe('stark');
+  // Die Änderung geht an das Repo, zu dem sie gehört, und die App ist wieder bedienbar
+  await expect.poll(() => oldRepo.puts.map((p) => p.path)).toEqual([LATE]);
+  await expect(status(page)).toHaveText('Gesichert');
+  await expect(page.getByText(SWITCHING)).toHaveCount(0);
+  expect(newRepo.puts).toEqual([]);
+});
+
+test('a change of the access that finds another repository stored saves nothing, and the app goes on with the stored one on a single engine', async ({ page }) => {
+  const oldRepo = await open(page);
+  const newRepo = await addRepo(page, NEW_REPO);
+  await expect.poll(() => localFiles(page)).toContain(NOTE);
+  await toSettings(page);
+  // Ein anderes Fenster hat das Repository inzwischen gewechselt: neue Einstellungen, Dateien und Warteschlange geleert
+  await changeStoredSettings(page, { repo: NEW_REPO, token: NEW_TOKEN }, ['files', 'outbox', 'meta']);
+  await change(page).click();
+  await token(page).fill(RENEWED_TOKEN); // ein neuer Token für das Repo, das dieses Fenster noch in Gebrauch glaubt
+  await submit(page).click();
+
+  await expect(problem(page)).toHaveText('Der Zugang wurde inzwischen in einem anderen Fenster geändert.');
+  expect(await savedSettings(page)).toMatchObject({ token: NEW_TOKEN, repo: NEW_REPO }); // nichts wurde überschrieben
+  await expect(page.locator('.zugang-daten dd').nth(1)).toHaveText(NEW_REPO); // die Seite zeigt, was gilt
+
+  // Die alte Engine ist beendet, die neue läuft für das gespeicherte Repository: Nur sie fragt, wenn die App in den Vordergrund kommt
+  await expect.poll(() => lastHead(page)).not.toBeNull();
+  await expect(status(page)).toHaveText('Gesichert');
+  const [oldPolls, newPolls] = [headPolls(oldRepo), headPolls(newRepo)];
+  await bringToForeground(page);
+  await expect.poll(() => headPolls(newRepo)).toBe(newPolls + 1);
+  await page.waitForTimeout(300);
+  expect(headPolls(newRepo)).toBe(newPolls + 1);
+  expect(headPolls(oldRepo)).toBe(oldPolls);
+
+  // Und das Fenster schreibt in das gespeicherte Repository
+  await toDay(page);
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await expect(page.getByRole('toolbar', { name: 'Werkzeuge' })).toBeVisible();
+  await pen(page).stroke(LINE);
+  await sendToBackground(page);
+  await expect.poll(() => newRepo.puts.map((p) => p.path)).toEqual([TAG]);
+  await expect(status(page)).toHaveText('Gesichert');
+  expect(oldRepo.puts).toEqual([]);
 });

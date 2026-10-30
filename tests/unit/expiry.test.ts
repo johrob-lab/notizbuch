@@ -62,6 +62,25 @@ test('a change between summer and winter time does not move the border', () => {
   expect(expiryWarning(new Date('2027-04-04T10:00:00Z'), spring)).toBeNull();
 });
 
+test('the border moves across the end of the year, and across a leap day', () => {
+  // Vom 22.12. bis zum 05.01. sind es 14 Kalendertage, vom 21.12. 15.
+  const expiry = new Date('2027-01-05T10:00:00Z');
+  expect(expiryWarning(expiry, new Date('2026-12-22T10:00:00Z'))).toBe(TEXT('05.01.2027'));
+  expect(expiryWarning(expiry, new Date('2026-12-21T10:00:00Z'))).toBeNull();
+  // Im Schaltjahr 2028 hat der Februar 29 Tage: Vom 16.02. bis zum 01.03. sind es 14.
+  const march = new Date('2028-03-01T10:00:00Z');
+  expect(expiryWarning(march, new Date('2028-02-16T10:00:00Z'))).toBe(TEXT('01.03.2028'));
+  expect(expiryWarning(march, new Date('2028-02-15T10:00:00Z'))).toBeNull();
+});
+
+test('after midnight in Vienna on New Year the new year counts, although it is still the old one in UTC', () => {
+  // 2026-12-31T23:30:00Z ist in Wien schon der 1. Januar 2027, 00:30 Uhr.
+  const now = new Date('2026-12-31T23:30:00Z');
+  expect(todayVienna(now)).toBe('2027-01-01');
+  expect(expiryWarning(new Date('2027-01-15T10:00:00Z'), now)).toBe(TEXT('15.01.2027')); // 14 Tage
+  expect(expiryWarning(new Date('2027-01-16T10:00:00Z'), now)).toBeNull(); // 15 Tage
+});
+
 // ---------- Das Datum aus der Einrichtung ----------
 
 test('a day is expressed as its last moment in Vienna, in summer time and in winter time', () => {

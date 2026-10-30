@@ -415,9 +415,10 @@ body {
 
 /*
  * Das Fenster hat Sperre und Hinweis: Das zweite Fenster eines Geräts liest nur, und das steht gleich unter der Leiste,
- * nicht als Meldung, die verschwindet. Es schiebt die Seite nach unten (anders als die Meldungen), denn es bleibt.
+ * nicht als Meldung, die verschwindet. Es schiebt die Seite nach unten (anders als die Meldungen), denn es bleibt. Dasselbe Feld
+ * sagt, dass der Zugang umgestellt wird. Mit `#app >` gilt es vor der Regel für Absätze der App (sonst fehlen die Abstände).
  */
-.fensterhinweis {
+#app > .fensterhinweis {
   flex: none;
   margin: 0;
   padding: 10px max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left));
@@ -426,9 +427,15 @@ body {
   font-size: 15px;
 }
 
-/* Im Fenster, das nur liest, schweben die Meldungen unter dem Hinweis, damit sie ihn nicht verdecken. */
-.nur-lesen .meldungen {
+/* Mit Hinweis (das Fenster liest nur, oder der Zugang wird umgestellt) schweben die Meldungen unter dem Hinweis, damit sie ihn nicht verdecken. */
+.mit-hinweis .meldungen {
   margin-top: 48px;
+}
+
+/* Solange der Zugang umgestellt wird, ist die Leiste und die Seite gesperrt (`inert`): blasser, denn die App ist nicht kaputt, sie wartet. */
+.umstellen .topbar,
+.umstellen .inhalt {
+  opacity: 0.55;
 }
 
 /*

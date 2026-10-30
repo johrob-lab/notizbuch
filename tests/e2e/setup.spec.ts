@@ -1,5 +1,5 @@
 import { expect, test as base, type Page } from '@playwright/test';
-import { openFresh, savedSettings } from './helpers/app';
+import { addRepo, localFiles, openFresh, savedSettings, shareRepos } from './helpers/app';
 
 // Die Einrichtung eines Geräts: Token, Repository, Gerät und Ablaufdatum. GitHub antwortet aus einem Repo im Speicher
 // (tests/e2e/helpers/app.ts). Alles hier ist erfunden, auch die Token. Heute ist in allen Tests der 29.10.2026 (Wiener Zeit).
@@ -46,6 +46,8 @@ test.use({ serviceWorkers: 'block', viewport: { width: 1200, height: 1700 } });
 
 const TOKEN = 'github_pat_TEST_RICHTIG_0123456789';
 const TEST_REPO = 'johrob-lab/2-gehirn-test';
+const OTHER_REPO = 'johrob-lab/2-gehirn';
+const NOTE = '05 Daily Notes/2026-10-29.md';
 const TODAY = '2026-10-29';
 const DAY = `#/tag/${TODAY}`;
 
@@ -309,4 +311,38 @@ test('the saved settings have exactly these fields, and the token is in no other
   expect(storage).not.toContain('github_pat_TEST');
   const cookies = await page.context().cookies();
   expect(JSON.stringify(cookies)).not.toContain('github_pat_TEST');
+});
+
+// ---------- Zwei Fenster ----------
+
+test('a second window that finishes the setup later changes and clears nothing, it opens the app with what is stored', async ({ context, page }) => {
+  const repo = await openFresh(page, { tokens: [TOKEN] });
+  const other = await addRepo(page, OTHER_REPO);
+  // Ein zweites Fenster desselben Geräts, noch ohne Einrichtung: Auch dort steht das Formular
+  const second = await context.newPage();
+  await second.clock.setFixedTime(new Date('2026-10-29T12:00:00+01:00'));
+  await shareRepos(page, second);
+  await second.goto('/notizbuch/');
+  await expect(page.getByRole('heading', { name: 'Notizbuch einrichten' })).toBeVisible();
+  await expect(second.getByRole('heading', { name: 'Notizbuch einrichten' })).toBeVisible();
+
+  // Das erste Fenster richtet das Gerät ein, und das Gerät bekommt Daten dieses Repos
+  await fillAndSubmit(page);
+  await expect.poll(() => hash(page)).toBe(DAY);
+  await opened(page);
+  await expect.poll(() => localFiles(page)).toContain(NOTE);
+  const settings = await savedSettings(page);
+  const files = await localFiles(page);
+
+  // Das zweite Fenster schickt sein Formular ab, mit einem anderen Repo und einem anderen Token
+  await fillAndSubmit(second, { token: 'github_pat_TEST_ANDERER_0123456789', repo: OTHER_REPO });
+  await expect.poll(() => hash(second)).toBe(DAY);
+  await expect(second.getByText('Das Notizbuch ist schon in einem anderen Fenster offen.', { exact: true })).toBeVisible();
+  await expect(second.getByRole('heading', { name: 'Notizbuch einrichten' })).toHaveCount(0);
+  // Nichts wurde überschrieben oder geleert
+  expect(await savedSettings(page)).toEqual(settings);
+  expect(await localFiles(page)).toEqual(expect.arrayContaining(files));
+  expect(repo.puts).toEqual([]);
+  expect(other.puts).toEqual([]);
+  expect(JSON.stringify(await savedSettings(second))).not.toContain('ANDERER');
 });

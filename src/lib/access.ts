@@ -1,4 +1,4 @@
-import { AuthError, OfflineError, RateLimitError, statusOf } from '../sync/github';
+import { AuthError, OfflineError, RateLimitError, statusOf, withTimeout } from '../sync/github';
 import type { Store } from '../sync/store';
 import { isValidDay, type Day } from './dates';
 import { SETTINGS_KEY, type Settings } from './settings';
@@ -50,10 +50,12 @@ export function expiryProblem(value: string, today: Day): string | null {
  * Fragt GitHub, ob der Token ins Repository schreiben darf. Der Text sagt, was nicht stimmt, oder `null`, wenn alles geht.
  * Ein Fehler, den es nicht kennt, wird weitergereicht und nie in Text verwandelt: Er könnte Teile der Anfrage enthalten.
  * Ein Repository, das der Token nicht sehen darf, meldet GitHub als „nicht gefunden“, das gilt als Fehler des Tokens.
+ * Antwortet GitHub nicht, gilt die Frage nach 30 s als fehlende Verbindung (wie jede Anfrage der Engine): Die Einrichtung und
+ * „Zugang ändern“ bleiben nicht für immer bei „GitHub wird gefragt“ stehen.
  */
 export async function accessProblem(client: { checkAccess(): Promise<{ canWrite: boolean }> }): Promise<string | null> {
   try {
-    const { canWrite } = await client.checkAccess();
+    const { canWrite } = await withTimeout(() => client.checkAccess());
     return canWrite ? null : READ_ONLY_TOKEN;
   } catch (error) {
     if (error instanceof AuthError || statusOf(error) === 404) return DENIED;
@@ -79,17 +81,40 @@ export class PendingChangesError extends Error {
 }
 
 /**
- * Speichert den Zugang. Ohne bisherige Einstellungen (die Einrichtung) entstehen sie mit den Vorgaben und dem gewählten
- * Gerät. Sonst bleiben alle anderen Einstellungen, wie sie sind, auch das Gerät. Bleibt das Repository gleich, ändern sich
- * nur Token und Ablaufdatum: Dateien und Warteschlange bleiben, auch wenn Änderungen warten. Wechselt es, wird alles geleert,
- * was zum alten gehört (Dateien, Warteschlange, den Merkzettel der Abfrage), und das in einem Zug mit den Einstellungen.
- * Warten noch Änderungen, geschieht nichts, und `PendingChangesError` sagt, wie viele: Die Prüfung steht in derselben
- * Transaktion wie das Leeren, es kann also keine Änderung des alten Repositorys mehr in das neue gelangen.
+ * Der Zugang hat sich geändert, seit der Aufrufer ihn gelesen hat: Die Einrichtung findet schon Einstellungen (ein anderes
+ * Fenster hat sie beendet), oder das gespeicherte Repository ist ein anderes als das, mit dem der Aufrufer arbeitet. Gespeichert
+ * und geleert wird dann nichts, der Aufrufer liest den Stand aus dem Speicher neu.
  */
-export function saveAccess(store: Store, input: { token: string; repo: string; expiry: Day }, device: Settings['device']): Promise<Settings> {
+export class AccessChangedError extends Error {
+  constructor() {
+    super('Der Zugang wurde inzwischen in einem anderen Fenster geändert.');
+    this.name = 'AccessChangedError';
+  }
+}
+
+/**
+ * Speichert den Zugang. `from` ist das Repository, mit dem der Aufrufer jetzt arbeitet, oder `null` bei der Einrichtung. Es
+ * wird in derselben Transaktion gegen den Speicher geprüft, sonst geschieht nichts: Die Einrichtung verlangt, dass es noch keine
+ * Einstellungen gibt, eine Änderung, dass das gespeicherte Repository `from` ist (sonst `AccessChangedError`). So gilt nie ein
+ * Stand, den ein anderes Fenster inzwischen ersetzt hat; geleert wird nur, was der Aufrufer zu Recht für das alte Repository hält.
+ * Die Einrichtung legt die Einstellungen mit den Vorgaben und dem gewählten Gerät an. Sonst bleiben alle anderen Einstellungen,
+ * wie sie sind, auch das Gerät. Bleibt das Repository gleich, ändern sich nur Token und Ablaufdatum: Dateien und Warteschlange
+ * bleiben, auch wenn Änderungen warten. Wechselt es (`switched`), wird alles geleert, was zum alten gehört (Dateien, Warteschlange,
+ * den Merkzettel der Abfrage), und das in einem Zug mit den Einstellungen. Warten noch Änderungen, geschieht nichts, und
+ * `PendingChangesError` sagt, wie viele: Die Prüfung steht in derselben Transaktion wie das Leeren, es kann also keine Änderung
+ * des alten Repositorys mehr in das neue gelangen.
+ */
+export function saveAccess(
+  store: Store,
+  input: { token: string; repo: string; expiry: Day },
+  device: Settings['device'],
+  from: string | null,
+): Promise<{ settings: Settings; switched: boolean }> {
   return store.transact(['settings', 'files', 'outbox', 'meta'], async (tx) => {
     const old = await tx.objectStore('settings').get(SETTINGS_KEY);
+    if (from === null ? old !== undefined : old === undefined || old.repo !== from) throw new AccessChangedError();
     let next: Settings;
+    let switched = false;
     if (!old) {
       next = { token: input.token, repo: input.repo, device, smoothing: 'mittel', prediction: true, tokenExpiry: input.expiry };
     } else {
@@ -98,9 +123,10 @@ export function saveAccess(store: Store, input: { token: string; repo: string; e
         const waiting = await tx.objectStore('outbox').count();
         if (waiting > 0) throw new PendingChangesError(waiting);
         await Promise.all([tx.objectStore('files').clear(), tx.objectStore('outbox').clear(), tx.objectStore('meta').clear()]);
+        switched = true;
       }
     }
     await tx.objectStore('settings').put(next, SETTINGS_KEY);
-    return next;
+    return { settings: next, switched };
   });
 }

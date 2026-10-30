@@ -20,6 +20,8 @@ type Props = {
   startNotice?: string | null;
   /** Dieses Fenster liest nur (das zweite Fenster eines Geräts): Der Stand des Abgleichs gehört dem anderen und fehlt hier. */
   passive?: boolean;
+  /** Die App wartet (der Zugang wird umgestellt): Nichts in der Leiste lässt sich antippen, auch nicht mit der Tastatur. */
+  blocked?: boolean;
 };
 
 type Note = { id: number; text: string; alert: boolean; start?: boolean };
@@ -70,7 +72,7 @@ function Step({ label, symbol, from, to }: { label: string; symbol: string; from
  * Die Leiste oben: Blättern, die Ansichten, der Stand des Abgleichs und die Einstellungen. Hier laufen auch die
  * Meldungen der Engine auf (Konfliktkopie, Fehler beim Abgleich) und bleiben, bis man sie schließt.
  */
-export function TopBar({ route, engine, steps, startNotice, passive }: Props) {
+export function TopBar({ route, engine, steps, startNotice, passive, blocked }: Props) {
   const [notes, setNotes] = useState<Note[]>([]);
   const lastId = useRef(0);
   const announce = useCallback((text: string, alert: boolean) => {
@@ -111,7 +113,7 @@ export function TopBar({ route, engine, steps, startNotice, passive }: Props) {
   const today = () => routeHash({ view: 'tag', key: todayVienna() });
 
   return (
-    <header class="topbar">
+    <header class="topbar" inert={blocked}>
       <div class="schritte" role="group" aria-label="Blättern">
         <Step label={prevLabel} symbol="‹" from={route} to={back} />
         <Step label={nextLabel} symbol="›" from={route} to={forward} />
