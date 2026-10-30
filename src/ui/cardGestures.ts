@@ -12,8 +12,10 @@ import { TAP_SLOP_PX, type GestureFilter } from '../ink/gestures';
 //
 // Handballen: Die Karten nehmen Stift und Finger an, die Fläche darunter schützt sich mit einem Tor (`GestureFilter`), solange
 // der Stift aufliegt, kurz danach und bei großen Auflageflächen. Dasselbe Tor gilt hier für das, was ein Finger auf einer Karte
-// auslöst: Ein Handballen neben dem Stift hakt nichts ab und öffnet nichts. Der Stift auf einer Karte meldet sich beim Tor wie auf
-// der Fläche.
+// auslöst: Ein Handballen neben dem Stift hakt nichts ab und öffnet nichts. Das gilt auch für einen Finger, der schon auf der
+// Karte lag, als der Stift aufsetzte: Er war die Hand, sein Tipp zählt nicht, wann immer er abhebt. Der Stift auf einer Karte
+// meldet sich beim Tor wie auf der Fläche, und er meldet sich auch ab, wenn er woanders abhebt (über der Leiste oben): Sonst
+// bliebe das Tor zu und jeder Finger abgewiesen, bis der nächste Strich es öffnet.
 //
 // Rad: Strg (oder Cmd) mit Rad zoomt, sonst wandert die Seite. Ohne das zoomte der Browser die ganze Oberfläche. Nur wo die
 // Karte selbst noch in diese Richtung scrollen kann, scrollt sie.
@@ -91,8 +93,13 @@ export function watchCards(o: CardLayer): () => void {
 
   function onDown(e: PointerEvent): void {
     if (e.pointerType === 'pen') {
-      // Die Hand liegt auf: Was schon vorher auf dem Bildschirm lag, war sie. Die Fläche macht dasselbe mit ihren Fingern.
-      for (const track of tracks.values()) if (track.owner === 'offen') track.owner = 'ignoriert';
+      // Die Hand liegt auf: Was schon vorher auf dem Bildschirm lag, war sie. Die Fläche macht dasselbe mit ihren Fingern. Hebt
+      // so ein Finger ab, ist sein Tipp der eines Handballens: Der Klick, den der Browser daraus macht, wird verworfen.
+      for (const [id, track] of tracks) {
+        if (track.owner !== 'offen') continue;
+        track.owner = 'ignoriert';
+        palms.add(id);
+      }
       if (onCard(e.target)) {
         filter.penDown(e.timeStamp);
         pens.add(e.pointerId);
@@ -142,10 +149,15 @@ export function watchCards(o: CardLayer): () => void {
 
   function onEnd(e: PointerEvent): void {
     tracks.delete(e.pointerId);
-    if (pens.delete(e.pointerId)) filter.penUp(e.timeStamp);
     if (palms.delete(e.pointerId) && e.type === 'pointerup') {
       palmTap = { x: e.clientX, y: e.clientY, until: e.timeStamp + PALM_CLICK_MS };
     }
+  }
+
+  // Den Stift hört nicht nur die Bühne: Hebt er über der Leiste oben oder den Reitern ab, kommt sein Ende nie bei den Karten an.
+  // Das Fenster hört alles, und das Tor wird auf jeden Fall wieder geöffnet.
+  function onPenEnd(e: PointerEvent): void {
+    if (pens.delete(e.pointerId)) filter.penUp(e.timeStamp);
   }
 
   // Aus dem Tipp eines Handballens macht der Browser einen Klick. Er trifft nichts, der Handballen soll nichts auslösen.
@@ -188,6 +200,8 @@ export function watchCards(o: CardLayer): () => void {
   stage.addEventListener('pointermove', onMove, true);
   stage.addEventListener('pointerup', onEnd, true);
   stage.addEventListener('pointercancel', onEnd, true);
+  window.addEventListener('pointerup', onPenEnd, true);
+  window.addEventListener('pointercancel', onPenEnd, true);
   frame.addEventListener('click', onClick, true);
   frame.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
   frame.addEventListener('wheel', onWheel, { passive: false });
@@ -196,8 +210,15 @@ export function watchCards(o: CardLayer): () => void {
     stage.removeEventListener('pointermove', onMove, true);
     stage.removeEventListener('pointerup', onEnd, true);
     stage.removeEventListener('pointercancel', onEnd, true);
+    window.removeEventListener('pointerup', onPenEnd, true);
+    window.removeEventListener('pointercancel', onPenEnd, true);
     frame.removeEventListener('click', onClick, true);
     frame.removeEventListener('touchmove', onTouchMove, true);
     frame.removeEventListener('wheel', onWheel);
+    // Ein Stift, der noch auf einer Karte aufliegt, während die Karten gehen, hielte das Tor sonst für immer zu.
+    for (const id of pens) {
+      pens.delete(id);
+      filter.penUp(performance.now());
+    }
   };
 }

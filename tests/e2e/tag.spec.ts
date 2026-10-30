@@ -1390,6 +1390,77 @@ test('the button Ganze Seite brings back the whole page after zooming and moving
   expect(back.y).toBeCloseTo(fit.y, 3);
 });
 
+// Der Weg zurück zur ganzen Seite ist immer da, auch wo es keine Werkzeugleiste gibt: Firmen-PC, Seite nicht lesbar, Seite nicht geladen.
+
+const TAG_PAGE = `${FILES}/${TODAY} Tag.svg`;
+const BROKEN_PAGE = '<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="1"';
+
+/** Der Maßstab, in dem die Karten auf dem Bildschirm liegen. Er gilt auch, solange die Seite lädt und der Testzugang der App noch fehlt. */
+const cardScale = (page: Page) => page.locator('.karten').evaluate((el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).a);
+
+/** Strg mit Rad auf dem Papier zoomt hinein: ein Ereignis wie das einer Maus, ohne den Testzugang der App. */
+const zoomIn = (page: Page) =>
+  page.evaluate(() => {
+    const paper = document.querySelector('canvas[data-layer="live"]')!;
+    paper.dispatchEvent(new WheelEvent('wheel', { clientX: 600, clientY: 1000, deltaY: -300, ctrlKey: true, bubbles: true, cancelable: true }));
+  });
+
+/** Zoomt hinein und holt die ganze Seite mit dem Knopf zurück. */
+async function backToFit(page: Page) {
+  const fit = await cardScale(page);
+  await zoomIn(page);
+  await expect.poll(() => cardScale(page)).toBeGreaterThan(fit * 1.3);
+  await button(page, 'Ganze Seite').click();
+  await expect.poll(() => cardScale(page)).toBeCloseTo(fit, 6);
+}
+
+test('the button Ganze Seite is there while the page is still loading', async ({ page }) => {
+  await openSeeded(page, '#/tag/2026-11-04');
+  // Die Seite von heute antwortet erst, wenn der Test es erlaubt.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route(
+    (url) => decodeURIComponent(url.pathname).endsWith(`/contents/${TAG_PAGE}`),
+    async (route) => {
+      if (route.request().method() === 'GET') await gate;
+      await route.fallback();
+    },
+  );
+  await go(page, DAY);
+  await expect(page.getByText('Seite wird geladen')).toBeVisible();
+  await backToFit(page);
+  release();
+  await expect(page.getByText('Seite wird geladen')).toHaveCount(0);
+});
+
+test('the button Ganze Seite is there when the page can not be read, and there is no toolbar then', async ({ page }) => {
+  await openSeeded(page, DAY, { files: { [TAG_PAGE]: BROKEN_PAGE } });
+  await expect(page.getByText('Diese Seite lässt sich nicht lesen und wird nicht verändert.')).toBeVisible();
+  await expect(page.getByRole('toolbar')).toHaveCount(0);
+  await backToFit(page);
+});
+
+test('the button Ganze Seite is there when the page could not be loaded', async ({ page }) => {
+  await openSeeded(page, DAY, { failReads: true });
+  await expect(page.getByText('Diese Seite konnte nicht geladen werden. Neuer Versuch, sobald das Netz da ist.')).toBeVisible();
+  await expect(page.getByRole('toolbar')).toHaveCount(0);
+  await backToFit(page);
+});
+
+test('the button Ganze Seite is there on the office PC, which has no toolbar', async ({ page }) => {
+  await openSeeded(page, DAY, { device: 'Firmen-PC' });
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await expect(page.getByRole('toolbar')).toHaveCount(0);
+  await backToFit(page);
+});
+
+test('with the toolbar there is one button Ganze Seite, in the toolbar', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await expect(button(page, 'Ganze Seite')).toHaveCount(1);
+  await expect(page.getByRole('toolbar').getByRole('button', { name: 'Ganze Seite', exact: true })).toHaveCount(1);
+});
+
 // ---------- Finger ----------
 
 test.describe('with a touch screen', () => {
@@ -1596,6 +1667,51 @@ test.describe('with a touch screen', () => {
     await pen(page).upOn('section[aria-label="Kalender"]', x, y);
     await afterPalmWindow(page);
     await screen.tap(await centerOf(rowOf(page, NAME2)));
+    await onlySecondTicked(page, repo);
+  });
+
+  test('a finger that landed on a task just before the pen and lifts while the pen is down ticks nothing', async ({ page }) => {
+    const repo = await opened(page);
+    const screen = await touchscreen(page);
+    await screen.down(0, await centerOf(rowOf(page, NAME1))); // die Hand liegt schon auf der Karte
+    await pen(page).down(200, 900); // der Stift setzt auf dem Papier auf
+    await screen.up(0); // der Finger hebt ab, solange der Stift aufliegt
+    await pen(page).up(200, 900);
+    await afterPalmWindow(page);
+    await screen.tap(await centerOf(rowOf(page, NAME2)));
+    await onlySecondTicked(page, repo);
+  });
+
+  test('the same when the pen comes down on another card', async ({ page }) => {
+    const repo = await opened(page);
+    const screen = await touchscreen(page);
+    const [x, y] = await spot(page, 'Kalender', 0.5, 0.04);
+    await screen.down(0, await centerOf(rowOf(page, NAME1)));
+    await pen(page).downOn('section[aria-label="Kalender"]', x, y);
+    await screen.up(0);
+    await pen(page).upOn('section[aria-label="Kalender"]', x, y);
+    await afterPalmWindow(page);
+    await screen.tap(await centerOf(rowOf(page, NAME2)));
+    await onlySecondTicked(page, repo);
+  });
+
+  test('a pen that goes down on a card and is lifted outside the page does not keep every finger away', async ({ page }) => {
+    const repo = await opened(page);
+    const screen = await touchscreen(page);
+    const [x, y] = await spot(page, 'Kalender', 0.5, 0.04);
+    await pen(page).downOn('section[aria-label="Kalender"]', x, y);
+    const [barX, barY] = await centerOf(page.locator('header.topbar'));
+    await pen(page).upOn('header.topbar', barX, barY); // über der Leiste oben: Die Bühne hört davon nichts
+    await afterPalmWindow(page);
+    await screen.tap(await centerOf(rowOf(page, NAME2)));
+    await expect(checkbox(page, NAME2)).toBeChecked();
+
+    // Auch die Fläche nimmt wieder Finger an: Zwei Finger auf dem Papier zoomen die Seite.
+    const before = await viewOf(page);
+    const a = await onPage(page, 400, 1000);
+    const b = await onPage(page, 700, 1000);
+    await screen.pinch([a, b], [[a[0] - 60, a[1]], [b[0] + 60, b[1]]]);
+    await expect.poll(async () => (await viewOf(page)).scale / before.scale).toBeGreaterThan(1.1);
     await onlySecondTicked(page, repo);
   });
 

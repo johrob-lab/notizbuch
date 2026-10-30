@@ -538,6 +538,22 @@ body {
   background: #7a3b36;
 }
 
+/*
+ * Der Weg zurück zur ganzen Seite, wo es keine Werkzeugleiste gibt (Firmen-PC, Seite nicht lesbar oder nicht geladen). Er liegt
+ * unten links auf der Bühne: Der Schnellwechsel (unten rechts) und die Werkzeuge gibt es in diesen Fällen nicht, und die
+ * Monatsreiter stehen am rechten Rand.
+ */
+.ganze-seite {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 1;
+  border-color: var(--linie);
+  background: var(--leiste);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.2);
+  touch-action: manipulation;
+}
+
 /* Knöpfe außerhalb der Leisten (Kopf der Besprechung, Rückfrage): mit Finger, Stift und Maus gleich zu treffen. */
 .knopf {
   box-sizing: border-box;

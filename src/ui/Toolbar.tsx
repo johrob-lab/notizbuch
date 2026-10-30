@@ -14,7 +14,10 @@ type Props = {
   onWidth(width: WidthName): void;
   onUndo(): void;
   onRedo(): void;
-  /** Die ganze Seitenbreite auf den Bildschirm: der Weg zurück, wenn man sich hineingezoomt oder die Seite weggeschoben hat. */
+  /**
+   * Die ganze Seitenbreite auf den Bildschirm: der Weg zurück, wenn man sich hineingezoomt oder die Seite weggeschoben hat.
+   * Wo es keine Werkzeugleiste gibt (Firmen-PC, Seite nicht lesbar oder nicht geladen), hat `PageView` einen eigenen Knopf dafür.
+   */
   onFit(): void;
 };
 

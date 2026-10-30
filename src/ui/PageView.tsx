@@ -11,7 +11,7 @@ import { PageSession, type Phase } from './pageSession';
 import { QuickSwitch } from './QuickSwitch';
 import { retryCues } from './retryCues';
 import { routeHash } from './router';
-import { Toolbar, type Tool } from './Toolbar';
+import { Icon, Toolbar, type Tool } from './Toolbar';
 
 // Eine Seite zum Schreiben, ganz gleich ob Tag, Woche oder Monat: Das Layout sagt, welche Felder und welchen Hintergrund
 // sie hat. Lesen, Speichern und fremde Änderungen übernimmt `PageSession`, diese Datei verbindet sie mit der Schreibfläche
@@ -303,6 +303,12 @@ export function PageView(p: Props) {
           <p class="hinweis fehler" role="alert">
             Die letzte Änderung konnte nicht auf diesem Gerät gespeichert werden.
           </p>
+        )}
+        {/* Wo es keine Werkzeugleiste gibt (Firmen-PC, Seite nicht lesbar oder nicht geladen), bleibt dieser Knopf: der Weg zurück zur ganzen Seite. */}
+        {!canWrite && (
+          <button type="button" class="tb ganze-seite" aria-label="Ganze Seite" title="Ganze Seite" onClick={() => surface.current?.zoomToFit()}>
+            <Icon name="fit" />
+          </button>
         )}
         {canWrite && (
           <QuickSwitch

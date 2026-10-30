@@ -300,6 +300,103 @@ test('fingers that lay on a card before the pen came down were the hand, they do
   expect(handed).toEqual([]);
 });
 
+test('a finger that lay on a card before the pen came down on the paper is a palm when it lifts: the click it makes is dropped', () => {
+  send(control, 'pointerdown', { id: 1, t: 1000, x: 100, y: 100 });
+  send(host, 'pointerdown', { id: 7, kind: 'pen', t: 1100, x: 400, y: 600 });
+  send(control, 'pointerup', { id: 1, t: 1150, x: 100, y: 100 }); // der Finger hebt ab, solange der Stift aufliegt
+  const ev = click(control, 1155, 100, 100);
+  expect(ev.defaultPrevented).toBe(true);
+  expect(clicks).toBe(0);
+});
+
+test('the same when the pen came down on a card, and when the finger lifts only after the pen is gone', () => {
+  send(control, 'pointerdown', { id: 1, t: 1000, x: 100, y: 100 });
+  send(header, 'pointerdown', { id: 7, kind: 'pen', t: 1100, x: 160, y: 40 });
+  send(header, 'pointerup', { id: 7, kind: 'pen', t: 1140, x: 160, y: 40 });
+  send(control, 'pointerup', { id: 1, t: 1500, x: 100, y: 100 });
+  click(control, 1505, 100, 100);
+  expect(clicks).toBe(0);
+});
+
+test('a finger that lifted before the pen came down made its click already, and later fingers tap as usual', () => {
+  send(control, 'pointerdown', { id: 1, t: 1000, x: 100, y: 100 });
+  send(control, 'pointerup', { id: 1, t: 1040, x: 100, y: 100 });
+  click(control, 1045, 100, 100);
+  expect(clicks).toBe(1);
+  send(host, 'pointerdown', { id: 7, kind: 'pen', t: 1100, x: 400, y: 600 });
+  send(host, 'pointerup', { id: 7, kind: 'pen', t: 1140, x: 400, y: 600 });
+  send(control, 'pointerdown', { id: 2, t: 1600, x: 100, y: 100 });
+  send(control, 'pointerup', { id: 2, t: 1640, x: 100, y: 100 });
+  click(control, 1645, 100, 100);
+  expect(clicks).toBe(2);
+});
+
+test('a palm that lay under the pen does not spoil the tap of the next finger', () => {
+  send(control, 'pointerdown', { id: 1, t: 1000, x: 100, y: 100 });
+  send(host, 'pointerdown', { id: 7, kind: 'pen', t: 1100, x: 400, y: 600 });
+  send(host, 'pointerup', { id: 7, kind: 'pen', t: 1140, x: 400, y: 600 });
+  send(control, 'pointerup', { id: 1, t: 1200, x: 100, y: 100 });
+  click(control, 1205, 100, 100); // verworfen
+  send(control, 'pointerdown', { id: 2, t: 1700, x: 100, y: 100 });
+  send(control, 'pointerup', { id: 2, t: 1740, x: 100, y: 100 });
+  click(control, 1745, 100, 100);
+  expect(clicks).toBe(1);
+});
+
+// ---------- Der Stift hebt ab, wo auch immer ----------
+
+/** Etwas außerhalb der Bühne, wie die Leiste oben. */
+function outside(): HTMLElement {
+  const bar = document.createElement('header');
+  document.body.append(bar);
+  return bar;
+}
+
+test('a pen that went down on a card and is lifted outside the stage opens the gate again', () => {
+  const bar = outside();
+  send(control, 'pointerdown', { id: 7, kind: 'pen', t: 1000, x: 100, y: 100 });
+  expect(filter.acceptTouch({ width: 1, height: 1 }, 1010)).toBe(false);
+  send(bar, 'pointerup', { id: 7, kind: 'pen', t: 1040, x: 5, y: 5 });
+  expect(filter.acceptTouch({ width: 1, height: 1 }, 1100)).toBe(false); // die Pause nach dem Stift gilt wie sonst
+  expect(filter.acceptTouch({ width: 1, height: 1 }, 1300)).toBe(true);
+  bar.remove();
+});
+
+test('a pen that the system takes away outside the stage opens the gate again', () => {
+  const bar = outside();
+  send(header, 'pointerdown', { id: 7, kind: 'pen', t: 1000, x: 160, y: 40 });
+  send(bar, 'pointercancel', { id: 7, kind: 'pen', t: 1040, x: 5, y: 5 });
+  expect(filter.acceptTouch({ width: 1, height: 1 }, 1300)).toBe(true);
+  bar.remove();
+});
+
+test('a pen that is lifted on the card or on the paper is reported to the gate once', () => {
+  const up = vi.spyOn(filter, 'penUp');
+  send(control, 'pointerdown', { id: 7, kind: 'pen', t: 1000, x: 100, y: 100 });
+  send(control, 'pointerup', { id: 7, kind: 'pen', t: 1040, x: 100, y: 100 });
+  expect(up).toHaveBeenCalledTimes(1);
+  send(host, 'pointerdown', { id: 8, kind: 'pen', t: 2000, x: 400, y: 600 }); // auf dem Papier meldet es die Fläche selbst
+  send(host, 'pointerup', { id: 8, kind: 'pen', t: 2040, x: 400, y: 600 });
+  expect(up).toHaveBeenCalledTimes(1);
+});
+
+test('a pen that is still down when the cards go does not keep the gate shut', () => {
+  send(control, 'pointerdown', { id: 7, kind: 'pen', t: 1000, x: 100, y: 100 });
+  expect(filter.acceptTouch({ width: 1, height: 1 }, 1010)).toBe(false);
+  stop();
+  expect(filter.acceptTouch({ width: 1, height: 1 }, performance.now() + 300)).toBe(true);
+});
+
+test('after stop a pen outside the stage is none of the cards business', () => {
+  const bar = outside();
+  send(control, 'pointerdown', { id: 7, kind: 'pen', t: 1000, x: 100, y: 100 });
+  stop();
+  const up = vi.spyOn(filter, 'penUp');
+  send(bar, 'pointerup', { id: 7, kind: 'pen', t: 1040, x: 5, y: 5 });
+  expect(up).not.toHaveBeenCalled();
+  bar.remove();
+});
+
 test('the mouse is none of the gates business: a click after a palm tap is not dropped by a mouse press in between', () => {
   send(control, 'pointerdown', { id: 1, t: 1000, x: 100, y: 100, size: 150 });
   send(control, 'pointerup', { id: 1, t: 1050, x: 100, y: 100, size: 150 });
