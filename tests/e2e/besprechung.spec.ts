@@ -2,7 +2,7 @@ import { expect, test as base, type Page, type Route } from '@playwright/test';
 import { serializePage } from '../../src/ink/svg';
 import type { Stroke } from '../../src/ink/types';
 import { besprechungLayout } from '../../src/pages/layouts';
-import { openSeeded, queued, sendToBackground } from './helpers/app';
+import { bringToForeground, openSeeded, queued, sendToBackground } from './helpers/app';
 import { mouse, pen } from './helpers/pointer';
 
 /**
@@ -392,6 +392,25 @@ for (const { name, options } of UNUSABLE) {
     expect(await queued(page)).toEqual({});
   });
 }
+
+test('a meeting address typed by hand with a blocked word shows that the app does not open it, and is not tried again', async ({ page }) => {
+  const blocked = '2026-10-29 0800 Passwort Liste';
+  const repo = await openSeeded(page, hashOf(blocked, 1));
+  const notice = page.getByRole('alert').filter({ hasText: 'Die App öffnet diese Seite nicht' });
+  await expect(notice).toBeVisible();
+  await expect(page.getByText('Neuer Versuch', { exact: false })).toHaveCount(0);
+  for (const label of ['Thema', 'Datum', 'Zeit', 'Ort', 'Projekt']) await expect(field(page, label)).toBeDisabled();
+  await expect(button(page, '+ Seite')).toBeDisabled();
+  await pen(page).stroke(LINE);
+  expect(await strokeCount(page)).toBe(0);
+  // Die App kommt wieder in den Vordergrund (ein Anlass für einen neuen Versuch): Es bleibt dabei.
+  await sendToBackground(page);
+  await bringToForeground(page);
+  await expect(notice).toBeVisible();
+  expect(repo.requests.filter((request) => request.includes('Passwort'))).toEqual([]); // die Pfadsperre fragt GitHub nie
+  expect(repo.puts).toEqual([]);
+  expect(await queued(page)).toEqual({});
+});
 
 test('on the office PC the header can be typed, and nothing can be inked or added', async ({ page }) => {
   const repo = await openSeeded(page, hashOf(BASE, 1), { files: { [PAGE1]: pageText(1) }, device: 'Firmen-PC' });

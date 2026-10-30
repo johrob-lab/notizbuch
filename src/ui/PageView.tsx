@@ -78,6 +78,7 @@ type Props = PageProps & {
 };
 
 const UNREADABLE = 'Diese Seite lässt sich nicht lesen und wird nicht verändert.';
+const BLOCKED = 'Die App öffnet diese Seite nicht, denn Wörter wie Passwort sind im Dateinamen nicht erlaubt.';
 const NOT_LOADED = 'Diese Seite konnte nicht geladen werden. Neuer Versuch, sobald das Netz da ist.';
 
 /** Testzugang: nur lesen, enthält keine Geheimnisse. Er steht da, sobald die Seite gelesen ist. */
@@ -226,7 +227,7 @@ export function PageView(p: Props) {
     chooseTool('pen');
   };
 
-  const canWrite = !readOnly && phase !== 'unlesbar' && phase !== 'nichtGeladen';
+  const canWrite = !readOnly && phase !== 'unlesbar' && phase !== 'gesperrt' && phase !== 'nichtGeladen';
 
   // Eine Änderung am Kopf ändert die Kopfdaten der Fläche an Ort und Stelle (dieselbe Seite, dieselben Striche) und geht
   // dann wie ein Strich durch die Sitzung: mit allen Strichen, die die Fläche jetzt hat, und den neuen Kopfdaten.
@@ -295,6 +296,11 @@ export function PageView(p: Props) {
         {phase === 'unlesbar' && (
           <p class="hinweis" role="alert">
             {UNREADABLE}
+          </p>
+        )}
+        {phase === 'gesperrt' && (
+          <p class="hinweis" role="alert">
+            {BLOCKED}
           </p>
         )}
         {phase === 'nichtGeladen' && (

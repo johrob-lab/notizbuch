@@ -1,7 +1,7 @@
 import { mergePages, parsePage, serializePage } from '../ink/svg';
 import type { FieldBox, Page } from '../ink/types';
 import type { SyncEngine } from '../sync/engine';
-import { normalizePath } from '../sync/paths';
+import { normalizePath, PathNotAllowedError } from '../sync/paths';
 
 // Die Sitzung einer Seite zwischen Schreibfläche und SyncEngine: Sie liest die Seite, speichert jede Änderung sofort
 // lokal und übernimmt Änderungen von anderen Geräten. Sie kennt weder DOM noch Canvas und lässt sich darum einzeln prüfen.
@@ -20,10 +20,12 @@ export type SessionEngine = Pick<SyncEngine, 'read' | 'write' | 'flush' | 'addRe
 
 /**
  * `bereit`: die Seite ist gelesen. `unlesbar`: die Datei ist kaputt (sie lässt sich nicht als Seite lesen) und wird nie
- * geschrieben. `nichtGeladen`: das Lesen ist gescheitert (zum Beispiel ein Fehler von GitHub). Die Seite bleibt gesperrt,
+ * geschrieben. `gesperrt`: Die Pfadsperre lässt die Datei nicht zu (zum Beispiel eine von Hand getippte Adresse einer
+ * Besprechung mit einem Wort wie Passwort im Thema). Sie wird nie gelesen und nie geschrieben, ein neuer Versuch ändert
+ * daran nichts. `nichtGeladen`: das Lesen ist gescheitert (zum Beispiel ein Fehler von GitHub). Die Seite bleibt gesperrt,
  * bis ein neuer Versuch gelingt.
  */
-export type Phase = 'laden' | 'bereit' | 'unlesbar' | 'nichtGeladen';
+export type Phase = 'laden' | 'bereit' | 'unlesbar' | 'gesperrt' | 'nichtGeladen';
 
 type Options = {
   engine: SessionEngine;
@@ -272,8 +274,8 @@ export class PageSession {
     let text: string | null;
     try {
       text = await this.#o.engine.read(this.#o.path);
-    } catch {
-      this.#lock('nichtGeladen');
+    } catch (error) {
+      this.#lock(error instanceof PathNotAllowedError ? 'gesperrt' : 'nichtGeladen');
       return;
     }
     if (this.#stopped()) return;
@@ -306,10 +308,10 @@ export class PageSession {
   /**
    * Die Seite ist nicht benutzbar. Sie bleibt gesperrt und wird nicht geschrieben. Was noch vorgemerkt war, geht nicht
    * verloren: Es bleibt vorgemerkt und kommt zur Seite, sobald sie sich wieder lesen lässt (siehe `#readAndShow`).
-   * Ist die Datei kaputt, bleibt es gesperrt, bis ein anderes Gerät sie ändert. Ließ sie sich nur nicht laden, wird neu
-   * versucht, sobald es Sinn hat.
+   * Ist die Datei kaputt, bleibt es gesperrt, bis ein anderes Gerät sie ändert. Lässt die Pfadsperre sie nicht zu, bleibt
+   * es für immer gesperrt. Ließ sie sich nur nicht laden, wird neu versucht, sobald es Sinn hat.
    */
-  #lock(phase: 'unlesbar' | 'nichtGeladen'): void {
+  #lock(phase: 'unlesbar' | 'gesperrt' | 'nichtGeladen'): void {
     if (this.#stopped()) return;
     this.#phase = phase;
     // Eine Seite, die sich nicht lesen lässt, hat keinen Ausgangspunkt: Was die Fläche zeigt, beruht nicht auf dem, was jetzt

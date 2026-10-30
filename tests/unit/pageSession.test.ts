@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import { parsePage, serializePage } from '../../src/ink/svg';
 import type { FieldBox, Page, Stroke } from '../../src/ink/types';
+import { PathNotAllowedError } from '../../src/sync/paths';
 import { PageSession, type PageSurface, type Phase, type SessionEngine } from '../../src/ui/pageSession';
 
 // Die Sitzung einer Seite: lesen, speichern, fremde Änderungen übernehmen. Engine und Fläche sind Fakes, die Seiten
@@ -407,6 +408,24 @@ test('a page that still cannot be loaded keeps waiting, with one subscription an
   session.changed(pageOf(stroke('x', 5)));
   await settle();
   expect(engine.writes).toEqual([]);
+});
+
+test('a page whose path the path guard refuses is locked as blocked, never written and never tried again', async () => {
+  // Zum Beispiel eine Besprechung, deren Adresse jemand von Hand mit einem gesperrten Wort im Thema getippt hat.
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  engine.readError = new PathNotAllowedError(PATH);
+  const cues = fakeCues();
+  const surface = fakeSurface();
+  const { session, phases } = open(engine, surface, { cues });
+  await session.reload();
+  expect(phases).toEqual(['gesperrt']);
+  expect(cues.listening).toBe(0); // kein neuer Versuch, wenn das Netz zurückkommt oder alle 3 Minuten
+  expect(surface.readOnly).toBe(true);
+  expect(surface.sets).toEqual([]);
+  session.changed(pageOf(stroke('x', 5)));
+  await settle();
+  expect(engine.writes).toEqual([]);
+  expect(engine.reads).toBe(1);
 });
 
 test('a broken page is no reason to try again, only a change from another device is', async () => {
