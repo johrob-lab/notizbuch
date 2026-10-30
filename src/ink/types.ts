@@ -5,6 +5,8 @@ export const MM = 6;
 /** Größe einer Seite in Seiteneinheiten. */
 export const PAGE_W = 1192;
 export const PAGE_H = 1590;
+/** Farbe des Papiers. */
+export const PAPER = '#fffefa';
 
 export type InkColor = 'schwarz' | 'blau' | 'rot' | 'gruen';
 

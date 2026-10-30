@@ -1,10 +1,10 @@
 import { boundsOf, emptyBox, growBox, lineWidth, type Box } from './bounds';
 import { hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
-import { clampView, GestureFilter, gestureView, isTwoFingerTap, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
+import { clampView, GestureFilter, gestureView, isFingerTap, isTwoFingerTap, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
 import { History, restore, type Removed } from './history';
 import { extrapolate } from './predict';
 import { StrokeBuilder } from './stroke';
-import { INK, PAGE_H, PAGE_W, WIDTH_MM, type FieldBox, type InkColor, type Page, type Stroke, type WidthName } from './types';
+import { INK, PAGE_H, PAGE_W, PAPER, WIDTH_MM, type FieldBox, type InkColor, type Page, type Stroke, type WidthName } from './types';
 
 // Die Schreibfläche: drei Canvas-Ebenen übereinander (Grund mit Papier und fertigen Strichen, Live mit dem Strich, der
 // gerade entsteht, Vorhersage mit dem Stück voraus). Die Zeigerlogik stammt aus dem Stift-Test
@@ -25,6 +25,11 @@ export type SurfaceOptions = {
   filter?: GestureFilter;
   /** Die Seite hat sich geändert (Strich fertig, radiert, rückgängig, wiederholt). Wird sofort, nicht verzögert, gerufen. */
   onChange: (p: Page) => void;
+  /**
+   * Ein Finger oder die Maus hat die Seite angetippt, an dieser Stelle der Seite (Seiteneinheiten). Der Stift tippt nie,
+   * er schreibt, und ein Handballen zählt nicht. Das gilt auch, wenn die Seite nur zum Ansehen offen ist.
+   */
+  onTap?: (at: { x: number; y: number }) => void;
 };
 
 type Drawing = { id: number; builder: StrokeBuilder; box: Box; current: Stroke; hist: { x: number; y: number; t: number }[] };
@@ -36,7 +41,6 @@ const ERASER_RADIUS_PX = 10;
 const HEAVY_POINTS = 8000;
 const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 10;
-const PAPER = '#fffefa';
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
@@ -100,7 +104,10 @@ export class InkSurface {
   private drawing: Drawing | null = null;
   private erasing: Erasing | null = null;
   private readonly touches = new Map<number, Pt2>();
+  /** Die Ereignisse der Finger seit dem ersten Aufsetzen, für den Zwei-Finger-Tipp. */
   private fingerLog: FingerEvent[] = [];
+  /** Dasselbe für Finger und Maus, für den Tipp mit einem Zeiger. */
+  private tapLog: FingerEvent[] = [];
   private gesture: Gesture | null = null;
   private liveArea: Box | null = null;
   private predArea: Box | null = null;
@@ -657,9 +664,16 @@ export class InkSurface {
   }
 
   private logFinger(e: PointerEvent, type: FingerEvent['type']): void {
-    if (e.pointerType !== 'touch') return;
     const p = this.local(e);
-    this.fingerLog.push({ id: e.pointerId, type, x: p.x, y: p.y, t: e.timeStamp });
+    const event: FingerEvent = { id: e.pointerId, type, x: p.x, y: p.y, t: e.timeStamp };
+    this.tapLog.push(event);
+    // Rückgängig machen nur Finger: Die Maus hat nur einen Zeiger und kann keinen Zwei-Finger-Tipp machen.
+    if (e.pointerType === 'touch') this.fingerLog.push(event);
+  }
+
+  private forgetTaps(): void {
+    this.fingerLog = [];
+    this.tapLog = [];
   }
 
   private onDown = (e: PointerEvent): void => {
@@ -670,7 +684,7 @@ export class InkSurface {
       this.filter.penDown(e.timeStamp);
       this.endGesture(true); // die Hand lag schon auf dem Bildschirm: was die Finger eben verschoben haben, war sie
       this.touches.clear();
-      this.fingerLog = [];
+      this.forgetTaps();
       if (this.drawing) this.finishDraw(true);
       if (this.erasing) this.finishErase();
       if (this.readOnly) return;
@@ -681,7 +695,7 @@ export class InkSurface {
     if (e.pointerType === 'touch' && !this.filter.acceptTouch(e, e.timeStamp)) return;
     // Finger und Maus schreiben nie, sie verschieben und zoomen die Seite.
     if (e.pointerType !== 'touch') this.capture(e);
-    if (!this.touches.size) this.fingerLog = [];
+    if (!this.touches.size) this.forgetTaps();
     this.touches.set(e.pointerId, this.local(e));
     this.logFinger(e, 'down');
     this.rebaseGesture();
@@ -716,7 +730,7 @@ export class InkSurface {
     else if (er && e.pointerId === er.id) this.finishErase();
     if (e.pointerType === 'pen') this.filter.penUp(e.timeStamp);
     if (!this.touches.delete(e.pointerId)) return;
-    if (e.type === 'pointercancel') this.fingerLog = []; // eine abgebrochene Berührung ist kein Tipp
+    if (e.type === 'pointercancel') this.forgetTaps(); // eine abgebrochene Berührung ist kein Tipp
     else this.logFinger(e, 'up');
     if (this.touches.size) {
       this.rebaseGesture();
@@ -724,7 +738,8 @@ export class InkSurface {
     }
     this.endGesture(false);
     if (isTwoFingerTap(this.fingerLog)) this.undo();
-    this.fingerLog = [];
+    else if (isFingerTap(this.tapLog)) this.opts.onTap?.(this.toPage(this.tapLog[0].x, this.tapLog[0].y));
+    this.forgetTaps();
   };
 
   /** Mausrad: blättern, mit Strg (oder Cmd, so meldet das Trackpad Zwei-Finger-Zoomen) zoomen. */

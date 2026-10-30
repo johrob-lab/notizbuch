@@ -230,3 +230,18 @@ export function inkNear(page: Page, at: [number, number], radius = 6): Promise<n
     { at, radius },
   );
 }
+
+/** Die Farbe der Grundebene an einem Ort der Seite als `[rot, grün, blau]` (0 bis 255), dort liegen Papier, Hintergrund und Striche. */
+export function colorAt(page: Page, at: [number, number]): Promise<[number, number, number]> {
+  return page.evaluate(
+    ({ at: [x, y] }) => {
+      const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-layer="grund"]')!;
+      const box = canvas.getBoundingClientRect();
+      const c = window.__notizbuch.toClient(x, y);
+      const k = canvas.width / box.width;
+      const [r, g, b] = canvas.getContext('2d')!.getImageData(Math.round((c.x - box.left) * k), Math.round((c.y - box.top) * k), 1, 1).data;
+      return [r, g, b] as [number, number, number];
+    },
+    { at },
+  );
+}

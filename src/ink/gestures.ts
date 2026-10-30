@@ -10,6 +10,8 @@ const PALM_SIZE_PX = 120;
 const TAP_SECOND_FINGER_MS = 150;
 /** Beide Finger müssen höchstens so lange nach dem ersten Aufsetzen wieder weg sein. */
 const TAP_DURATION_MS = 300;
+/** Ein Tipp mit einem Finger oder der Maus dauert höchstens so lange. Wer länger drückt, hält. */
+const FINGER_TAP_MS = 500;
 /** Wer sich so weit oder weiter bewegt, tippt nicht mehr, sondern schiebt. Auch Verschieben und Zoomen beginnen erst dann. */
 export const TAP_SLOP_PX = 10;
 /** So viel von der Seite bleibt beim Verschieben mindestens auf dem Bildschirm. */
@@ -75,6 +77,20 @@ export function isTwoFingerTap(ev: FingerEvent[]): boolean {
   const [first, second] = [...downs.values()].sort((a, b) => a.t - b.t);
   if (second.t - first.t > TAP_SECOND_FINGER_MS) return false;
   return [...ups.values()].every((up) => up.t - first.t <= TAP_DURATION_MS);
+}
+
+/**
+ * Wahr, wenn die Ereignisse eines einzelnen Zeigers (ein Finger oder die Maus) vom Aufsetzen bis zum Abheben ein Tipp
+ * sind: höchstens 500 ms gedrückt und auf dem ganzen Weg (auch beim Abheben) unter 10 px vom Aufsetzpunkt entfernt.
+ * Ein zweiter Zeiger, auch einer nach dem anderen, macht daraus keinen Tipp.
+ */
+export function isFingerTap(ev: FingerEvent[]): boolean {
+  const [down, ...rest] = ev;
+  if (!down || down.type !== 'down' || !rest.length) return false;
+  const up = rest[rest.length - 1];
+  if (up.type !== 'up' || up.t - down.t > FINGER_TAP_MS) return false;
+  if (!rest.slice(0, -1).every((e) => e.type === 'move')) return false;
+  return ev.every((e) => e.id === down.id && Math.hypot(e.x - down.x, e.y - down.y) < TAP_SLOP_PX);
 }
 
 // ---------- Verschieben und Zoomen ----------

@@ -46,14 +46,16 @@ body {
   min-height: 0;
 }
 
-/* Werkzeuge links, Status rechts. Auf schmalen Bildschirmen rutscht der Status in die nächste Zeile. */
+/* Die Leiste mit den Werkzeugen unter der Leiste oben. Sie behält ihre Höhe, auch wenn die Werkzeuge ausgeblendet sind. */
 .leiste {
   touch-action: manipulation; /* kein Doppeltipp-Zoom auf den Knöpfen */
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 12px;
-  padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  box-sizing: border-box;
+  min-height: 61px; /* Knopf 44 + Rand 2 x 8 + Linie 1 */
+  padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
   background: var(--leiste);
   border-bottom: 1px solid var(--linie);
 }
@@ -133,11 +135,114 @@ body {
   background: currentColor;
 }
 
+/*
+ * Oben: Blättern, Ansichten, Stand des Abgleichs, Einstellungen. Die Leiste hat immer dieselbe Höhe: Wird sie höher
+ * (der Status bekommt einen längeren Text, eine Meldung kommt), springt die Seite darunter, auch unter dem Stift.
+ * Darum bricht sie nicht um, nur der Text des Status darf umbrechen. Meldungen schweben darüber.
+ */
+.topbar {
+  touch-action: manipulation;
+  position: relative;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: max(6px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left));
+  background: var(--leiste);
+  border-bottom: 1px solid var(--linie);
+}
+
+.schritte,
+.ansichten {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--linie);
+  border-radius: 22px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.pill[aria-current='page'] {
+  border-color: var(--gruen);
+  background: var(--gruen);
+  color: #fff;
+}
+
+/* Ausgegraut, aber nicht tot: Ein Tipp sagt, wann es kommt. */
+.pill[aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pill:focus-visible,
+.reiter:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+/* Unter der Leiste, über der Werkzeugleiste und der Seite. Der Streifen fängt keine Berührung ab, nur die Meldungen. */
+.meldungen {
+  position: absolute;
+  top: 100%;
+  right: max(12px, env(safe-area-inset-right));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: min(440px, calc(100% - 24px));
+  margin-top: 4px;
+  pointer-events: none;
+}
+
+.meldung {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-left: 14px;
+  border: 1px solid #ecd9a0;
+  border-radius: 10px;
+  background: var(--hinweis);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+  font-size: 14px;
+  pointer-events: auto;
+}
+
+.meldung[role='alert'] {
+  border-color: #f0b4ad;
+  background: var(--fehler);
+}
+
+.meldung .tb {
+  flex: none;
+  font-size: 22px;
+  line-height: 1;
+}
+
 .status {
+  flex: 0 1 auto;
+  min-width: 0;
   margin-left: auto;
   font-size: 14px;
+  line-height: 1.15;
+  text-align: right;
   color: #4a5160;
-  white-space: nowrap;
 }
 
 .status-wartet {
@@ -147,6 +252,46 @@ body {
 .status-zugang {
   color: #a32a24;
   font-weight: 600;
+}
+
+/* Auf schmalen Bildschirmen (kleines iPad, geteilter Bildschirm) rücken die Knöpfe zusammen, damit der Status Platz hat. */
+@media (max-width: 780px) {
+  .pill {
+    padding: 0 8px;
+    font-size: 14px;
+  }
+
+  .status {
+    font-size: 12px;
+  }
+}
+
+/* Erst wenn es gar nicht mehr passt, bricht die Leiste um. */
+@media (max-width: 670px) {
+  .topbar {
+    flex-wrap: wrap;
+  }
+}
+
+/* Die quadratischen Knöpfe behalten auf jeder Breite ihre Größe, darum stehen sie nach den Regeln für schmale Bildschirme. */
+.pfeil {
+  width: 44px;
+  padding: 0;
+  font-size: 26px;
+}
+
+.zahnrad {
+  width: 44px;
+  padding: 0;
+}
+
+.zahnrad svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
 }
 
 .hinweis {
@@ -173,7 +318,107 @@ body {
   background: var(--fehler);
 }
 
-/* Die Bühne ist die Fläche unter der Leiste. Die Schreibfläche füllt sie, der Schnellwechsel schwimmt darüber. */
+/* Unter der Leiste oben: die Seite und, über ihr schwebend, die Monatsreiter am rechten Rand. */
+.inhalt {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.platzhalter {
+  padding: 24px max(16px, env(safe-area-inset-left));
+}
+
+.platzhalter p {
+  margin: 0;
+  font-size: 18px;
+  color: #4a5160;
+}
+
+/*
+ * Die Reiter liegen über der Seite und nehmen ihr keine Breite: Der Rand rechts neben dem Inhalt ist dafür frei.
+ * Der Streifen selbst fängt keine Berührung ab, nur die Reiter.
+ */
+.monatsreiter {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 44px;
+  pointer-events: none;
+}
+
+.reiter {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 44px;
+  border: 1px solid var(--linie);
+  border-right: 0;
+  border-radius: 10px 0 0 10px;
+  background: var(--leiste);
+  color: #4a5160;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  touch-action: manipulation;
+  pointer-events: auto;
+}
+
+.reiter[aria-current='true'] {
+  border-color: var(--gruen);
+  background: var(--gruen);
+  color: #fff;
+}
+
+/* Die Tageszahlen als Links: unsichtbar, solange niemand mit der Tastatur hineinspringt. */
+.tage {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.tage:focus-within {
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  width: auto;
+  height: auto;
+  max-height: calc(100% - 16px);
+  overflow: auto;
+  clip-path: none;
+  border: 1px solid var(--linie);
+  border-radius: 10px;
+  background: var(--leiste);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+}
+
+.tage a {
+  display: block;
+  padding: 10px 14px;
+  color: inherit;
+  font-size: 15px;
+  text-decoration: none;
+}
+
+.tage a:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: -2px;
+}
+
+/* Die Bühne ist die Fläche unter den Leisten. Die Schreibfläche füllt sie, der Schnellwechsel schwimmt darüber. */
 .buehne {
   position: relative;
   flex: 1;

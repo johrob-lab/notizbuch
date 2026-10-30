@@ -1,5 +1,5 @@
 import { mergePages, parsePage, serializePage } from '../ink/svg';
-import type { Page } from '../ink/types';
+import type { FieldBox, Page } from '../ink/types';
 import type { SyncEngine } from '../sync/engine';
 import { normalizePath } from '../sync/paths';
 
@@ -33,6 +33,9 @@ type Options = {
   emptyPage: () => Page;
   /** Nur ansehen: Die Fläche bleibt gesperrt, es wird nie geschrieben. */
   readOnly: boolean;
+  /** Felder und Hintergrund der Seite, so wie sie in die Datei geschrieben wird (siehe `serializePage`). Jede Seite hat ihre eigenen. */
+  fields: FieldBox[];
+  background: string;
   surface: PageSurface;
   /**
    * Meldet `retry`, sobald ein neuer Versuch Sinn hat, eine Seite zu laden, die sich nicht laden ließ, und gibt die
@@ -138,8 +141,13 @@ export class PageSession {
   // Auftrags eine neuere Fassung, zählt allein sie. Der erste Auftrag startet noch im Aufruf von `changed`. Nur
   // `#drain` ruft `engine.write` auf, und nur, solange die Seite beschreibbar ist.
 
+  /** Der Text der Datei: Felder und Hintergrund der Seite sind bei jedem Schreiben dabei, auch beim Zusammenführen. */
+  #serialize(page: Page): string {
+    return serializePage(page, this.#o.fields, this.#o.background);
+  }
+
   #save(page: Page): void {
-    this.#next = serializePage(page, [], '');
+    this.#next = this.#serialize(page);
     void this.#startWriting();
   }
 
@@ -207,7 +215,7 @@ export class PageSession {
       if (this.#version !== seen || unsaved) {
         if (text === null) page = this.#o.surface.getPage();
         else {
-          page = readPage(mergePages(serializePage(this.#o.surface.getPage(), [], ''), text));
+          page = readPage(mergePages(this.#serialize(this.#o.surface.getPage()), text));
           united = true;
         }
       }

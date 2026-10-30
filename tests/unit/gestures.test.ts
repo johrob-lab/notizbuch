@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { clampView, GestureFilter, gestureView, isTwoFingerTap, zoomAround, type View } from '../../src/ink/gestures';
+import { clampView, GestureFilter, gestureView, isFingerTap, isTwoFingerTap, zoomAround, type View } from '../../src/ink/gestures';
 
 type Ev = Parameters<typeof isTwoFingerTap>[0][number];
 
@@ -105,6 +105,45 @@ test('two quick taps one after the other are no two finger tap', () => {
 test('two finger tap is not fooled by an up without a down', () => {
   expect(isTwoFingerTap([u(1, 10), u(2, 20)])).toBe(false);
   expect(isTwoFingerTap([d(1, 0), u(1, 100), u(2, 120)])).toBe(false);
+});
+
+// ---------- Tipp mit einem Finger oder der Maus ----------
+
+test('one finger tap: one pointer, down and up close in place and time', () => {
+  expect(isFingerTap([d(1, 0), u(1, 120)])).toBe(true);
+  expect(isFingerTap([d(1, 0), m(1, 50, { dx: 3, dy: -4 }), u(1, 150, 105, 100)])).toBe(true);
+  // die Maus hat dieselbe Form, nur eine andere id
+  expect(isFingerTap([d(7, 0, 400, 300), u(7, 80, 400, 300)])).toBe(true);
+});
+
+test('a tap may take up to 500 ms, a press that takes longer is no tap', () => {
+  expect(isFingerTap([d(1, 1000), u(1, 1500)])).toBe(true);
+  expect(isFingerTap([d(1, 1000), u(1, 1501)])).toBe(false);
+});
+
+test('a finger that moves 10 px or more is panning, not tapping, even if it comes back', () => {
+  expect(isFingerTap([d(1, 0), m(1, 50, { dx: 9, dy: 0 }), u(1, 100, 109, 100)])).toBe(true);
+  expect(isFingerTap([d(1, 0), m(1, 50, { dx: 10 }), u(1, 100)])).toBe(false);
+  expect(isFingerTap([d(1, 0), m(1, 50, { dy: -12 }), m(1, 80), u(1, 100)])).toBe(false);
+  // der Ort beim Abheben zählt auch
+  expect(isFingerTap([d(1, 0), u(1, 100, 100, 110)])).toBe(false);
+});
+
+test('two pointers are no one finger tap, neither together nor one after the other', () => {
+  expect(isFingerTap([d(1, 0), d(2, 20), u(1, 100), u(2, 110)])).toBe(false);
+  expect(isFingerTap([d(1, 0), u(1, 50), d(2, 100), u(2, 150)])).toBe(false);
+  expect(isFingerTap([d(1, 0), d(2, 20), u(2, 100), u(1, 110)])).toBe(false);
+});
+
+test('unfinished or odd sequences are no tap', () => {
+  expect(isFingerTap([])).toBe(false);
+  expect(isFingerTap([d(1, 0)])).toBe(false);
+  expect(isFingerTap([d(1, 0), m(1, 30)])).toBe(false);
+  expect(isFingerTap([u(1, 10)])).toBe(false);
+  expect(isFingerTap([m(1, 10), u(1, 20)])).toBe(false);
+  expect(isFingerTap([d(1, 0), u(1, 50), u(1, 60)])).toBe(false);
+  expect(isFingerTap([d(1, 0), d(1, 10), u(1, 50)])).toBe(false);
+  expect(isFingerTap([d(1, 0), u(1, 50), m(1, 60)])).toBe(false);
 });
 
 // ---------- Verschieben und Zoomen ----------

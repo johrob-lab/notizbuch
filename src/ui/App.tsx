@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { SMOOTHING } from '../ink/types';
-import { isValidDay, todayVienna, type Day } from '../lib/dates';
+import { monthKey } from '../lib/dates';
 import { loadSettings, saveSettings, type Settings } from '../lib/settings';
 import { SyncEngine } from '../sync/engine';
 import { GitHubClient } from '../sync/github';
 import { openStore, type Store } from '../sync/store';
-import { PageView } from './PageView';
+import { MonatPage } from './MonatPage';
+import { MonthTabs } from './MonthTabs';
+import type { PageProps } from './PageView';
+import { parseRoute, routeHash, shownDay, type Route } from './router';
+import { TagPage } from './TagPage';
+import { TopBar } from './TopBar';
+import { WochePage } from './WochePage';
 import './app.css';
 
 type Boot =
@@ -13,12 +19,6 @@ type Boot =
   | { phase: 'einrichten' }
   | { phase: 'fehler' }
   | { phase: 'bereit'; store: Store; engine: SyncEngine; settings: Settings };
-
-/** Der Tag aus `#/tag/<YYYY-MM-DD>`. Fehlt er oder gibt es ihn nicht im Kalender, gilt heute. */
-function dayOf(hash: string): Day {
-  const match = /^#\/tag\/(.*)$/.exec(hash);
-  return match && isValidDay(match[1]) ? match[1] : todayVienna();
-}
 
 function useHash(): string {
   const [hash, setHash] = useState(window.location.hash);
@@ -30,12 +30,36 @@ function useHash(): string {
   return hash;
 }
 
+/** Für Seiten, die erst später kommen. */
+function Platzhalter({ text }: { text: string }) {
+  return (
+    <section class="platzhalter">
+      <p>{text}</p>
+    </section>
+  );
+}
+
+function Seite({ route, ...page }: { route: Route } & PageProps) {
+  switch (route.view) {
+    case 'tag':
+      return <TagPage day={route.key} {...page} />;
+    case 'woche':
+      return <WochePage week={route.key} {...page} />;
+    case 'monat':
+      return <MonatPage month={route.key} {...page} />;
+    case 'besprechung':
+      return <Platzhalter text="Besprechungen folgen." />;
+    case 'einstellungen':
+      return <Platzhalter text="Einstellungen folgen." />;
+  }
+}
+
 export function App() {
   const [boot, setBoot] = useState<Boot>({ phase: 'laden' });
   const hash = useHash();
-  // Nur wenn sich die Adresse ändert: Ohne Tag in der Adresse gilt „heute“, und das soll sich nicht mitten im Schreiben
+  // Nur wenn sich die Adresse ändert: Ohne gültige Adresse gilt „heute“, und das soll sich nicht mitten im Schreiben
   // ändern, weil nach Mitternacht etwas anderes neu gezeichnet wird.
-  const day = useMemo(() => dayOf(hash), [hash]);
+  const route = useMemo(() => parseRoute(hash), [hash]);
 
   useEffect(() => {
     let stopped = false;
@@ -81,19 +105,29 @@ export function App() {
     })().catch(() => undefined);
   };
 
+  // Die Reiter gehören zum Jahr und Monat der Seite. Die Einstellungen sind keine Seite des Kalenders und haben keine.
+  const shown = shownDay(route);
+
   return (
     <main id="app">
       {boot.phase === 'bereit' ? (
-        <PageView
-          key={day}
-          engine={boot.engine}
-          day={day}
-          readOnly={boot.settings.device === 'Firmen-PC'}
-          sigma={SMOOTHING[boot.settings.smoothing] ?? SMOOTHING.mittel}
-          prediction={boot.settings.prediction}
-          quickSwitchPos={boot.settings.quickSwitchPos}
-          onQuickSwitchMove={moveQuickSwitch}
-        />
+        <>
+          <TopBar route={route} engine={boot.engine} />
+          <div class="inhalt">
+            {/* Jede Seite ist ein eigenes Bauteil: Beim Wechsel wird die alte gesichert und geschlossen, die neue liest ihre Datei. */}
+            <Seite
+              key={routeHash(route)}
+              route={route}
+              engine={boot.engine}
+              readOnly={boot.settings.device === 'Firmen-PC'}
+              sigma={SMOOTHING[boot.settings.smoothing] ?? SMOOTHING.mittel}
+              prediction={boot.settings.prediction}
+              quickSwitchPos={boot.settings.quickSwitchPos}
+              onQuickSwitchMove={moveQuickSwitch}
+            />
+            {route.view !== 'einstellungen' && <MonthTabs year={Number(shown.slice(0, 4))} current={monthKey(shown)} />}
+          </div>
+        </>
       ) : (
         <>
           <h1>Notizbuch</h1>

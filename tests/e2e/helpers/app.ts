@@ -31,6 +31,8 @@ export type OpenOptions = {
   offline?: boolean;
   /** Anfragen nach einer Datei antworten mit einem Serverfehler (500), bis `RepoMock.failReads` wieder `false` ist. */
   failReads?: boolean;
+  /** Schreiben und Löschen (PUT, DELETE) antworten mit einem Serverfehler (500), bis `RepoMock.failWrites` wieder `false` ist. */
+  failWrites?: boolean;
   device?: Device;
   /** Dateien, die zusätzlich im Repo liegen (oder die Fassung aus dem Mini-Vault ersetzen). */
   files?: Record<string, string>;
@@ -47,6 +49,8 @@ export type RepoMock = {
   unhandled: string[];
   /** Solange das `true` ist, antwortet GitHub auf jede Anfrage nach einer Datei mit einem Serverfehler (500). */
   failReads: boolean;
+  /** Solange das `true` ist, antwortet GitHub auf jedes Schreiben und Löschen einer Datei mit einem Serverfehler (500). */
+  failWrites: boolean;
   read(path: string): string | undefined;
   /** Eine Änderung von einem anderen Gerät: neuer Stand und neuer Commit, aber kein Eintrag in `puts`. */
   commit(path: string, text: string): void;
@@ -104,6 +108,7 @@ function createRepo(extra: Record<string, string>): RepoMock & { files: Map<stri
     deletes,
     unhandled,
     failReads: false,
+    failWrites: false,
     read: (path) => files.get(path),
     commit(path, text) {
       files.set(path, text);
@@ -139,6 +144,7 @@ function createRepo(extra: Record<string, string>): RepoMock & { files: Map<stri
             content: githubBase64(text),
           });
         }
+        if (mock.failWrites && (method === 'PUT' || method === 'DELETE')) return json(route, 500, { message: 'Server Error' });
         const body = request.postDataJSON() as { message: string; content?: string; sha?: string };
         if (method === 'PUT') {
           const newText = Buffer.from(body.content ?? '', 'base64').toString('utf8');
@@ -194,6 +200,7 @@ function createRepo(extra: Record<string, string>): RepoMock & { files: Map<stri
 export async function openSeeded(page: Page, hash: string, o: OpenOptions = {}): Promise<RepoMock> {
   const repo = createRepo(o.files ?? {});
   repo.failReads = o.failReads ?? false;
+  repo.failWrites = o.failWrites ?? false;
   await page.route('https://api.github.com/**', (route) => (o.offline ? route.abort('internetdisconnected') : repo.handle(route)));
 
   const settings = {

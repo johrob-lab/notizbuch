@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { parsePage, serializePage } from '../../src/ink/svg';
-import type { Page, Stroke } from '../../src/ink/types';
+import type { FieldBox, Page, Stroke } from '../../src/ink/types';
 import { PageSession, type PageSurface, type Phase, type SessionEngine } from '../../src/ui/pageSession';
 
 // Die Sitzung einer Seite: lesen, speichern, fremde Änderungen übernehmen. Engine und Fläche sind Fakes, die Seiten
@@ -9,6 +9,12 @@ import { PageSession, type PageSurface, type Phase, type SessionEngine } from '.
 const PATH = '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg';
 const DAY = '2026-10-29';
 const BROKEN = '<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="1"';
+/** Felder und Hintergrund der Seite. Die Striche der Tests liegen im linken Feld (um 130, 110). */
+const FIELDS: FieldBox[] = [
+  { id: 'notizen', rect: [0, 0, 600, 800], datum: DAY },
+  { id: 'aufgaben', rect: [600, 0, 500, 800], datum: DAY },
+];
+const BACKGROUND = '<rect id="papier" x="0" y="0" width="1192" height="1590" fill="#fffefa"/>';
 
 function stroke(id: string, t: number, y = 100): Stroke {
   return {
@@ -175,7 +181,7 @@ function fakeCues() {
 function open(
   engine: ReturnType<typeof fakeEngine>,
   surface: ReturnType<typeof fakeSurface>,
-  o: { readOnly?: boolean; path?: string; cues?: ReturnType<typeof fakeCues> } = {},
+  o: { readOnly?: boolean; path?: string; cues?: ReturnType<typeof fakeCues>; fields?: FieldBox[]; background?: string } = {},
 ) {
   const phases: Phase[] = [];
   const saveFailed: boolean[] = [];
@@ -184,6 +190,8 @@ function open(
     path: o.path ?? PATH,
     emptyPage: empty,
     readOnly: o.readOnly ?? false,
+    fields: o.fields ?? FIELDS,
+    background: o.background ?? BACKGROUND,
     surface,
     retryCues: o.cues?.subscribe,
     onPhase: (p) => phases.push(p),
@@ -252,6 +260,76 @@ test('nothing is written while the page is still being read', async () => {
   slow.release();
   await loading;
   expect(ids(surface.page)).toEqual(['a']);
+});
+
+// ---------- Felder und Hintergrund ----------
+
+test('every write carries the background of the page and puts each stroke in the field it lies in', async () => {
+  const engine = fakeEngine(null);
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+  const right: Stroke = { ...stroke('r', 3000), pts: [{ x: 700, y: 100, w: 1.2 }, { x: 760, y: 120, w: 1.2 }] };
+  surface.page = pageOf(stroke('l', 1000), right);
+  session.changed(surface.page);
+  await settle();
+  const text = engine.writes.at(-1)!;
+  expect(text).toContain(`<g data-hintergrund="1">${BACKGROUND}</g>`);
+  expect(text).toMatch(/<g data-feld="notizen" data-datum="2026-10-29">\s*<path data-id="l"/);
+  expect(text).toMatch(/<g data-feld="aufgaben" data-datum="2026-10-29">\s*<path data-id="r"/);
+  expect(ids(text).sort()).toEqual(['l', 'r']);
+});
+
+test('a page that was stored with an older background gets the current one with the next change', async () => {
+  const engine = fakeEngine(serializePage(pageOf(stroke('a', 1000)), FIELDS, '<rect id="alt"/>'));
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+  expect(engine.writes).toEqual([]); // Lesen allein schreibt nichts
+  surface.page = pageOf(stroke('a', 1000), stroke('b', 2000));
+  session.changed(surface.page);
+  await settle();
+  const text = engine.writes.at(-1)!;
+  expect(text).toContain(BACKGROUND);
+  expect(text).not.toContain('id="alt"');
+});
+
+test('what was read and what is still unsaved are united under the background and the fields of this page', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000, 100)));
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+  engine.failWrites = 2;
+  surface.page = pageOf(stroke('a', 1000, 100), stroke('mine', 5000, 400));
+  session.changed(surface.page);
+  await settle();
+
+  // ein anderes Gerät hat 'b' ergänzt und seinen eigenen Hintergrund geschrieben
+  engine.text = serializePage(pageOf(stroke('a', 1000, 100), stroke('b', 500, 200)), [], '<rect id="fremd"/>');
+  engine.notify([PATH]);
+  await settle();
+  const saved = engine.writes.at(-1)!;
+  expect(ids(saved).sort()).toEqual(['a', 'b', 'mine']);
+  expect(saved).toContain(`<g data-hintergrund="1">${BACKGROUND}</g>`);
+  expect(saved).not.toContain('id="fremd"');
+  expect(saved).toMatch(/<g data-feld="notizen" data-datum="2026-10-29">/);
+  expect(engine.text).toBe(saved);
+});
+
+test('a session writes only the fields and background it was opened with', async () => {
+  const other: FieldBox[] = [{ id: 'woche', rect: [0, 0, 1192, 1590], datum: DAY }];
+  const engine = fakeEngine(null);
+  const surface = fakeSurface();
+  const { session } = open(engine, surface, { fields: other, background: '<g id="woche-papier"/>' });
+  await session.reload();
+  surface.page = pageOf(stroke('a', 1000));
+  session.changed(surface.page);
+  await settle();
+  const text = engine.writes.at(-1)!;
+  expect(text).toContain('<g id="woche-papier"/>');
+  expect(text).not.toContain('id="papier"');
+  expect(text).toMatch(/<g data-feld="woche"/);
+  expect(text).not.toContain('data-feld="notizen"');
 });
 
 // ---------- Unlesbare Seiten ----------

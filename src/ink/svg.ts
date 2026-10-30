@@ -48,11 +48,11 @@ function stripInvalid(text: string): string {
 }
 
 /** Wert eines Attributs. Zeilenumbruch und Tab werden Zeichenverweise, sonst machen Parser Leerzeichen daraus. */
-function escAttr(value: string): string {
+export function escAttr(value: string): string {
   return stripInvalid(String(value)).replace(/[&<>"\n\r\t]/g, (c) => ESCAPES[c]);
 }
 
-function escText(text: string): string {
+export function escText(text: string): string {
   return stripInvalid(text).replace(/[&<>]/g, (c) => ESCAPES[c]);
 }
 

@@ -34,6 +34,8 @@ const LINE: [number, number][] = [
   [320, 1000],
 ];
 const BROKEN = '<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="1"';
+/** So beginnt jeder Strich in einer Datei. Der Hintergrund der Seite hat auch <path>-Elemente (die Linien), aber keine mit `data-id`. */
+const STROKE = '<path data-id=';
 
 const currentStrokes = (page: Page) => page.evaluate(() => window.__notizbuch.currentPage().strokes);
 const strokeCount = (page: Page) => page.evaluate(() => window.__notizbuch.currentPage().strokes.length);
@@ -492,12 +494,12 @@ test('a finished stroke is queued at once, undo and redo are written too', async
   await openSeeded(page, DAY);
   const queuedText = async () => (await queued(page))[TAG] ?? '';
   await pen(page).stroke(LINE);
-  await expect.poll(queuedText).toContain('<path');
+  await expect.poll(queuedText).toContain(STROKE);
 
   await button(page, 'Rückgängig').click();
-  await expect.poll(queuedText).not.toContain('<path');
+  await expect.poll(queuedText).not.toContain(STROKE);
   await button(page, 'Wiederholen').click();
-  await expect.poll(queuedText).toContain('<path');
+  await expect.poll(queuedText).toContain(STROKE);
 });
 
 test('a stroke is uploaded when the app goes to the background', async ({ page }) => {
@@ -511,7 +513,7 @@ test('a stroke is uploaded when the app goes to the background', async ({ page }
   expect(put.message).toBe('Notizbuch: 2026-10-29 Tag.svg (iPad)');
   expect(put.text).toContain('data-seite="tag"');
   expect(put.text).toContain('data-schluessel="2026-10-29"');
-  expect(put.text).toContain('<path');
+  expect(put.text).toContain(STROKE);
   await expect(page.getByTestId('status')).toHaveText('Gesichert');
 });
 
@@ -544,7 +546,7 @@ test('a change from another device shows up and the next stroke keeps it', async
   await expect.poll(() => repo.puts.length).toBe(1);
   expect(repo.puts[0].text).toContain('data-id="a"');
   expect(repo.puts[0].text).toContain('data-id="b"');
-  expect(repo.puts[0].text.match(/<path/g)).toHaveLength(3);
+  expect(repo.puts[0].text.match(/<path data-id=/g)).toHaveLength(3);
   expect(repo.unhandled).toEqual([]);
 });
 
@@ -585,7 +587,7 @@ test('leaving the page in the middle of a stroke keeps the stroke', async ({ pag
   // Beim Verlassen einer Seite lädt die Engine hoch: Der Strich ist schon auf GitHub (im Mock).
   await expect.poll(() => repo.puts.length).toBe(1);
   expect(repo.puts[0].path).toBe(TAG);
-  expect(repo.puts[0].text).toContain('<path');
+  expect(repo.puts[0].text).toContain(STROKE);
   expect(await strokeCount(page)).toBe(0);
 
   await leaveFor(page, DAY);
