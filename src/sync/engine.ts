@@ -176,24 +176,35 @@ export class SyncEngine {
    * aussieht und überschrieben wird.
    */
   async read(path: string): Promise<string | null> {
+    return (await this.lookup(path)).text;
+  }
+
+  /**
+   * Wie `read`, sagt aber auch, ob `null` heißt „die Datei gibt es nicht“ oder „GitHub ließ sich nicht fragen“ (kein Netz,
+   * Ratenlimit, kein Zugang): Dann ist `unknown` wahr, und ob es die Datei gibt, ist offen. Wer sie anlegen will, wenn sie
+   * fehlt, darf das nur bei `unknown: false` tun, sonst entstünde neben einer Datei, die man nicht sieht, eine zweite.
+   * Mit lokaler Kopie ist `unknown` nie wahr.
+   */
+  async lookup(path: string): Promise<{ text: string | null; unknown: boolean }> {
     const local = await this.#store.get('files', path);
     if (local) {
       this.#pageGets(path, local.text, { sha: local.sha, baseText: local.base });
       void this.#refreshInBackground(path);
-      return local.text;
+      return { text: local.text, unknown: false };
     }
-    if ((await this.#store.get('outbox', path))?.deleted) return this.#pageGetsNothing(path); // gelöscht, das Löschen steht noch aus
+    // Gelöscht, das Löschen steht noch aus.
+    if ((await this.#store.get('outbox', path))?.deleted) return { text: this.#pageGetsNothing(path), unknown: false };
     let remote: Remote | null;
     try {
       remote = await this.#call(() => this.#client.getFile(path));
     } catch (error) {
       if (isStop(error)) {
         this.#noteStop(error);
-        return null;
+        return { text: null, unknown: true };
       }
       throw error;
     }
-    if (!remote) return this.#pageGetsNothing(path);
+    if (!remote) return { text: this.#pageGetsNothing(path), unknown: false };
     const fetched = remote;
     // Während der Anfrage kann jemand geschrieben oder gelöscht haben, dann gilt das.
     const kept = await this.#store.transact(['files', 'outbox'], async (tx) => {
@@ -204,9 +215,9 @@ export class SyncEngine {
       await tx.objectStore('files').put(record);
       return record;
     });
-    if (!kept) return this.#pageGetsNothing(path);
+    if (!kept) return { text: this.#pageGetsNothing(path), unknown: false };
     this.#pageGets(path, kept.text, { sha: kept.sha, baseText: kept.base });
-    return kept.text;
+    return { text: kept.text, unknown: false };
   }
 
   /** Die Seite bekommt diesen Text, der auf dieser Fassung beruht. */

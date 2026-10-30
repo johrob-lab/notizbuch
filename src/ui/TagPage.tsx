@@ -2,7 +2,7 @@ import { useMemo, useState } from 'preact/hooks';
 import { todayVienna, type Day } from '../lib/dates';
 import { tagPagePath } from '../lib/filenames';
 import { tagLayout, type Layout, type Rect } from '../pages/layouts';
-import type { ListDir } from './BesprechungPage';
+import type { ListDir } from '../sync/github';
 import { BriefingCard } from './BriefingCard';
 import { MeetingsCard } from './MeetingsCard';
 import { MiniCalendar } from './MiniCalendar';

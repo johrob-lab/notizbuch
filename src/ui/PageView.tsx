@@ -6,6 +6,7 @@ import type { FieldBox, InkColor, Page, WidthName } from '../ink/types';
 import { todayVienna } from '../lib/dates';
 import { tapTargetAt, tapTargets, todayMarks, type Layout } from '../pages/layouts';
 import type { SyncEngine } from '../sync/engine';
+import { watchCards } from './cardGestures';
 import { PageSession, type Phase } from './pageSession';
 import { QuickSwitch } from './QuickSwitch';
 import { retryCues } from './retryCues';
@@ -93,20 +94,9 @@ function placeCards(layer: HTMLElement | null, view: View): void {
   layer.dataset.bereit = ''; // erst jetzt sichtbar: vorher läge sie an der falschen Stelle
 }
 
-/** Kann etwas zwischen `from` und `stop` (der Rahmen der Karten) in dieser Richtung noch scrollen? Dann gehört das Rad ihm. */
-function scrollsFurther(from: EventTarget | null, stop: Element, deltaY: number): boolean {
-  if (deltaY === 0) return false;
-  for (let el = from instanceof Element ? from : null; el && el !== stop; el = el.parentElement) {
-    const { overflowY } = getComputedStyle(el);
-    if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
-      if (deltaY > 0 ? el.scrollTop + el.clientHeight < el.scrollHeight - 1 : el.scrollTop > 0) return true;
-    }
-  }
-  return false;
-}
-
 export function PageView(p: Props) {
   const { engine, layout, path, readOnly, sigma, prediction, kopf, overlay } = p;
+  const stage = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const cards = useRef<HTMLDivElement>(null);
@@ -206,33 +196,16 @@ export function PageView(p: Props) {
     };
   }, [engine, layout, path, days, today, readOnly, sigma, prediction, palm]);
 
-  // Ein Rad über einer Karte bedient die Seite wie über der Fläche: Strg (oder Cmd) mit Rad zoomt, sonst wandert die Seite. Ohne
-  // das zoomte der Browser die ganze Oberfläche. Nur wo die Karte selbst noch in diese Richtung scrollen kann, scrollt sie.
+  // Die Karten liegen über der Fläche und fangen Berührungen und Rad ab, die auf ihnen beginnen. `watchCards` gibt der Seite, was
+  // die Karte nicht selbst braucht: Finger, die ziehen oder zoomen, und das Rad. Auch das Tor gegen Handballen gilt auf den Karten.
   const hasCards = overlay !== undefined;
   useEffect(() => {
     const around = frame.current;
     const surfaceHost = host.current;
-    if (!around || !surfaceHost) return;
-    const onWheel = (e: WheelEvent) => {
-      if (!(e.ctrlKey || e.metaKey) && scrollsFurther(e.target, around, e.deltaY)) return;
-      e.preventDefault();
-      surfaceHost.dispatchEvent(
-        new WheelEvent('wheel', {
-          clientX: e.clientX,
-          clientY: e.clientY,
-          deltaX: e.deltaX,
-          deltaY: e.deltaY,
-          deltaMode: e.deltaMode,
-          ctrlKey: e.ctrlKey,
-          metaKey: e.metaKey,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-    };
-    around.addEventListener('wheel', onWheel, { passive: false });
-    return () => around.removeEventListener('wheel', onWheel);
-  }, [hasCards]);
+    const inStage = stage.current;
+    if (!around || !surfaceHost || !inStage) return;
+    return watchCards({ stage: inStage, host: surfaceHost, frame: around, surface: () => surface.current, filter: palm });
+  }, [hasCards, palm]);
 
   const chooseTool = (t: Tool) => {
     setTool(t);
@@ -288,12 +261,13 @@ export function PageView(p: Props) {
               onWidth={chooseWidth}
               onUndo={() => surface.current?.undo()}
               onRedo={() => surface.current?.redo()}
+              onFit={() => surface.current?.zoomToFit()}
             />
           )}
         </div>
       )}
       {kopf && tools && <div class="kopf">{kopf.form(tools)}</div>}
-      <div class="buehne">
+      <div class="buehne" ref={stage}>
         <div class="flaeche" data-testid="surface" ref={host} />
         {/* Die Karten gehören nicht zur Schreibfläche: Sie liegen daneben und sind echte Bedienelemente (Kästchen, Knöpfe, Felder). */}
         {overlay && (

@@ -1,6 +1,4 @@
-import { serializePage } from '../ink/svg';
 import type { Page } from '../ink/types';
-import { besprechungLayout } from '../pages/layouts';
 import { hasBlockedWordPart } from '../sync/paths';
 import { isValidDay, type Day } from './dates';
 import { besprechungBase, besprechungPagePath } from './filenames';
@@ -81,12 +79,6 @@ export function meetingMeta(base: string, n: number, meta: Record<string, string
     if (!HEADER_KEYS.includes(key)) full[key] = value;
   }
   return full;
-}
-
-/** Der Text der Datei zu einer Besprechungsseite: mit Kopfdaten und dem Hintergrund, der sie zeigt. */
-export function meetingPageText(page: Page): string {
-  const layout = besprechungLayout(page.meta);
-  return serializePage(page, layout.fields, layout.background());
 }
 
 /**

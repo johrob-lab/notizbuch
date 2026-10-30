@@ -1,4 +1,4 @@
-import { appendErgaenzung, editItemText, isItemLine, newDailyNote, parseItem, toggleTask } from './dailyNote';
+import { appendErgaenzung, editItemText, isItemLine, newDailyNote, parseItem, splitMarkers, toggleTask } from './dailyNote';
 import type { Day } from './dates';
 
 // Was die Karte „Morgenbriefing“ an der Tagesnotiz ändert. Jede Änderung geht vom neuesten Text der Notiz aus (nicht von dem,
@@ -56,4 +56,37 @@ export function findLine(md: string | null, expected: string, hint: number): num
   if (lines[hint] === expected) return hint;
   const found = lines.flatMap((line, index) => (line === expected ? [index] : []));
   return found.length === 1 ? found[0] : null;
+}
+
+/** Ein Wort im Marker mit Namen und Wert, zum Beispiel `todo:AAMkTEST2` oder `ob:k3x9`. Ohne Wert (`todo:`) oder ohne Namen ist es keins. */
+const ID_WORD = /^[A-Za-z][\w-]*:\S+$/;
+
+/**
+ * Die Kennungen einer Zeile: die Wörter ihrer Marker mit Namen und Wert (`todo:AAMkTEST2`, `ob:k3x9`). Sie bleiben, wenn sich
+ * Text, Haken oder ein anderes Wort im Marker ändert (zum Beispiel `gemeldet`), und sagen darum, welche Zeile gemeint ist.
+ * Wörter ohne Wert sind Merkmale und keine Kennung.
+ */
+export function idsOf(line: string): string[] {
+  const content = line.endsWith('\r') ? line.slice(0, -1) : line;
+  return splitMarkers(content).markers.flatMap((marker) => marker.replace(/^%%|%%$/g, '').split(/\s+/).filter((word) => ID_WORD.test(word)));
+}
+
+/**
+ * Wo steht die Zeile, die man bearbeitet, jetzt, und wie lautet sie dort? Genau so, wie man sie gesehen hat: wie `findLine`.
+ * Hat sie sich geändert, hilft ihre Kennung: Die Zeile, die eine ihrer Kennungen trägt und ein Listenpunkt ist, ist sie. Das
+ * ist die an der gesehenen Stelle, sonst die einzige. `null`, wenn sie fehlt, keine Kennung hat und sich geändert hat, oder
+ * wenn die Kennung mehrfach vorkommt und keine an ihrem Platz steht: Dann lässt sich nicht sagen, welche gemeint war.
+ */
+export function relocate(md: string | null, expected: string, hint: number): { line: number; source: string } | null {
+  if (md === null) return null;
+  const exact = findLine(md, expected, hint);
+  if (exact !== null) return { line: exact, source: expected };
+  const ids = idsOf(expected);
+  if (ids.length === 0) return null;
+  const lines = md.split('\n');
+  const carries = (line: string | undefined): line is string => line !== undefined && isItemLine(line) && idsOf(line).some((id) => ids.includes(id));
+  const here = lines[hint];
+  if (carries(here)) return { line: hint, source: here };
+  const found = lines.flatMap((line, index) => (carries(line) ? [index] : []));
+  return found.length === 1 ? { line: found[0], source: lines[found[0]] } : null;
 }

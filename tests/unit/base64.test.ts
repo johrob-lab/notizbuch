@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { base64ToUtf8, utf8ToBase64 } from '../../src/sync/base64';
+import { base64ToUtf8, isNotUtf8, utf8ToBase64 } from '../../src/sync/base64';
 
 test('utf8 roundtrip', () => {
   expect(base64ToUtf8(utf8ToBase64('## Ergänzungen äöüß € „x“'))).toBe('## Ergänzungen äöüß € „x“');
@@ -79,4 +79,20 @@ test('removes whitespace itself instead of relying on atob to skip it', () => {
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+test('bytes that are not UTF-8 are refused with an error that isNotUtf8 recognises, and other errors are not', () => {
+  const broken = Buffer.from([0x41, 0xff, 0xfe, 0x42]).toString('base64');
+  let caught: unknown;
+  try {
+    base64ToUtf8(broken);
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeDefined();
+  expect(isNotUtf8(caught)).toBe(true);
+  // Eine Antwort, die kein Base64 ist, oder ein Fehler des Netzes ist etwas anderes: Dort hilft ein neuer Versuch.
+  expect(isNotUtf8(new Error('Server Error'))).toBe(false);
+  expect(isNotUtf8(Object.assign(new Error('HTTP 503'), { status: 503 }))).toBe(false);
+  expect(isNotUtf8(null)).toBe(false);
 });

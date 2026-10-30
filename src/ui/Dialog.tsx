@@ -1,5 +1,6 @@
 import { render, type VNode } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { FAILED } from './texts';
 
 // Die Rückfrage der App. Sie ist ein eigener Dialog, kein `window.confirm`: Der blockiert auf dem iPad die ganze Seite.
 // Es ist das eingebaute <dialog>: Der Browser sperrt alles dahinter (kein Antippen, kein Tabulator dorthin), schließt auf
@@ -94,8 +95,6 @@ export function confirmDialog(o: { frage: string; ja: string; nein?: string; sig
 
 /** Ein Feld des Dialogs: `name` ist der Schlüssel in den Werten, `value` der Vorschlag. */
 export type FormField = { name: string; label: string; value: string; type?: 'text' | 'time' };
-
-const FAILED = 'Das hat nicht geklappt. Bitte noch einmal versuchen.';
 
 type FormDialogProps = {
   frage: string;

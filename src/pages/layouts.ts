@@ -1,6 +1,6 @@
 import { escAttr, escText } from '../ink/svg';
 import { MM, PAGE_H, PAGE_W, PAPER, type FieldBox, type PageKind } from '../ink/types';
-import { formatDayLong, isValidDay, isoWeekKey, monthGrid, weekDays, type Day } from '../lib/dates';
+import { formatDayLong, isValidDay, isoWeekKey, monthGrid, MONTHS, weekDays, type Day } from '../lib/dates';
 import { besprechungBase } from '../lib/filenames';
 import { holidaysAT } from '../lib/holidays';
 
@@ -65,20 +65,6 @@ const COLOR = {
 
 const FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif";
 const WEEKDAYS = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
-export const MONTHS = [
-  'Januar',
-  'Februar',
-  'März',
-  'April',
-  'Mai',
-  'Juni',
-  'Juli',
-  'August',
-  'September',
-  'Oktober',
-  'November',
-  'Dezember',
-];
 
 // ---------- SVG-Text ----------
 

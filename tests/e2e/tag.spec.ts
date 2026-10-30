@@ -5,8 +5,9 @@ import { expect, test as base, type Locator, type Page } from '@playwright/test'
 import { serializePage } from '../../src/ink/svg';
 import { appendErgaenzung, newDailyNote } from '../../src/lib/dailyNote';
 import { besprechungLayout } from '../../src/pages/layouts';
-import { bringToForeground, lastHead, openSeeded, queued, sendToBackground } from './helpers/app';
+import { bringToForeground, lastHead, networkBack, openSeeded, queued, sendToBackground } from './helpers/app';
 import { inkNear, mouse, pen, viewOf, wheel } from './helpers/pointer';
+import { touchscreen, type Pt } from './helpers/touch';
 
 // Die Tagesseite mit ihren drei Karten (Morgenbriefing, Kalender, Besprechungen). GitHub antwortet aus dem erfundenen
 // Mini-Vault in tests/fixtures/vault/. Heute ist in allen Tests der 29.10.2026, 12:00 Uhr (Wiener Zeit).
@@ -110,6 +111,9 @@ const RICH_NOTE = [
   '',
 ].join('\n');
 
+/** Die Pause nach dem Stift (250 ms), in der eine Berührung als Hand gilt. */
+const afterPalmWindow = (page: Page) => page.waitForTimeout(300);
+
 const hashOf = (base: string, n: number) => `#/besprechung/${encodeURIComponent(base)}/${n}`;
 const hash = (page: Page) => page.evaluate(() => window.location.hash);
 const go = (page: Page, next: string) => page.evaluate((h) => void (window.location.hash = h), next);
@@ -119,6 +123,11 @@ const checkbox = (page: Page, name: string) => page.getByRole('checkbox', { name
 const pencil = (page: Page, name: string) => button(page, `Bearbeiten: ${name}`);
 const section = (page: Page, name: string) => button(page, name);
 const region = (page: Page, name: string) => page.getByRole('region', { name, exact: true });
+/**
+ * Die Karte „Morgenbriefing“ hat nichts mehr zu tun: Alles, was sie schreiben wollte, steht in der Warteschlange. Erst dann sagt
+ * ein „es wurde nichts geschrieben“ etwas, sonst hat die Karte nur noch nicht angefangen.
+ */
+const settled = (page: Page) => expect(region(page, 'Morgenbriefing')).toHaveAttribute('aria-busy', 'false');
 const meetings = (page: Page) => region(page, 'Besprechungen');
 const calendar = (page: Page) => region(page, 'Kalender');
 const editField = (page: Page) => page.getByLabel('Text bearbeiten', { exact: true });
@@ -223,6 +232,48 @@ test('two ticks in a row both land in the note', async ({ page }) => {
   expect(repo.puts[0].text).toBe(NOTE_TEXT.replace(TASK1, TASK1.replace('[ ]', '[x]')).replace(TASK2, TASK2.replace('[ ]', '[x]')));
 });
 
+test('a second tap while the first is still being written is queued, not dropped', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  // Beide Tipps im selben Augenblick: Der erste Vorgang ist noch nicht zu Ende, wenn der zweite kommt.
+  await page.evaluate(
+    (names) => {
+      for (const name of names) document.querySelector<HTMLInputElement>(`input[type="checkbox"][aria-label="${name}"]`)?.click();
+    },
+    [NAME1, NAME2],
+  );
+  await expect(checkbox(page, NAME1)).toBeChecked();
+  await expect(checkbox(page, NAME2)).toBeChecked();
+  await settled(page);
+  await waitUntilQueued(page, NOTE, '- [x] Urlaube im Plan nachziehen');
+  await expect(page.locator('.karten-hinweis').filter({ hasText: /\S/ })).toHaveCount(0); // und es gibt nichts zu melden
+  await upload(page, repo, 1);
+  expect(repo.puts[0].text).toBe(NOTE_TEXT.replace(TASK1, TASK1.replace('[ ]', '[x]')).replace(TASK2, TASK2.replace('[ ]', '[x]')));
+  // Auch nach dem Schreiben stehen beide Haken.
+  await expect(checkbox(page, NAME1)).toBeChecked();
+  await expect(checkbox(page, NAME2)).toBeChecked();
+});
+
+test('a tick and an edit that follow each other quickly both land, and the edit field of a second Enter is not saved twice', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await pencil(page, NAME2).click();
+  await editField(page).fill('Urlaube geprüft');
+  // Ein Haken, dann zweimal Enter im selben Augenblick.
+  await page.evaluate((name) => document.querySelector<HTMLInputElement>(`input[type="checkbox"][aria-label="${name}"]`)?.click(), NAME1);
+  await page.evaluate(() => {
+    const form = document.querySelector<HTMLFormElement>('form.bearbeiten');
+    form?.requestSubmit();
+    form?.requestSubmit();
+  });
+  await expect(editField(page)).toBeHidden();
+  await settled(page);
+  await waitUntilQueued(page, NOTE, '- [ ] Urlaube geprüft %%ob:k3x9 todo:AAMkTEST2%%');
+  await expect(page.locator('.karten-hinweis').filter({ hasText: /\S/ })).toHaveCount(0); // das zweite Enter hat keine Meldung ausgelöst
+  await upload(page, repo, 1);
+  expect(repo.puts[0].text).toBe(NOTE_TEXT.replace(TASK1, TASK1.replace('[ ]', '[x]')).replace(TASK2, '- [ ] Urlaube geprüft %%ob:k3x9 todo:AAMkTEST2%%'));
+});
+
 test('a note with Windows line endings can be ticked, edited and extended, and keeps its line endings', async ({ page }) => {
   const windows = NOTE_TEXT.replace(/\n/g, '\r\n');
   const repo = await openSeeded(page, DAY, { files: { [NOTE]: windows } });
@@ -286,6 +337,61 @@ test('PC mouse can edit, add and open a meeting, but never draws', async ({ page
   expect(repo.read(NOTE)).toContain('- [ ] Vom PC ergänzt');
 });
 
+test('the notices of the card live in regions that are there from the start and are empty until there is something to say', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const card = region(page, 'Morgenbriefing');
+  const polite = card.locator('p[role="status"]');
+  const alert = card.locator('p[role="alert"]');
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await expect(polite).toHaveCount(1);
+  await expect(alert).toHaveCount(1);
+  await expect(polite).toBeEmpty();
+  await expect(alert).toBeEmpty();
+
+  // Dieselben Elemente bekommen den Text, es entsteht kein neues Element: nur so liest die Sprachausgabe ihn vor.
+  await polite.evaluate((el) => el.setAttribute('data-merk', 'status'));
+  await alert.evaluate((el) => el.setAttribute('data-merk', 'alert'));
+  const task = checkbox(page, NAME2);
+  await replaceStoredText(page, NOTE, NOTE_TEXT.replace(TASK2, `- [ ] Zusatz %%todo:AAMkNEW%%\n${TASK2}`));
+  await task.click();
+  await expect(card.locator('p[role="status"][data-merk="status"]')).toHaveText(STALE);
+  await expect(alert).toBeEmpty();
+
+  // Eine Fehlermeldung kommt in die zweite Region.
+  await page.clock.fastForward(10_000); // der Hinweis verschwindet von selbst
+  await expect(polite).toBeEmpty();
+});
+
+test('typing in the Ergänzen field or in an edit field does not break the whole note down again for every character', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await settled(page);
+  // Jedes Zerlegen der Notiz in Bauteile legt ein <template> an.
+  await page.evaluate(() => {
+    const w = window as unknown as { templatesMade: number };
+    w.templatesMade = 0;
+    const make = document.createElement.bind(document);
+    document.createElement = ((name: string, options?: ElementCreationOptions) => {
+      if (name.toLowerCase() === 'template') w.templatesMade++;
+      return make(name, options);
+    }) as typeof document.createElement;
+  });
+  const made = () => page.evaluate(() => (window as unknown as { templatesMade: number }).templatesMade);
+
+  await addField(page).pressSequentially('Frau Muster zurückrufen');
+  await expect(addField(page)).toHaveValue('Frau Muster zurückrufen');
+  expect(await made()).toBe(0);
+
+  await pencil(page, NAME2).click();
+  await expect(editField(page)).toBeFocused();
+  const opened = await made(); // das Feld öffnen baut die Zeile um, einmal
+  await editField(page).pressSequentially(' und noch mehr dazu');
+  await expect(editField(page)).toHaveValue(`${NAME2} und noch mehr dazu`);
+  expect(await made()).toBe(opened);
+  await editField(page).press('Enter');
+  await waitUntilQueued(page, NOTE, `- [ ] ${NAME2} und noch mehr dazu %%ob:k3x9 todo:AAMkTEST2%%`);
+});
+
 // ---------- Marker, Abschnitte, Stift ----------
 
 test('markers are never shown', async ({ page }) => {
@@ -333,6 +439,77 @@ test('Morgenbriefing and Ergänzungen are open, the other sections collapsed, an
   await expect(checkbox(page, 'Erste Aufgabe')).toBeVisible();
 });
 
+/** Eine Notiz, deren Überschriften Marker tragen, und mit einer Überschrift in einem Blockkommentar. */
+const MARKED_NOTE = [
+  '---',
+  'date: 2026-10-29',
+  'tags: [daily]',
+  '---',
+  '# 2026-10-29',
+  '',
+  '## Morgenbriefing (automatisch) %%ob:kopf%%',
+  '',
+  '- [ ] Eins %%todo:AAMkE1%%',
+  '',
+  '%%',
+  '## Versteckt',
+  '- [ ] Im Kommentar %%todo:AAMkE2%%',
+  '%%',
+  '',
+  '- [ ] Zwei %%todo:AAMkE3%%',
+  '',
+  '## Ergänzungen %%ob:erg%%',
+  '',
+  '- Notiz vorab',
+  '',
+  '## Abendüberblick (automatisch)',
+  '',
+  '- [ ] Abend %%todo:AAMkE4%%',
+  '',
+].join('\n');
+
+test('a section is named by what the note shows, a heading in a block comment is none, and an Ergänzung lands in the section that exists', async ({ page }) => {
+  const repo = await openSeeded(page, DAY, { files: { [NOTE]: MARKED_NOTE } });
+  const card = region(page, 'Morgenbriefing');
+  await expect(checkbox(page, 'Eins')).toBeVisible();
+  // Die Knöpfe der Abschnitte tragen den sichtbaren Namen, ohne Marker.
+  await expect(card.locator('h4.abschnitt button')).toHaveText(['▾Morgenbriefing (automatisch)', '▾Ergänzungen', '▸Abendüberblick (automatisch)']);
+  await expect(section(page, 'Morgenbriefing (automatisch)')).toHaveAttribute('aria-expanded', 'true');
+  await expect(section(page, 'Ergänzungen')).toHaveAttribute('aria-expanded', 'true');
+  // „Versteckt“ steht im Kommentar: Es ist weder ein Abschnitt noch ein Text, und nichts darin ist zu haken.
+  await expect(section(page, 'Versteckt')).toHaveCount(0);
+  await expect(card.getByText('Im Kommentar')).toHaveCount(0);
+  await expect(checkbox(page, 'Zwei')).toBeVisible(); // und was nach dem Kommentar kommt, gehört noch zum Abschnitt davor
+  await expectNoMarkers(page);
+
+  // Ein Abschnitt mit Marker lässt sich zuklappen, und die Ergänzung kommt in den vorhandenen Abschnitt „Ergänzungen“.
+  await section(page, 'Ergänzungen').click();
+  await expect(card.getByText('Notiz vorab')).toHaveCount(0);
+  await section(page, 'Ergänzungen').click();
+  await addField(page).fill('Frau Muster zurückrufen');
+  await button(page, 'Hinzufügen').click();
+  await expect(checkbox(page, 'Frau Muster zurückrufen')).toBeVisible();
+  await waitUntilQueued(page, NOTE, '- [ ] Frau Muster zurückrufen');
+  await upload(page, repo, 1);
+  const text = repo.puts[0].text;
+  expect(text.match(/^## Ergänzungen/gm)).toHaveLength(1); // kein zweiter Abschnitt neben dem mit Marker
+  expect(text).toBe(MARKED_NOTE.replace('- Notiz vorab\n', '- Notiz vorab\n- [ ] Frau Muster zurückrufen\n'));
+});
+
+test('an Ergänzung is added behind a block comment that hides a heading, so that it stays visible', async ({ page }) => {
+  const note = ['# 2026-10-29', '', '## Ergänzungen', '', '- a', '%%', '## Alt', '- weg', '%%', '', '## Abendüberblick (automatisch)', '', '- b', ''].join('\n');
+  const repo = await openSeeded(page, DAY, { files: { [NOTE]: note } });
+  await expect(section(page, 'Ergänzungen')).toBeVisible();
+  await expect(section(page, 'Alt')).toHaveCount(0); // die Überschrift im Kommentar ist keine
+  await expect(page.getByText('weg', { exact: true })).toHaveCount(0);
+  await addField(page).fill('Neu dazu');
+  await button(page, 'Hinzufügen').click();
+  await expect(page.getByText('Neu dazu')).toBeVisible(); // sichtbar, nicht im Kommentar verschwunden
+  await waitUntilQueued(page, NOTE, '- [ ] Neu dazu');
+  await upload(page, repo, 1);
+  expect(repo.puts[0].text).toBe(['# 2026-10-29', '', '## Ergänzungen', '', '- a', '%%', '## Alt', '- weg', '%%', '', '- [ ] Neu dazu', '', '## Abendüberblick (automatisch)', '', '- b', ''].join('\n'));
+});
+
 test('the pencil is only on lines that are list items, and hidden parts of a note stay hidden', async ({ page }) => {
   await openSeeded(page, DAY, { files: { [NOTE]: RICH_NOTE } });
   const card = region(page, 'Morgenbriefing');
@@ -369,7 +546,7 @@ test('edits a line and keeps the marker', async ({ page }) => {
   await input.press('Enter');
   await expect(input).toBeHidden();
   await expect(checkbox(page, 'Urlaube bis Ende November nachziehen')).toBeVisible();
-  await expect(page.locator('.karten-hinweis')).toHaveCount(0); // eine gelungene Änderung meldet nichts
+  await expect(page.locator('.karten-hinweis').filter({ hasText: /\S/ })).toHaveCount(0); // eine gelungene Änderung meldet nichts
 
   await waitUntilQueued(page, NOTE, '- [ ] Urlaube bis Ende November nachziehen %%ob:k3x9 todo:AAMkTEST2%%');
   await upload(page, repo, 1);
@@ -383,6 +560,7 @@ test('Escape cancels an edit and writes nothing', async ({ page }) => {
   await editField(page).press('Escape');
   await expect(editField(page)).toBeHidden();
   await expect(checkbox(page, NAME2)).toBeVisible();
+  await settled(page);
   expect(await queued(page)).toEqual({});
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
@@ -396,6 +574,7 @@ test('saving an edit without a change writes nothing, so a marker in the middle 
   await editField(page).press('Enter');
   await expect(editField(page)).toBeHidden();
   await expect(checkbox(page, 'Vor dem Marker und danach')).toBeVisible();
+  await settled(page);
   expect(await queued(page)).toEqual({}); // editItemText hängt die Marker ans Zeilenende: Ohne Änderung bleibt die Zeile, wie sie ist
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
@@ -450,6 +629,7 @@ test('a line that changed under the card gives a notice and writes nothing', asy
   await expect(page.getByRole('status').filter({ hasText: STALE })).toBeVisible();
   await expect(checkbox(page, 'Zusatzaufgabe')).toBeVisible(); // der neue Stand ist zu sehen
   await expect(checkbox(page, NAME2)).not.toBeChecked();
+  await settled(page);
   expect(await queued(page)).toEqual({});
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
@@ -461,19 +641,105 @@ test('a line that changed under the card gives a notice and writes nothing', asy
   expect(repo.puts[0].text).toBe(shifted.replace(TASK2, TASK2.replace('[ ]', '[x]')));
 });
 
-test('an edit of a line that changed under the card gives the notice too', async ({ page }) => {
+test('an edit of a line that changed under the card keeps the typed text and the field, says so, and a second Enter saves it', async ({ page }) => {
   const repo = await openSeeded(page, DAY);
   await pencil(page, NAME2).click();
   await editField(page).fill('Eigene Fassung');
-  const changed = NOTE_TEXT.replace(TASK2, '- [ ] Urlaube anders formuliert %%ob:k3x9 todo:AAMkTEST2%%');
+  // Ein anderes Fenster hat den Haken gesetzt, den Text geändert und gemeldet: Die Zeile ist eine andere, ihre Kennung nicht.
+  const changed = NOTE_TEXT.replace(TASK2, '- [x] Urlaube anders formuliert %%ob:k3x9 todo:AAMkTEST2 gemeldet%%');
   await replaceStoredText(page, NOTE, changed);
   await editField(page).press('Enter');
 
   await expect(page.getByRole('status').filter({ hasText: STALE })).toBeVisible();
-  await expect(checkbox(page, 'Urlaube anders formuliert')).toBeVisible();
+  await expect(editField(page)).toHaveValue('Eigene Fassung'); // das Feld bleibt offen, mit dem Getippten
+  await expect(editField(page)).toBeFocused();
+  await settled(page);
   expect(await queued(page)).toEqual({});
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
+
+  // Noch einmal: Jetzt gilt die Zeile in ihrer neuen Fassung, Haken und Marker bleiben.
+  await editField(page).press('Enter');
+  await expect(editField(page)).toBeHidden();
+  await waitUntilQueued(page, NOTE, '- [x] Eigene Fassung %%ob:k3x9 todo:AAMkTEST2 gemeldet%%');
+  await upload(page, repo, 1);
+  expect(repo.puts[0].text).toBe(changed.replace('- [x] Urlaube anders formuliert', '- [x] Eigene Fassung'));
+  await expectNoMarkers(page);
+});
+
+test('an edit of a line that moved and changed is found again by its id', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  await pencil(page, NAME2).click();
+  await editField(page).fill('Eigene Fassung');
+  const changed = NOTE_TEXT.replace(TASK2, `- [ ] Neu oben %%todo:AAMkNEW%%\n- [ ] Urlaube anders %%ob:k3x9 todo:AAMkTEST2%%`);
+  await replaceStoredText(page, NOTE, changed);
+  await editField(page).press('Enter');
+  await expect(page.getByRole('status').filter({ hasText: STALE })).toBeVisible();
+  await expect(editField(page)).toHaveValue('Eigene Fassung');
+  await editField(page).press('Enter');
+  await waitUntilQueued(page, NOTE, '- [ ] Eigene Fassung %%ob:k3x9 todo:AAMkTEST2%%');
+  await upload(page, repo, 1);
+  // Die neue Zeile darüber bleibt, wie sie ist: Es hat sich nur die Zeile mit der Kennung geändert.
+  expect(repo.puts[0].text).toBe(changed.replace('- [ ] Urlaube anders', '- [ ] Eigene Fassung'));
+});
+
+test('an edit of a line that is gone keeps the typed text on the card so it can be copied', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  await pencil(page, NAME2).click();
+  await editField(page).fill('Eigene Fassung');
+  await replaceStoredText(page, NOTE, NOTE_TEXT.replace(`${TASK2}\n`, ''));
+  await editField(page).press('Enter');
+
+  await expect(page.getByRole('status').filter({ hasText: 'Die Zeile gibt es so nicht mehr.' })).toBeVisible();
+  await expect(editField(page)).toBeHidden();
+  const rescued = page.getByLabel('Dein Text', { exact: true });
+  await expect(rescued).toHaveValue('Eigene Fassung');
+  await settled(page);
+  expect(await queued(page)).toEqual({});
+  await sendToBackground(page);
+  expect(repo.puts).toEqual([]);
+
+  // Der Text bleibt, bis jemand ihn schließt: Der Hinweis darüber verschwindet von selbst, er nicht.
+  await page.clock.fastForward(10_000);
+  await expect(page.getByRole('status').filter({ hasText: 'Die Zeile gibt es so nicht mehr.' })).toHaveCount(0);
+  await expect(rescued).toHaveValue('Eigene Fassung');
+  await button(page, 'Schließen').click();
+  await expect(rescued).toHaveCount(0);
+});
+
+test('a plain line without an id that changed under the card counts as gone, the typed text stays', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  const mail = 'Max Muster, Freigabe Beispiel, bittet um Rückmeldung';
+  await pencil(page, mail).click();
+  await editField(page).fill('Max Muster hat sich gemeldet');
+  await replaceStoredText(page, NOTE, NOTE_TEXT.replace(mail, 'Max Muster, Freigabe Beispiel, erledigt'));
+  await editField(page).press('Enter');
+  await expect(page.getByLabel('Dein Text', { exact: true })).toHaveValue('Max Muster hat sich gemeldet');
+  await expect(editField(page)).toBeHidden();
+  await settled(page);
+  expect(await queued(page)).toEqual({});
+  await sendToBackground(page);
+  expect(repo.puts).toEqual([]);
+});
+
+test('another device changes the line that is being edited: the field stays with the typed text, and the notice says the line changed', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  await expect.poll(() => lastHead(page)).not.toBeNull();
+  await pencil(page, NAME2).click();
+  const input = editField(page);
+  await input.fill('Urlaube bis Jahresende nachziehen');
+
+  const remote = NOTE_TEXT.replace(TASK2, '- [ ] Urlaube im Plan nachziehen %%ob:k3x9 todo:AAMkTEST2 gemeldet%%');
+  repo.commit(NOTE, remote);
+  await bringToForeground(page);
+  await expect(page.getByRole('status').filter({ hasText: STALE })).toBeVisible();
+  await expect(input).toHaveValue('Urlaube bis Jahresende nachziehen');
+  await expect(input).toBeFocused();
+
+  await input.press('Enter');
+  await waitUntilQueued(page, NOTE, '- [ ] Urlaube bis Jahresende nachziehen %%ob:k3x9 todo:AAMkTEST2 gemeldet%%');
+  await upload(page, repo, 1);
+  expect(repo.puts[0].text).toBe(remote.replace('- [ ] Urlaube im Plan nachziehen', '- [ ] Urlaube bis Jahresende nachziehen'));
 });
 
 // ---------- Ergänzen ----------
@@ -518,6 +784,7 @@ test('an empty Ergänzung does nothing', async ({ page }) => {
   await button(page, 'Hinzufügen').click();
   await addField(page).fill('%%');
   await button(page, 'Hinzufügen').click();
+  await settled(page);
   expect(await queued(page)).toEqual({});
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
@@ -547,6 +814,7 @@ test('an empty Ergänzung on a day without a note creates no note', async ({ pag
   const repo = await openSeeded(page, '#/tag/2026-11-05');
   await expect(page.getByText('Noch kein Briefing für diesen Tag')).toBeVisible();
   await button(page, 'Hinzufügen').click();
+  await settled(page);
   expect(await queued(page)).toEqual({});
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
@@ -583,15 +851,96 @@ test('nothing is written before the note has been read, and the Ergänzung then 
   expect(repo.puts[0].text).toBe(appendErgaenzung(NOTE_TEXT, 'Zu früh getippt', true));
 });
 
-test('a note that can not be read is shown as such and nothing is written to it', async ({ page }) => {
-  const repo = await openSeeded(page, DAY, { failReads: true });
+test('a note that can not be read is shown as such, nothing is written to it, and it is not tried again', async ({ page }) => {
+  const reads: string[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'GET' && decodeURIComponent(request.url()).includes(`/contents/${NOTE}`)) reads.push(request.url());
+  });
+  const repo = await openSeeded(page, DAY, { invalidUtf8: [NOTE] });
   await expect(page.getByText('Das Briefing lässt sich nicht lesen und wird nicht verändert.')).toBeVisible();
   await expect(button(page, 'Hinzufügen')).toBeDisabled();
   await addField(page).fill('Geht nicht');
   await addField(page).press('Enter');
+  await settled(page);
   expect(await queued(page)).toEqual({});
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
+
+  // Eine kaputte Datei wird davon nicht heil: Auch wenn das Netz zurückkommt, fragt die Karte nicht noch einmal.
+  const asked = reads.length;
+  expect(asked).toBeGreaterThan(0);
+  await networkBack(page);
+  await bringToForeground(page);
+  await page.waitForTimeout(300);
+  expect(reads.length).toBe(asked);
+  await expect(page.getByText('Das Briefing lässt sich nicht lesen und wird nicht verändert.')).toBeVisible();
+});
+
+test('a note that could not be loaded because of a server error is not called unreadable, and is tried again when the network is back', async ({ page }) => {
+  const repo = await openSeeded(page, DAY, { failReads: true });
+  const message = 'Das Briefing konnte nicht geladen werden. Neuer Versuch, sobald das Netz da ist.';
+  await expect(page.getByText(message)).toBeVisible();
+  await expect(page.getByText('lässt sich nicht lesen')).toHaveCount(0);
+  await expect(button(page, 'Hinzufügen')).toBeDisabled();
+  await addField(page).fill('Noch nicht');
+  await addField(page).press('Enter');
+  await settled(page);
+  expect(await queued(page)).toEqual({});
+
+  // Der Fehler war vorübergehend: Mit dem Netz kommt die Notiz, und das Getippte ist noch da.
+  repo.failReads = false;
+  await networkBack(page);
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await expect(page.getByText(message)).toHaveCount(0);
+  await expect(addField(page)).toHaveValue('Noch nicht');
+  await button(page, 'Hinzufügen').click();
+  await waitUntilQueued(page, NOTE, '- [ ] Noch nicht');
+  await upload(page, repo, 1);
+  expect(repo.puts[0].text).toBe(appendErgaenzung(NOTE_TEXT, 'Noch nicht', true));
+});
+
+test('a note that could not be loaded is tried again when the app comes back to the foreground', async ({ page }) => {
+  const repo = await openSeeded(page, DAY, { failReads: true });
+  await expect(page.getByText('Das Briefing konnte nicht geladen werden.', { exact: false })).toBeVisible();
+  repo.failReads = false;
+  await bringToForeground(page);
+  await expect(checkbox(page, NAME1)).toBeVisible();
+});
+
+test('a day that is not on this device and can not be asked about offline says so, and Ergänzen waits until it could be read', async ({ page }) => {
+  const repo = await openSeeded(page, DAY, { offline: true });
+  const message = 'Briefing offline nicht verfügbar';
+  await expect(page.getByText(message, { exact: true })).toBeVisible();
+  await expect(page.getByText('Noch kein Briefing für diesen Tag')).toHaveCount(0); // ob es sie gibt, ist offen
+  await expect(button(page, 'Hinzufügen')).toBeDisabled();
+  await addField(page).fill('Offline getippt');
+  await addField(page).press('Enter');
+  await settled(page);
+  expect(await queued(page)).toEqual({}); // sonst entstünde neben der Notiz, die es auf GitHub gibt, eine zweite
+
+  repo.offline = false;
+  await networkBack(page);
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await expect(page.getByText(message, { exact: true })).toHaveCount(0);
+  await expect(button(page, 'Hinzufügen')).toBeEnabled();
+  await expect(addField(page)).toHaveValue('Offline getippt');
+  await button(page, 'Hinzufügen').click();
+  await waitUntilQueued(page, NOTE, '- [ ] Offline getippt');
+  await upload(page, repo, 1);
+  // Es ist die vorhandene Notiz, die die Ergänzung bekommt.
+  expect(repo.puts[0].text).toBe(appendErgaenzung(NOTE_TEXT, 'Offline getippt', true));
+});
+
+test('a day that was read on this device still works offline', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  repo.offline = true;
+  await page.reload();
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await expect(page.getByText('Briefing offline nicht verfügbar')).toHaveCount(0);
+  await checkbox(page, NAME1).check();
+  await waitUntilQueued(page, NOTE, '- [x] Liste Planobjekte ergänzen (fällig 30.10.) %%todo:AAMkTEST1%%');
 });
 
 // ---------- Besprechungen ----------
@@ -1025,6 +1374,22 @@ test('card text is readable and the controls are big enough on an iPad 11 inch i
   expect(await fontOf(questionOf(page).getByLabel('Thema'))).toBeGreaterThanOrEqual(16);
 });
 
+test('the button Ganze Seite brings back the whole page after zooming and moving', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  const fit = await viewOf(page);
+  await wheel(page, [600, 800], { dy: -300, ctrl: true });
+  await wheel(page, [600, 800], { dy: 400 });
+  const moved = await viewOf(page);
+  expect(moved.scale).toBeGreaterThan(fit.scale * 1.5);
+
+  await button(page, 'Ganze Seite').click();
+  await expect.poll(async () => (await viewOf(page)).scale).toBeCloseTo(fit.scale, 6);
+  const back = await viewOf(page);
+  expect(back.x).toBeCloseTo(fit.x, 3);
+  expect(back.y).toBeCloseTo(fit.y, 3);
+});
+
 // ---------- Finger ----------
 
 test.describe('with a touch screen', () => {
@@ -1047,5 +1412,217 @@ test.describe('with a touch screen', () => {
     await waitUntilQueued(page, NOTE, '- [x] Liste Planobjekte ergänzen (fällig 30.10.) %%todo:AAMkTEST1%%');
     await upload(page, repo, 1);
     expect(repo.puts[0].text).toBe(NOTE_TEXT.replace(TASK1, TASK1.replace('[ ]', '[x]')));
+  });
+
+  // ---- Finger, die auf einer Karte beginnen: Die Seite gehört ihnen, nur was die Karte selbst blättern kann, bleibt bei ihr ----
+
+  /** Ein Ort auf einer Karte in Bildschirmpunkten, als Anteil von Breite und Höhe der Karte. */
+  const spot = async (page: Page, card: string, fx = 0.5, fy = 0.5): Promise<Pt> => {
+    const box = await region(page, card).boundingBox();
+    expect(box, `Karte ${card}`).not.toBeNull();
+    return [box!.x + box!.width * fx, box!.y + box!.height * fy];
+  };
+  /** Ein Ort der Seite (Seiteneinheiten) in Bildschirmpunkten. */
+  const onPage = (page: Page, x: number, y: number): Promise<Pt> =>
+    page.evaluate(
+      ([px, py]) => {
+        const at = window.__notizbuch.toClient(px, py);
+        return [at.x, at.y] as [number, number];
+      },
+      [x, y],
+    );
+  const opened = async (page: Page) => {
+    const repo = await openSeeded(page, DAY);
+    await expect(checkbox(page, NAME1)).toBeVisible();
+    return repo;
+  };
+
+  test('a pinch that starts on a card zooms the page', async ({ page }) => {
+    await opened(page);
+    const before = await viewOf(page);
+    const [x, y] = await spot(page, 'Morgenbriefing');
+    await (await touchscreen(page)).pinch(
+      [
+        [x - 50, y],
+        [x + 50, y],
+      ],
+      [
+        [x - 150, y],
+        [x + 150, y],
+      ],
+    );
+    // Von 100 auf 300 Punkte Abstand: dreimal so groß.
+    await expect.poll(async () => (await viewOf(page)).scale / before.scale).toBeGreaterThan(2.5);
+    expect((await viewOf(page)).scale / before.scale).toBeLessThan(3.2);
+  });
+
+  test('two fingers that start on a card and move together move the page', async ({ page }) => {
+    await opened(page);
+    const before = await viewOf(page);
+    const [x, y] = await spot(page, 'Morgenbriefing');
+    await (await touchscreen(page)).pinch(
+      [
+        [x - 50, y],
+        [x + 50, y],
+      ],
+      [
+        [x - 50, y + 120],
+        [x + 50, y + 120],
+      ],
+    );
+    await expect.poll(async () => (await viewOf(page)).y - before.y).toBeGreaterThan(110);
+    const after = await viewOf(page);
+    expect(after.y - before.y).toBeLessThan(130);
+    expect(after.scale).toBeCloseTo(before.scale, 9);
+  });
+
+  test('a finger dragged sideways on a card moves the page', async ({ page }) => {
+    await opened(page);
+    const before = await viewOf(page);
+    const [x, y] = await spot(page, 'Morgenbriefing');
+    await (await touchscreen(page)).swipe([x, y], [x + 120, y + 6]);
+    await expect.poll(async () => (await viewOf(page)).x - before.x).toBeGreaterThan(110);
+    const after = await viewOf(page);
+    expect(after.x - before.x).toBeLessThan(130);
+    expect(after.scale).toBeCloseTo(before.scale, 9);
+  });
+
+  test('a finger dragged up and down on a card with nothing to scroll moves the page', async ({ page }) => {
+    await opened(page);
+    const before = await viewOf(page);
+    const [x, y] = await spot(page, 'Kalender');
+    await (await touchscreen(page)).swipe([x, y], [x, y - 100]);
+    await expect.poll(async () => before.y - (await viewOf(page)).y).toBeGreaterThan(90);
+    expect(before.y - (await viewOf(page)).y).toBeLessThan(110);
+  });
+
+  test('a finger dragged up and down in a card that can scroll scrolls the card and leaves the page', async ({ page }) => {
+    await opened(page);
+    const before = await viewOf(page);
+    const inner = region(page, 'Morgenbriefing').locator('.karten-inhalt');
+    expect(await inner.evaluate((el) => el.scrollHeight > el.clientHeight), 'das Briefing ist länger als die Karte').toBe(true);
+    const [x, y] = await spot(page, 'Morgenbriefing');
+    await (await touchscreen(page)).swipe([x, y + 100], [x, y - 100]);
+    await expect.poll(() => inner.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    expect(await viewOf(page)).toEqual(before);
+  });
+
+  test('a two finger tap on a card undoes the last stroke', async ({ page }) => {
+    await opened(page);
+    await pen(page).stroke([
+      [200, 900],
+      [260, 920],
+      [320, 900],
+    ]);
+    expect(await strokeCount(page)).toBe(1);
+    await afterPalmWindow(page);
+    const [x, y] = await spot(page, 'Morgenbriefing', 0.5, 0.04); // der Streifen mit dem Namen der Karte
+    await (await touchscreen(page)).twoFingerTap([x - 40, y], [x + 40, y]);
+    await expect.poll(() => strokeCount(page)).toBe(0);
+  });
+
+  test('one finger on a card and one on the paper pinch the page together, in either order', async ({ page }) => {
+    await opened(page);
+    const card = await spot(page, 'Morgenbriefing');
+    const paper = await onPage(page, 600, 1000);
+    const screen = await touchscreen(page);
+    // Beide Finger gehen auf der Linie zwischen ihnen 60 Punkte nach außen.
+    const apart = (a: Pt, b: Pt): [[Pt, Pt], [Pt, Pt]] => {
+      const d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const u: Pt = [(b[0] - a[0]) / d, (b[1] - a[1]) / d];
+      return [
+        [a, b],
+        [
+          [a[0] - 60 * u[0], a[1] - 60 * u[1]],
+          [b[0] + 60 * u[0], b[1] + 60 * u[1]],
+        ],
+      ];
+    };
+    const first = await viewOf(page);
+    await screen.pinch(...apart(card, paper));
+    await expect.poll(async () => (await viewOf(page)).scale / first.scale).toBeGreaterThan(1.15);
+
+    await page.getByRole('button', { name: 'Ganze Seite', exact: true }).click();
+    const second = await viewOf(page);
+    await screen.pinch(...apart(await onPage(page, 100, 1000), await spot(page, 'Morgenbriefing', 0.9, 0.9)));
+    await expect.poll(async () => (await viewOf(page)).scale / second.scale).toBeGreaterThan(1.1);
+  });
+
+  // ---- Handballen auf den Karten: dasselbe Tor wie auf der Fläche ----
+
+  /** Die Zeile einer Aufgabe (das Kästchen mit seinem Text). */
+  const rowOf = (page: Page, name: string) => checkbox(page, name).locator('xpath=ancestor::label[1]');
+  const centerOf = async (target: Locator): Promise<Pt> => {
+    const box = await target.boundingBox();
+    expect(box, 'sichtbar').not.toBeNull();
+    return [box!.x + box!.width / 2, box!.y + box!.height / 2];
+  };
+  /** Danach darf genau die zweite Aufgabe abgehakt sein und sonst nichts: Was die Hand zuvor auslösen wollte, kam nicht an. */
+  const onlySecondTicked = async (page: Page, repo: { puts: { path: string; text: string }[] }) => {
+    await expect(checkbox(page, NAME2)).toBeChecked();
+    await waitUntilQueued(page, NOTE, '- [x] Urlaube im Plan nachziehen');
+    await sendToBackground(page);
+    // Der Stift hat vielleicht einen Punkt auf die Seite gesetzt: Es zählen nur die Schreibvorgänge an der Notiz.
+    await expect.poll(() => repo.puts.filter((put) => put.path === NOTE).length).toBe(1);
+    expect(repo.puts.find((put) => put.path === NOTE)?.text).toBe(NOTE_TEXT.replace(TASK2, TASK2.replace('[ ]', '[x]')));
+    await expect(checkbox(page, NAME1)).not.toBeChecked();
+  };
+
+  test('a big contact on a task ticks nothing, a finger after it does', async ({ page }) => {
+    const repo = await opened(page);
+    const screen = await touchscreen(page);
+    await screen.tap(await centerOf(rowOf(page, NAME1)), { radius: 80 }); // ein Handballen
+    await screen.tap(await centerOf(rowOf(page, NAME2)));
+    await onlySecondTicked(page, repo);
+  });
+
+  test('a finger on a task while the pen lies on the paper ticks nothing, and works again after the pause', async ({ page }) => {
+    const repo = await opened(page);
+    const screen = await touchscreen(page);
+    await pen(page).down(200, 900);
+    await screen.tap(await centerOf(rowOf(page, NAME1)));
+    await pen(page).up(200, 900);
+    await afterPalmWindow(page);
+    await screen.tap(await centerOf(rowOf(page, NAME2)));
+    await onlySecondTicked(page, repo);
+  });
+
+  test('a finger on a task while the pen lies on another card ticks nothing', async ({ page }) => {
+    const repo = await opened(page);
+    const screen = await touchscreen(page);
+    const [x, y] = await spot(page, 'Kalender', 0.5, 0.04);
+    await pen(page).downOn('section[aria-label="Kalender"]', x, y);
+    await screen.tap(await centerOf(rowOf(page, NAME1)));
+    await pen(page).upOn('section[aria-label="Kalender"]', x, y);
+    await afterPalmWindow(page);
+    await screen.tap(await centerOf(rowOf(page, NAME2)));
+    await onlySecondTicked(page, repo);
+  });
+
+  test('a pinch out works when a card fills the whole screen', async ({ page }) => {
+    await opened(page);
+    const fit = await viewOf(page);
+    // Hineinzoomen, bis auf dem Bildschirm nichts als die Karte zu sehen ist.
+    for (let i = 0; i < 3; i++) await wheel(page, [362, 387], { dy: -300, ctrl: true });
+    const zoomed = await viewOf(page);
+    expect(zoomed.scale / fit.scale).toBeGreaterThan(5);
+    const box = (await region(page, 'Morgenbriefing').boundingBox())!;
+    const size = page.viewportSize()!;
+    expect(box.x).toBeLessThanOrEqual(0);
+    expect(box.y).toBeLessThanOrEqual(0);
+    expect(box.x + box.width).toBeGreaterThanOrEqual(size.width);
+    expect(box.y + box.height).toBeGreaterThanOrEqual(size.height);
+
+    await (await touchscreen(page)).pinch(
+      [
+        [400, 850],
+        [800, 850],
+      ],
+      [
+        [590, 850],
+        [610, 850],
+      ],
+    );
+    await expect.poll(async () => (await viewOf(page)).scale / zoomed.scale).toBeLessThan(0.3);
   });
 });

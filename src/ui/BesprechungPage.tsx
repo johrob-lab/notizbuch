@@ -8,14 +8,14 @@ import {
   listMeetings,
   meetingMeta,
   meetingPages,
-  meetingPageText,
   neighbourPages,
   pageAfterDelete,
   pageLabel,
   projectNames,
 } from '../lib/meetings';
 import { besprechungLayout } from '../pages/layouts';
-import type { DirEntry } from '../sync/github';
+import { meetingPageText } from '../pages/meetingText';
+import type { ListDir } from '../sync/github';
 import { normalizePath } from '../sync/paths';
 import { confirmDialog } from './Dialog';
 import { PageView, type Kopf, type KopfTools, type PageProps } from './PageView';
@@ -26,9 +26,6 @@ import { routeHash, type Steps } from './router';
 // die Fläche gezeichnet: Es lässt sich mit dem Stift (Scribble) und mit der Tastatur ausfüllen. Die Fläche zeigt den
 // Kopf im Hintergrund der Seite, geschrieben wird er mit der Seite in dieselbe Datei. Der Dateiname ändert sich dabei nie.
 // Geblättert wird mit ‹ und › der Leiste oben: Diese Seite weiß, welche Seiten es gibt, und meldet der App, wohin sie führen.
-
-/** Die Dateiliste eines Ordners im Vault. */
-export type ListDir = (folder: string) => Promise<DirEntry[]>;
 
 type Props = PageProps & {
   /** Name der Besprechung ohne Seitennummer, zum Beispiel `2026-10-29 0800 Thema`, und die Nummer dieser Seite. */

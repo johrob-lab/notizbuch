@@ -20,7 +20,7 @@ function context(md: string, over: Partial<NoteContext> = {}): NoteContext {
   return {
     lines: md.split('\n'),
     editing: null,
-    busy: false,
+    draft: { current: '' },
     onToggle: vi.fn(),
     onEdit: vi.fn(),
     onDraft: vi.fn(),
@@ -106,22 +106,17 @@ test('a tap on a pencil reports the line and the source line as it was shown', (
   expect(ctx.onEdit).toHaveBeenLastCalledWith(termin, lines[termin]);
 });
 
-test('while something is being saved, a tap on a checkbox is taken back, and nothing is disabled so that nothing blinks', () => {
-  const host = show(renderNote(note), context(note, { busy: true }));
+test('a tap on a checkbox is never taken back, and nothing is disabled so that nothing blinks while the card writes', () => {
+  const host = show(renderNote(note), context(note));
   const tap = new MouseEvent('click', { bubbles: true, cancelable: true });
   boxes(host)[0].dispatchEvent(tap);
-  expect(tap.defaultPrevented).toBe(true);
+  expect(tap.defaultPrevented).toBe(false);
   expect(boxes(host).some((b) => b.disabled)).toBe(false);
   expect(pencils(host).some((b) => b.disabled)).toBe(false);
-  // Ohne laufenden Vorgang dreht sich das Kästchen wie sonst.
-  const free = show(renderNote(note), context(note));
-  const freeTap = new MouseEvent('click', { bubbles: true, cancelable: true });
-  boxes(free)[0].dispatchEvent(freeTap);
-  expect(freeTap.defaultPrevented).toBe(false);
 });
 
 test('while a line is being edited, the pencils of the other lines are disabled and so is the checkbox of the edited line', () => {
-  const host = show(renderNote(note), context(note, { editing: { line: task2, draft: 'x' } }));
+  const host = show(renderNote(note), context(note, { editing: { line: task2, saving: false }, draft: { current: 'x' } }));
   expect(pencils(host).every((b) => b.disabled)).toBe(true);
   const own = host.querySelector(`li[data-line="${task2}"] input[type=checkbox]`) as HTMLInputElement;
   expect(own.disabled).toBe(true);
@@ -137,7 +132,7 @@ test('only list items get a pencil: a quote, a paragraph and a heading do not', 
 });
 
 test('the line that is being edited shows an input with the draft instead of the text, and keeps its checkbox', () => {
-  const ctx = context(note, { editing: { line: task2, draft: 'Neuer Text' } });
+  const ctx = context(note, { editing: { line: task2, saving: false }, draft: { current: 'Neuer Text' } });
   const host = show(renderNote(note), ctx);
   const input = host.querySelector<HTMLInputElement>('input[aria-label="Text bearbeiten"]')!;
   expect(input.value).toBe('Neuer Text');
@@ -150,7 +145,7 @@ test('the line that is being edited shows an input with the draft instead of the
 });
 
 test('typing, Enter, Escape and the buttons of the input report to the card', () => {
-  const ctx = context(note, { editing: { line: task2, draft: 'Alt' } });
+  const ctx = context(note, { editing: { line: task2, saving: false }, draft: { current: 'Alt' } });
   const host = show(renderNote(note), ctx);
   const input = host.querySelector<HTMLInputElement>('input[aria-label="Text bearbeiten"]')!;
   input.value = 'Neu getippt';
@@ -162,6 +157,7 @@ test('typing, Enter, Escape and the buttons of the input report to the card', ()
   form.dispatchEvent(submit);
   expect(submit.defaultPrevented).toBe(true);
   expect(ctx.onSave).toHaveBeenCalledTimes(1);
+  expect(ctx.onSave).toHaveBeenCalledWith('Neu getippt'); // der Text im Feld, nicht der alte
 
   const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
   input.dispatchEvent(escape);
@@ -173,9 +169,37 @@ test('typing, Enter, Escape and the buttons of the input report to the card', ()
   expect(ctx.onCancel).toHaveBeenCalledTimes(2);
 });
 
+test('the input holds what is typed itself: it keeps it without the card drawing the note again, and Save is locked while saving', async () => {
+  const ctx = context(note, { editing: { line: task2, saving: false }, draft: { current: 'Alt' } });
+  const nodes = noteToVNodes(renderNote(note), ctx);
+  const host = document.createElement('div');
+  document.body.append(host);
+  hosts.push(host);
+  render(h(Fragment, null, nodes), host);
+  const input = host.querySelector<HTMLInputElement>('input[aria-label="Text bearbeiten"]')!;
+  expect(input.value).toBe('Alt'); // beginnt mit dem Text, den die Karte kennt
+
+  // Die Bauteile werden nicht noch einmal gebaut: Das Feld zeichnet sich allein.
+  const created = vi.spyOn(document, 'createElement');
+  for (const typed of ['N', 'Ne', 'Neu']) {
+    input.value = typed;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  expect(input.value).toBe('Neu');
+  expect(created.mock.calls.filter(([name]) => name === 'template')).toEqual([]);
+  created.mockRestore();
+
+  // Das Feld lässt sich nicht erneut absenden, solange gespeichert wird.
+  const saving = show(renderNote(note), context(note, { editing: { line: task2, saving: true }, draft: { current: 'Alt' } }));
+  const save = [...saving.querySelectorAll('form.bearbeiten button')].find((b) => b.textContent === 'Speichern') as HTMLButtonElement;
+  expect(save.disabled).toBe(true);
+});
+
 test('an edit of a task with a nested list keeps the nested list', () => {
   const md = '- [ ] Eltern %%m%%\n  - Kind\n';
-  const host = show(renderNote(md), context(md, { editing: { line: 0, draft: 'Eltern neu' } }));
+  const host = show(renderNote(md), context(md, { editing: { line: 0, saving: false }, draft: { current: 'Eltern neu' } }));
   const parent = host.querySelector('li[data-line="0"]')!;
   expect(parent.querySelector('input[aria-label="Text bearbeiten"]')).not.toBeNull();
   expect(parent.querySelector('li[data-line="1"]')?.textContent).toContain('Kind');

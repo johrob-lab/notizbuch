@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { appendErgaenzung, newDailyNote } from '../../src/lib/dailyNote';
-import { addToNote, editLine, findLine, STALE_NOTICE, tickLine } from '../../src/lib/briefingEdit';
+import { addToNote, editLine, findLine, idsOf, relocate, STALE_NOTICE, tickLine } from '../../src/lib/briefingEdit';
 import { fixture, lineOf } from './helpers';
 
 // Die Entscheidungen hinter der Karte „Morgenbriefing“: Jede Änderung geht vom neuesten Text aus, trifft nur die Zeile, die man
@@ -112,4 +112,56 @@ test('findLine gives up when the line is gone, changed or not unique', () => {
   expect(findLine(null, lines[task2], task2)).toBeNull();
   expect(findLine(note, '', 5)).toBe(5); // eine leere Zeile ist am selben Platz dieselbe Zeile
   expect(findLine(note, '', 999)).toBeNull(); // sonst gibt es viele davon
+});
+
+// ---------- Die Zeile wiederfinden, die man bearbeitet ----------
+
+test('idsOf names the entry by the words of its markers that have a name and a value, not by the flags', () => {
+  expect(idsOf('- [ ] Liste %%todo:AAMkTEST1%%')).toEqual(['todo:AAMkTEST1']);
+  expect(idsOf('- [ ] Urlaube %%ob:k3x9 todo:AAMkTEST2%%')).toEqual(['ob:k3x9', 'todo:AAMkTEST2']);
+  expect(idsOf('- [x] Reorga %%todo:AAMkTEST3 gemeldet%%')).toEqual(['todo:AAMkTEST3']);
+  expect(idsOf('- [x] Reorga %%ob:a1%% %%todo:b2%%\r')).toEqual(['ob:a1', 'todo:b2']);
+  expect(idsOf('- ohne Marker')).toEqual([]);
+  expect(idsOf('- Notiz: kein Marker todo:x')).toEqual([]);
+  expect(idsOf('- Text %%nur gemeldet%%')).toEqual([]);
+  expect(idsOf('- Text %%Hinweis: ohne Wert todo:%%')).toEqual([]);
+  expect(idsOf('')).toEqual([]);
+});
+
+test('relocate finds an unchanged line where it is now, preferring the place it was seen at', () => {
+  expect(relocate(note, lines[task1], task1)).toEqual({ line: task1, source: lines[task1] });
+  const moved = note.replace(lines[task1], `- neu oben\n${lines[task1]}`);
+  expect(relocate(moved, lines[task1], task1)).toEqual({ line: task1 + 1, source: lines[task1] });
+  // Dieselbe Zeile zweimal: am gesehenen Ort gilt sie, sonst ist nicht zu sagen, welche gemeint war.
+  const twice = `- gleich\n- gleich\n`;
+  expect(relocate(twice, '- gleich', 1)).toEqual({ line: 1, source: '- gleich' });
+  expect(relocate(twice, '- gleich', 5)).toBeNull();
+});
+
+test('relocate finds a changed line by its id, at the same place or moved', () => {
+  // Ein anderes Gerät hat „gemeldet“ in den Marker geschrieben: Die Zeile ist eine andere, ihre Kennung nicht.
+  const reported = note.replace('%%ob:k3x9 todo:AAMkTEST2%%', '%%ob:k3x9 todo:AAMkTEST2 gemeldet%%');
+  expect(relocate(reported, lines[task2], task2)).toEqual({ line: task2, source: '- [ ] Urlaube im Plan nachziehen %%ob:k3x9 todo:AAMkTEST2 gemeldet%%' });
+  // Haken gesetzt und Text geändert, dazu ist die Zeile verrutscht.
+  const rewritten = note.replace(lines[task2], `- neu oben\n- [x] Urlaube anders formuliert %%ob:k3x9 todo:AAMkTEST2%%`);
+  expect(relocate(rewritten, lines[task2], task2)).toEqual({ line: task2 + 1, source: '- [x] Urlaube anders formuliert %%ob:k3x9 todo:AAMkTEST2%%' });
+  // Es genügt eine der Kennungen.
+  const onlyBlock = note.replace(lines[task2], '- [ ] Urlaube %%ob:k3x9%%');
+  expect(relocate(onlyBlock, lines[task2], task2)).toEqual({ line: task2, source: '- [ ] Urlaube %%ob:k3x9%%' });
+});
+
+test('relocate gives up when the line is gone, has no id and changed, or the id is not clear', () => {
+  // weg
+  expect(relocate(note.replace(`${lines[task1]}\n`, ''), lines[task1], task1)).toBeNull();
+  // ohne Kennung und geändert
+  expect(relocate(note.replace('Max Muster, Freigabe', 'Max Muster und Freigabe'), lines[mail], mail)).toBeNull();
+  // Die Kennung steht jetzt bei zwei Zeilen, und keine ist an ihrem Platz.
+  const doubled = note.replace(lines[task1], `- [ ] eins %%todo:AAMkTEST1%%\n- [ ] zwei %%todo:AAMkTEST1%%`);
+  expect(relocate(doubled, lines[task1], 999)).toBeNull();
+  // Steht eine der beiden an ihrem Platz, gilt die.
+  expect(relocate(doubled, lines[task1], task1 + 1)).toEqual({ line: task1 + 1, source: '- [ ] zwei %%todo:AAMkTEST1%%' });
+  // keine Notiz
+  expect(relocate(null, lines[task1], task1)).toBeNull();
+  // Eine Zeile mit derselben Kennung, die kein Listenpunkt ist, ist nicht die gesuchte.
+  expect(relocate('## Titel %%todo:AAMkTEST1%%\n', lines[task1], 0)).toBeNull();
 });

@@ -1,4 +1,5 @@
 import { h, type ComponentChildren } from 'preact';
+import { useRef, useState } from 'preact/hooks';
 import { isValidDay } from '../lib/dates';
 import { isItemLine, parseItem, visibleText } from '../lib/dailyNote';
 import { Icon } from './Toolbar';
@@ -8,22 +9,25 @@ import { Icon } from './Toolbar';
 // und Kästchen und Stift sind echte Elemente mit eigenen Handlern. Die Notiz enthält Text aus Mails und Kalendern, daraus
 // darf nie etwas mit Wirkung werden (Skripte, Bilder, Formulare, Handler, Stile).
 
-/** Was die Bauteile von der Karte brauchen. */
+/**
+ * Was die Bauteile von der Karte brauchen. Die Karte baut die Bauteile nur neu, wenn sich Text, Abschnitte oder `editing`
+ * ändern, nicht bei jedem Zeichen im Eingabefeld: Was dort getippt wird, steht im Feld selbst (`EditForm`), nicht hier.
+ */
 export type NoteContext = {
   /** Die Zeilen der Notiz, wie sie in der Datei stehen (mit Markern): Das `data-line` des HTML zählt in ihnen. */
   lines: string[];
-  /** Die Zeile, die gerade bearbeitet wird, mit dem Text im Eingabefeld. */
-  editing: { line: number; draft: string } | null;
-  /** Ein Vorgang läuft: Ein Tipp auf ein Kästchen tut nichts. */
-  busy: boolean;
+  /** Die Zeile, die gerade bearbeitet wird. `saving`: Das Speichern läuft, ein zweites „Speichern“ tut nichts. */
+  editing: { line: number; saving: boolean } | null;
+  /** Der Text im Eingabefeld. Das Feld beginnt damit, wenn es erscheint, und meldet jede Änderung (`onDraft`) hierher zurück. */
+  draft: { current: string };
   /** Ein Kästchen wurde angetippt: die Zeile und die Quellzeile, wie sie gezeigt wurde. */
   onToggle(line: number, source: string): void;
   /** Ein Stift wurde angetippt. */
   onEdit(line: number, source: string): void;
   /** Im Eingabefeld wurde getippt. */
   onDraft(text: string): void;
-  /** Enter oder „Speichern“. */
-  onSave(): void;
+  /** Enter oder „Speichern“, mit dem Text im Feld. */
+  onSave(text: string): void;
   /** Escape oder „Abbrechen“. */
   onCancel(): void;
 };
@@ -90,6 +94,51 @@ function focusAtEnd(el: HTMLInputElement | null): void {
   const end = el.value.length;
   el.setSelectionRange(end, end);
   el.closest('form')?.scrollIntoView?.({ block: 'nearest' });
+}
+
+/**
+ * Das Eingabefeld einer Zeile in Bearbeitung. Es hält den Text selbst, damit bei jedem Zeichen nur dieses Feld neu gezeichnet
+ * wird und nicht die ganze Notiz. Beginnt mit dem Text, den die Karte kennt (`ctx.draft`), auch wenn das Feld neu erscheint,
+ * weil die Zeile an eine andere Stelle gerückt ist.
+ */
+function EditForm({ ctx, saving }: { ctx: NoteContext; saving: boolean }) {
+  const [draft, setDraft] = useState(() => ctx.draft.current);
+  // Gespeichert wird, was zuletzt getippt wurde, auch wenn das Feld es noch nicht gezeichnet hat.
+  const typed = useRef(draft);
+  return (
+    <form
+      class="bearbeiten"
+      onSubmit={(e) => {
+        e.preventDefault();
+        ctx.onSave(typed.current);
+      }}
+    >
+      <input
+        type="text"
+        aria-label="Text bearbeiten"
+        value={draft}
+        autoComplete="off"
+        enterKeyHint="done"
+        ref={focusAtEnd}
+        onInput={(e) => {
+          typed.current = e.currentTarget.value;
+          setDraft(e.currentTarget.value);
+          ctx.onDraft(e.currentTarget.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return;
+          e.preventDefault();
+          ctx.onCancel();
+        }}
+      />
+      <button type="submit" class="knopf" disabled={saving}>
+        Speichern
+      </button>
+      <button type="button" class="knopf" onClick={() => ctx.onCancel()}>
+        Abbrechen
+      </button>
+    </form>
+  );
 }
 
 function isElement(node: Node): node is Element {
@@ -170,20 +219,11 @@ function item(li: Element, ctx: NoteContext): ComponentChildren {
 
   const name = own === null ? '' : visibleText(own);
   // Während ein Vorgang läuft, ist nichts gesperrt (`disabled`): Das ließe alle Kästchen bei jedem Haken kurz aufblinken und
-  // nähme einem Kästchen, das gerade den Fokus hat, ihn weg. Ein Tipp in dieser Zeit tut nichts, und das Kästchen bleibt, wie es ist.
+  // nähme einem Kästchen, das gerade den Fokus hat, ihn weg. Jeder Tipp zählt: Die Karte reiht ihn hinter die laufenden ein.
   const checkbox =
     own !== null && box !== undefined ? (
       <label class="haken-flaeche">
-        <input
-          type="checkbox"
-          checked={box !== ' '}
-          aria-label={name}
-          disabled={editing}
-          onClick={(e) => {
-            if (ctx.busy) e.preventDefault();
-          }}
-          onChange={() => ctx.onToggle(line, own)}
-        />
+        <input type="checkbox" checked={box !== ' '} aria-label={name} disabled={editing} onChange={() => ctx.onToggle(line, own)} />
       </label>
     ) : null;
 
@@ -193,34 +233,7 @@ function item(li: Element, ctx: NoteContext): ComponentChildren {
     checkbox,
     own !== null && box === undefined ? <span class="punkt" aria-hidden="true" /> : null,
     editing && ctx.editing ? (
-      <form
-        class="bearbeiten"
-        onSubmit={(e) => {
-          e.preventDefault();
-          ctx.onSave();
-        }}
-      >
-        <input
-          type="text"
-          aria-label="Text bearbeiten"
-          value={ctx.editing.draft}
-          autoComplete="off"
-          enterKeyHint="done"
-          ref={focusAtEnd}
-          onInput={(e) => ctx.onDraft(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key !== 'Escape') return;
-            e.preventDefault();
-            ctx.onCancel();
-          }}
-        />
-        <button type="submit" class="knopf" disabled={ctx.busy}>
-          Speichern
-        </button>
-        <button type="button" class="knopf" onClick={() => ctx.onCancel()}>
-          Abbrechen
-        </button>
-      </form>
+      <EditForm ctx={ctx} saving={ctx.editing.saving} />
     ) : (
       <span class="text">{convertNodes(textNodes.filter((node) => !isCheckbox(node)), ctx, false)}</span>
     ),

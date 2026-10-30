@@ -3,7 +3,7 @@ import { parsePage } from '../../src/ink/svg';
 import { PathNotAllowedError } from '../../src/sync/paths';
 import type { SyncEngine } from '../../src/sync/engine';
 import { fixture } from './helpers';
-import { A, B, S, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
+import { A, B, S, httpError, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
 
 const base = fixture('05 Daily Notes/2026-10-29.md');
 
@@ -66,6 +66,49 @@ test('a file that cannot be decoded throws and is never kept as empty', async ()
   expect(await h.store.get('files', A)).toBeUndefined();
   expect(await h.store.getAll('outbox')).toEqual([]);
   await expect(e.read(A)).rejects.toBeInstanceOf(TypeError); // und es bleibt dabei
+});
+
+test('lookup tells a file that does not exist from a file it could not ask for', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  // Es gibt die Datei nicht: GitHub hat geantwortet.
+  expect(await e.lookup(B)).toEqual({ text: null, unknown: false });
+  // Kein Netz, kein Zugang, Ratenlimit: Ob es die Datei gibt, ist offen.
+  fake.offline = true;
+  expect(await e.lookup(A)).toEqual({ text: null, unknown: true });
+  fake.offline = false;
+  fake.auth = false;
+  expect(await e.lookup(A)).toEqual({ text: null, unknown: true });
+  fake.auth = true;
+  fake.rateLimit = true;
+  expect(await e.lookup(A)).toEqual({ text: null, unknown: true });
+  fake.rateLimit = false;
+  // Danach stimmt die Antwort, und die Datei ist die, die es gibt.
+  expect(await e.lookup(A)).toEqual({ text: base, unknown: false });
+});
+
+test('lookup knows the text without a connection once there is a local copy', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  fake.offline = true;
+  expect(await e.lookup(A)).toEqual({ text: base, unknown: false });
+});
+
+test('lookup throws like read when the answer is an error, and never calls it unknown', async () => {
+  fake.before = () => {
+    throw httpError(503);
+  };
+  await expect(e.lookup(A)).rejects.toMatchObject({ status: 503 });
+  fake.before = undefined;
+  fake.broken.add(A);
+  await expect(e.lookup(A)).rejects.toBeInstanceOf(TypeError);
+});
+
+test('read gives the same text as lookup', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  fake.offline = true;
+  expect(await e.read(A)).toBeNull();
+  fake.offline = false;
+  expect(await e.read(A)).toBe(base);
 });
 
 test('a path that is not allowed throws', async () => {

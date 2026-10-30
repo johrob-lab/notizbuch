@@ -6,7 +6,6 @@ import {
   firstFreePage,
   listMeetings,
   meetingMeta,
-  meetingPageText,
   meetingPages,
   neighbourPages,
   pageAfterDelete,
@@ -15,6 +14,7 @@ import {
   projectNames,
 } from '../../src/lib/meetings';
 import { besprechungLayout } from '../../src/pages/layouts';
+import { meetingPageText } from '../../src/pages/meetingText';
 
 // Besprechungen: Dateinamen, Kopfdaten und Listen. Alles hier ist erfunden.
 

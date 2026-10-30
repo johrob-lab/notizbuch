@@ -49,6 +49,32 @@ test('parseSections ignores other heading levels and lines that only look like h
   expect(parseSections('')).toEqual([]);
 });
 
+test('parseSections names a section by its visible text, markers do not belong to the name', () => {
+  const text = '## Ergänzungen %%ob:k3x9%%\n- a\n## Morgen %%x%% briefing\n- b\n## Offen %%ohne Ende\n';
+  expect(parseSections(text)).toEqual([
+    { heading: 'Ergänzungen', start: 0, end: 2 },
+    { heading: 'Morgen briefing', start: 2, end: 4 },
+    { heading: 'Offen', start: 4, end: 6 },
+  ]);
+  // Ein Abschnitt, dessen Name nur aus einem Marker bestünde, hat keinen sichtbaren Namen: keine Überschrift.
+  expect(parseSections('## Eins\n## %%nur Marker%%\n- a\n')).toEqual([{ heading: 'Eins', start: 0, end: 4 }]);
+});
+
+test('parseSections skips headings that a block comment hides', () => {
+  const text = '## Eins\n- a\n%%\n## Versteckt\n- b\n%%\n- c\n## Zwei\n';
+  expect(parseSections(text)).toEqual([
+    { heading: 'Eins', start: 0, end: 7 },
+    { heading: 'Zwei', start: 7, end: 9 },
+  ]);
+  // Ein einzelnes `%%` in einer Zeile versteckt nur sich selbst: Die Überschrift danach gilt.
+  expect(parseSections('## Eins\n%%\n## Zwei\n')).toEqual([
+    { heading: 'Eins', start: 0, end: 2 },
+    { heading: 'Zwei', start: 2, end: 4 },
+  ]);
+  // Mit Windows-Zeilenenden ist es dasselbe.
+  expect(parseSections(text.replace(/\n/g, '\r\n')).map((s) => s.heading)).toEqual(['Eins', 'Zwei']);
+});
+
 test('isItemLine recognises bullets and task boxes, also indented', () => {
   expect(isItemLine('- Max Muster')).toBe(true);
   expect(isItemLine('- [ ] offen')).toBe(true);
@@ -300,6 +326,19 @@ test('Ergänzungen goes between Morgenbriefing and Abendüberblick, nothing else
   expect(parseSections(out).map(s => s.heading)).toEqual(['Morgenbriefing (automatisch)', 'Ergänzungen', 'Abendüberblick (automatisch)']);
   expect(out.replace('## Ergänzungen\n\n- [ ] Muster anrufen\n\n', '')).toBe(md);
   expect(appendErgaenzung(out, 'Notiz ohne Haken', false)).toContain('- [ ] Muster anrufen\n- Notiz ohne Haken\n');
+});
+
+test('an Ergänzung lands after a block comment with a hidden heading, not inside it', () => {
+  const note = '## Ergänzungen\n\n- a\n%%\n## Alt\n- weg\n%%\n\n## Abendüberblick (automatisch)\n';
+  const out = appendErgaenzung(note, 'neu', false);
+  expect(out).toBe('## Ergänzungen\n\n- a\n%%\n## Alt\n- weg\n%%\n\n- neu\n\n## Abendüberblick (automatisch)\n');
+  expect(visibleLines(out.split('\n'))).toContain('- neu');
+});
+
+test('a section with a marker behind its name is found and extended, not created twice', () => {
+  const note = '## Ergänzungen %%ob:k3x9%%\n\n- a\n\n## Abendüberblick (automatisch)\n';
+  expect(ensureSection(note, 'Ergänzungen')).toEqual({ md: note, line: 0 });
+  expect(appendErgaenzung(note, 'neu', false)).toBe('## Ergänzungen %%ob:k3x9%%\n\n- a\n- neu\n\n## Abendüberblick (automatisch)\n');
 });
 
 test('a second Ergänzung keeps one blank line before the next heading', () => {

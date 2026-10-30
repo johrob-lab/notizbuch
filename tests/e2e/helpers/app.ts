@@ -27,7 +27,7 @@ const STATIC_URL = '/notizbuch/icons/icon-192.png';
 
 export type Device = 'iPad' | 'Firmen-PC';
 export type OpenOptions = {
-  /** Jede Anfrage an GitHub scheitert wie ohne Netz. */
+  /** Jede Anfrage an GitHub scheitert wie ohne Netz, bis `RepoMock.offline` wieder `false` ist. */
   offline?: boolean;
   /** Anfragen nach einer Datei antworten mit einem Serverfehler (500), bis `RepoMock.failReads` wieder `false` ist. */
   failReads?: boolean;
@@ -38,6 +38,8 @@ export type OpenOptions = {
   files?: Record<string, string>;
   /** Dateien des Mini-Vaults, die im Repo fehlen sollen (zum Beispiel `Termine.md`). */
   omit?: string[];
+  /** Dateien, die das Repo mit Bytes ausliefert, die kein UTF-8 sind: Die App kann sie nicht lesen, und das ändert sich nie. */
+  invalidUtf8?: string[];
 };
 
 export type Put = { path: string; text: string; message: string; sha: string | null };
@@ -49,6 +51,8 @@ export type RepoMock = {
   deletes: Delete[];
   /** Anfragen, die der Mock nicht kennt. Sie bekommen den Status 501. */
   unhandled: string[];
+  /** Solange das `true` ist, scheitert jede Anfrage an GitHub wie ohne Netz. */
+  offline: boolean;
   /** Solange das `true` ist, antwortet GitHub auf jede Anfrage nach einer Datei mit einem Serverfehler (500). */
   failReads: boolean;
   /** Solange das `true` ist, antwortet GitHub auf jedes Schreiben und Löschen einer Datei mit einem Serverfehler (500). */
@@ -76,7 +80,14 @@ function githubBase64(text: string): string {
   return Buffer.from(text, 'utf8').toString('base64').replace(/(.{60})/g, '$1\n');
 }
 
-function createRepo(extra: Record<string, string>, omit: string[] = []): RepoMock & { files: Map<string, string>; handle(route: Route): Promise<void> } {
+/** Bytes, die kein UTF-8 sind (0xFF kommt in UTF-8 nie vor). */
+const NOT_UTF8 = Buffer.from([0x41, 0xff, 0xfe, 0x42]);
+
+function createRepo(
+  extra: Record<string, string>,
+  omit: string[] = [],
+  invalidUtf8: string[] = [],
+): RepoMock & { files: Map<string, string>; handle(route: Route): Promise<void> } {
   const files = new Map<string, string>();
   for (const full of walk(VAULT_DIR)) {
     const path = relative(VAULT_DIR, full).split(sep).join('/').normalize('NFC');
@@ -84,6 +95,7 @@ function createRepo(extra: Record<string, string>, omit: string[] = []): RepoMoc
   }
   for (const path of omit) files.delete(path.normalize('NFC'));
   for (const [path, text] of Object.entries(extra)) files.set(path.normalize('NFC'), text);
+  const notUtf8 = new Set(invalidUtf8.map((path) => path.normalize('NFC')));
 
   const commits: { sha: string; paths: string[] }[] = [{ sha: blobSha('start'), paths: [] }];
   const puts: Put[] = [];
@@ -130,6 +142,7 @@ function createRepo(extra: Record<string, string>, omit: string[] = []): RepoMoc
     puts,
     deletes,
     unhandled,
+    offline: false,
     failReads: false,
     failWrites: false,
     read: (path) => files.get(path),
@@ -161,6 +174,17 @@ function createRepo(extra: Record<string, string>, omit: string[] = []): RepoMoc
             const entries = folderEntries(path);
             if (entries.length > 0) return json(route, 200, entries);
             return json(route, 404, { message: 'Not Found' });
+          }
+          if (notUtf8.has(path)) {
+            return json(route, 200, {
+              type: 'file',
+              path,
+              name: path.slice(path.lastIndexOf('/') + 1),
+              sha: blobSha(`bytes ${path}`),
+              size: NOT_UTF8.length,
+              encoding: 'base64',
+              content: NOT_UTF8.toString('base64'),
+            });
           }
           return json(route, 200, {
             type: 'file',
@@ -226,10 +250,11 @@ function createRepo(extra: Record<string, string>, omit: string[] = []): RepoMoc
  * GitHub antwortet aus dem Repo im Speicher, das der Rückgabewert beschreibt.
  */
 export async function openSeeded(page: Page, hash: string, o: OpenOptions = {}): Promise<RepoMock> {
-  const repo = createRepo(o.files ?? {}, o.omit);
+  const repo = createRepo(o.files ?? {}, o.omit, o.invalidUtf8);
+  repo.offline = o.offline ?? false;
   repo.failReads = o.failReads ?? false;
   repo.failWrites = o.failWrites ?? false;
-  await page.route('https://api.github.com/**', (route) => (o.offline ? route.abort('internetdisconnected') : repo.handle(route)));
+  await page.route('https://api.github.com/**', (route) => (repo.offline ? route.abort('internetdisconnected') : repo.handle(route)));
 
   const settings = {
     token: TOKEN,

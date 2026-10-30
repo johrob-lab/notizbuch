@@ -8,7 +8,8 @@ import { cardStyle } from './cardStyle';
 import { routeHash } from './router';
 
 // Die Karte „Kalender“ auf der Tagesseite: der Monat des Tages, Montag zuerst. Heute, der gezeigte Tag, Feiertage (wie im
-// Planer: Text #a8674f auf #f8efea) und Tage mit Terminen sind markiert. Jeder Tag ist ein Link auf seine Seite.
+// Planer: Text #a8674f auf #f8efea) und Tage mit Terminen sind markiert. Jeder Tag ist ein Link auf seine Seite. Die Tage sind
+// kleiner als 44 pt (etwa 34 mal 16 bis 19 pt auf dem iPad): eine gewollte Ausnahme, die Begründung steht bei `.karte .tag` in app.css.
 
 const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 

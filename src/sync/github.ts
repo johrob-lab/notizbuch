@@ -45,6 +45,9 @@ export class RateLimitError extends Error {
 
 export type DirEntry = { name: string; path: string; sha: string; type: 'file' | 'dir' };
 
+/** Die Dateiliste eines Ordners im Vault. */
+export type ListDir = (folder: string) => Promise<DirEntry[]>;
+
 type Json = Record<string, unknown>;
 
 function isObject(value: unknown): value is Json {

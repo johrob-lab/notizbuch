@@ -248,6 +248,39 @@ export class InkSurface {
     this.render();
   }
 
+  /** Liegt gerade ein Finger auf der Fläche? Dann gehört jeder weitere zur selben Geste. */
+  get fingersDown(): boolean {
+    return this.touches.size > 0;
+  }
+
+  /**
+   * Übernimmt einen Finger, der auf etwas aufgesetzt hat, das über der Fläche liegt (eine Karte): Von jetzt an bewegt er die Seite
+   * wie ein Finger auf der Fläche, zwei Finger zoomen sie (auch wenn nur einer auf der Karte liegt), und ein Zwei-Finger-Tipp
+   * macht rückgängig. `from` ist, wo und wann der Finger aufgesetzt hat: Die Fläche rechnet so, als wäre er von dort an bei ihr
+   * gewesen, die Seite folgt ihm also von seinem Aufsetzpunkt aus. Die Fläche fängt den Zeiger ein: Seine weiteren Ereignisse
+   * kommen bei ihr an und nicht mehr bei der Karte. Gibt `false` zurück, wenn sie ihn nicht annimmt (kein Finger, ein Handballen,
+   * der Stift liegt auf).
+   */
+  adopt(e: PointerEvent, from: { clientX: number; clientY: number; timeStamp: number }): boolean {
+    if (this.destroyed || e.pointerType !== 'touch') return false;
+    if (this.touches.has(e.pointerId)) return true;
+    if (!this.filter.acceptTouch(e, e.timeStamp)) return false;
+    this.refreshRect();
+    if (!this.touches.size) this.forgetTaps();
+    this.capture(e);
+    const start = this.local(from);
+    this.touches.set(e.pointerId, start);
+    this.logFinger(e, 'down', { at: start, t: from.timeStamp });
+    this.rebaseGesture();
+    const here = this.local(e);
+    if (here.x !== start.x || here.y !== start.y) {
+      this.touches.set(e.pointerId, here);
+      this.logFinger(e, 'move');
+      this.moveGesture();
+    }
+    return true;
+  }
+
   /** Ort der Seite (Seiteneinheiten) in Bildschirmkoordinaten (`clientX`, `clientY`). */
   toClient(x: number, y: number): Pt2 {
     this.refreshRect();
@@ -733,9 +766,10 @@ export class InkSurface {
     }
   }
 
-  private logFinger(e: PointerEvent, type: FingerEvent['type']): void {
-    const p = this.local(e);
-    const event: FingerEvent = { id: e.pointerId, type, x: p.x, y: p.y, t: e.timeStamp };
+  /** Hält ein Ereignis eines Fingers fest. `where` gilt statt des Ortes und der Zeit des Ereignisses (ein Finger, der früher aufsetzte, siehe `adopt`). */
+  private logFinger(e: PointerEvent, type: FingerEvent['type'], where?: { at: Pt2; t: number }): void {
+    const p = where?.at ?? this.local(e);
+    const event: FingerEvent = { id: e.pointerId, type, x: p.x, y: p.y, t: where?.t ?? e.timeStamp };
     this.tapLog.push(event);
     // Rückgängig machen nur Finger: Die Maus hat nur einen Zeiger und kann keinen Zwei-Finger-Tipp machen.
     if (e.pointerType === 'touch') this.fingerLog.push(event);

@@ -2,14 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { dayEntries, mergeMeetings, meetingRequest, namesIn, type DayEntry, type MeetingRef } from '../lib/dayMeetings';
 import { nextFullHour, type Day } from '../lib/dates';
 import { tagPagePath } from '../lib/filenames';
-import { createMeeting, listMeetings, meetingPageText } from '../lib/meetings';
+import { createMeeting, listMeetings } from '../lib/meetings';
 import type { Termin } from '../lib/termine';
+import { meetingPageText } from '../pages/meetingText';
 import type { Rect } from '../pages/layouts';
 import type { SyncEngine } from '../sync/engine';
-import type { ListDir } from './BesprechungPage';
+import type { ListDir } from '../sync/github';
 import { cardStyle } from './cardStyle';
 import { formDialog } from './Dialog';
 import { routeHash } from './router';
+import { FAILED } from './texts';
 
 // Die Karte „Besprechungen“ der Tagesseite: die Termine des Tages aus `Termine.md` und die Besprechungen, die es zu dem Tag
 // schon gibt. Ein Tipp auf einen Termin öffnet seine Besprechung oder legt sie an (Thema, Zeit und Ort aus dem Termin).
@@ -18,7 +20,6 @@ import { routeHash } from './router';
 
 const QUESTION = 'Neue Besprechung';
 const ALL_DAY_TIME = '08:00';
-const FAILED = 'Das hat nicht geklappt. Bitte noch einmal versuchen.';
 
 type Props = {
   engine: SyncEngine;

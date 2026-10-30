@@ -1,4 +1,4 @@
-import { MONTHS } from '../pages/layouts';
+import { MONTHS } from '../lib/dates';
 
 const SHORT = ['JAN', 'FEB', 'MÄR', 'APR', 'MAI', 'JUN', 'JUL', 'AUG', 'SEP', 'OKT', 'NOV', 'DEZ'];
 

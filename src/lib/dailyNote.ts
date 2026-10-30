@@ -11,7 +11,10 @@ export const SECTION_ORDER: readonly string[] = [
   'Abendüberblick (automatisch)',
 ];
 
-/** Abschnitt einer Tagesnotiz. `start` ist der Zeilenindex der Überschrift, `end` exklusiv. Gezählt wird in `md.split('\n')`. */
+/**
+ * Abschnitt einer Tagesnotiz. `heading` ist der Name, wie die Notiz ihn zeigt (ohne Marker). `start` ist der Zeilenindex der
+ * Überschrift, `end` exklusiv. Gezählt wird in `md.split('\n')`.
+ */
 export type Section = { heading: string; start: number; end: number };
 
 const ERGAENZUNGEN = 'Ergänzungen';
@@ -135,11 +138,15 @@ function eolOf(md: string): string {
   return windows > breaks - windows ? '\r' : '';
 }
 
-/** Alle Abschnitte der Ebene 2 in der Reihenfolge der Datei. */
+/**
+ * Alle Abschnitte der Ebene 2 in der Reihenfolge der Datei. Es zählt, was die Notiz zeigt (`visibleLines`): Der Name hat keine
+ * Marker, und eine Überschrift in einem Blockkommentar ist keine. Sonst stünde `%%ob:k3x9%%` auf dem Knopf des Abschnitts, ein
+ * Abschnitt wäre doppelt angelegt, oder eine Ergänzung landete im versteckten Teil der Notiz.
+ */
 export function parseSections(md: string): Section[] {
   const lines = md.split('\n');
   const sections: Section[] = [];
-  lines.forEach((line, i) => {
+  visibleLines(lines).forEach((line, i) => {
     const match = HEADING.exec(line);
     if (!match) return;
     const previous = sections.at(-1);
@@ -233,9 +240,11 @@ export function appendErgaenzung(md: string, text: string, asTask: boolean): str
   const lines = ensured.md.split('\n');
 
   // Die neue Zeile kommt hinter die letzte nicht leere Zeile des Abschnitts (sonst hinter die Überschrift).
-  // Die Leerzeile vor der nächsten Überschrift bleibt dadurch erhalten.
+  // Die Leerzeile vor der nächsten Überschrift bleibt dadurch erhalten. Wo der Abschnitt endet, sagt `parseSections`:
+  // Eine Überschrift in einem Blockkommentar beendet ihn nicht, sonst läge die Zeile im versteckten Teil.
+  const end = parseSections(ensured.md).find((section) => section.start === ensured.line)?.end ?? lines.length;
   let last = ensured.line;
-  for (let i = ensured.line + 1; i < lines.length && !HEADING.test(lines[i]); i++) {
+  for (let i = ensured.line + 1; i < end; i++) {
     if (lines[i].trim() !== '') last = i;
   }
   const item = asTask ? `- [ ] ${clean}` : `- ${clean}`;

@@ -25,3 +25,11 @@ export function base64ToUtf8(b: string): string {
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return decoder.decode(bytes);
 }
+
+/**
+ * Ist das der Fehler, den `base64ToUtf8` wirft, wenn die Bytes kein UTF-8 sind? Dann ist die Datei kaputt und bleibt es: Ein neuer
+ * Versuch, sie zu lesen, ändert nichts. Jeder andere Fehler beim Lesen (Netz, Server) kann beim nächsten Mal gelingen.
+ */
+export function isNotUtf8(error: unknown): boolean {
+  return error instanceof TypeError;
+}

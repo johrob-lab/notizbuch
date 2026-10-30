@@ -1,6 +1,5 @@
-import { formatDayLong, monthGrid, monthKey, type Day } from './dates';
+import { formatDayLong, MONTHS, monthGrid, monthKey, type Day } from './dates';
 import { holidaysAT } from './holidays';
-import { MONTHS } from '../pages/layouts';
 import type { Termin } from './termine';
 
 // Der Kalender auf der Tagesseite: ein Monat, Montag zuerst, mit heute, dem gezeigten Tag, Feiertagen und Tagen mit

@@ -4,6 +4,22 @@ export type Day = string;
 const DAY_MS = 86_400_000;
 const WEEKDAY_NAMES = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 
+/** Die Monatsnamen, Januar zuerst (Index 0). Sie gehören zur Rechnung mit Tagen und stehen darum hier, nicht bei den Seiten. */
+export const MONTHS: readonly string[] = [
+  'Januar',
+  'Februar',
+  'März',
+  'April',
+  'Mai',
+  'Juni',
+  'Juli',
+  'August',
+  'September',
+  'Oktober',
+  'November',
+  'Dezember',
+];
+
 const viennaDate = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Europe/Vienna',
   year: 'numeric',

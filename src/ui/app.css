@@ -693,7 +693,8 @@ body {
   /*
    * Eine Karte fängt Berührungen ab, die Schreibfläche darunter sieht sie nicht. Mit dem Standardwert würde ein Zwei-Finger-
    * Zoom, der auf einer Karte beginnt, die ganze Oberfläche im Browser vergrößern (Leiste und Werkzeuge mit). Hier ist nur
-   * das senkrechte Blättern erlaubt; die Seite verschiebt und zoomt man mit Fingern außerhalb der Karten.
+   * das senkrechte Blättern erlaubt. Verschieben und Zoomen mit Fingern übernimmt die Seite, wo immer die Finger beginnen
+   * (cardGestures.ts): Was die Karte nicht selbst blättern kann, geht an die Fläche.
    */
   touch-action: pan-y;
 }
@@ -709,7 +710,8 @@ body {
 
 .karte button:focus-visible,
 .karte a:focus-visible,
-.karte input:focus-visible {
+.karte input:focus-visible,
+.karte textarea:focus-visible {
   outline: 2px solid var(--gruen);
   outline-offset: 1px;
 }
@@ -720,7 +722,7 @@ body {
   color: #5f6862;
 }
 
-/* Was man in einer Karte blättern kann, scrollt mit dem Finger senkrecht; alles andere an den Karten ist zum Tippen. */
+/* Was man in einer Karte blättern kann, scrollt mit dem Finger senkrecht; alles andere an den Karten ist zum Tippen, und ein Finger, der zieht, gehört der Seite. */
 .karte .karten-inhalt,
 .karte .eintraege {
   flex: 1 1 auto;
@@ -989,6 +991,49 @@ body {
   background: var(--fehler);
 }
 
+/* Leer nimmt die Meldung keinen Platz, bleibt aber im Baum: Eine Meldung, die erst später erscheint, liest die Sprachausgabe nur vor, wenn es sie schon gab. */
+.karte .karten-hinweis:empty {
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+}
+
+/* Der Text einer Bearbeitung, deren Zeile es nicht mehr gibt: bleibt stehen, damit man ihn kopieren kann. */
+.karte .gerettet {
+  display: flex;
+  flex: none;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.karte .gerettet label {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: #5f6862;
+  font-size: 18px;
+}
+
+.karte .gerettet textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 14px;
+  border: 1px solid var(--linie);
+  border-radius: 12px;
+  background: #fff;
+  color: #2e3630;
+  font: inherit;
+  font-size: 20px; /* über 16 Punkten, sonst zoomt Safari beim Antippen in die Seite */
+  resize: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .karte .ergaenzen {
   display: flex;
   flex: none;
@@ -1071,6 +1116,12 @@ body {
   min-height: 0;
 }
 
+/*
+ * Die Tage im Kalender sind die einzige Ausnahme von den 44 pt für Bedienelemente in den Karten: Auf dem iPad (11 Zoll hochkant,
+ * ganze Seite) ist ein Tag etwa 34 mal 16 bis 19 pt groß. Ein ganzer Monat mit bis zu sechs Wochen muss in diese Karte passen
+ * (388 mal 256 Einheiten, siehe `tagLayout`), und eine höhere Karte schöbe die darunter weg. Mit dem Stift trifft man einen Tag
+ * sicher, mit dem Finger hilft ein Zoom: Die Karte zoomt mit der Seite. Das ist so gewollt und wird nicht größer gemacht.
+ */
 .karte .tag {
   position: relative;
   display: flex;
