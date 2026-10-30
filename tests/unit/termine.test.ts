@@ -9,19 +9,19 @@ const titles = (list: Termin[]) => list.map((t) => t.title);
 test('parses the three formats', () => {
   const t = parseTermine(fixture(TERMINE_MD));
   expect(t).toHaveLength(3);
-  expect(t[0]).toEqual({ date: '2026-10-29', start: '08:00', end: '14:00', allDay: false, title: 'Abstimmung Beispiel 2027', place: 'Klagenfurt', source: 'Outlook' });
+  expect(t[0]).toEqual({ date: '2026-10-29', start: '08:00', end: '14:00', allDay: false, title: 'Abstimmung Beispiel 2027', place: 'Musterstadt', source: 'Outlook' });
   expect(t[1]).toMatchObject({ allDay: true, place: undefined });
 });
 
 test('parses every field of the all day line and of the last line', () => {
   const t = parseTermine(fixture(TERMINE_MD));
   expect(t[1]).toEqual({ date: '2026-10-30', start: undefined, end: undefined, allDay: true, title: 'Schulung Beispiel', place: undefined, source: 'Outlook' });
-  expect(t[2]).toEqual({ date: '2026-11-02', start: '09:30', end: '10:00', allDay: false, title: 'Zahnarzt', place: 'Villach', source: 'Google' });
+  expect(t[2]).toEqual({ date: '2026-11-02', start: '09:30', end: '10:00', allDay: false, title: 'Zahnarzt', place: 'Beispielhausen', source: 'Google' });
 });
 
 test('every Termin has all keys, with undefined where a value is missing', () => {
   const keys = ['allDay', 'date', 'end', 'place', 'source', 'start', 'title'];
-  const [timed, allDay] = parseTermine('- 2026-10-29 08:00 bis 09:00 | A\n- 2026-10-30 ganztägig | B | Graz | Outlook\n');
+  const [timed, allDay] = parseTermine('- 2026-10-29 08:00 bis 09:00 | A\n- 2026-10-30 ganztägig | B | Probedorf | Outlook\n');
   expect(Object.keys(timed).sort()).toEqual(keys);
   expect(Object.keys(allDay).sort()).toEqual(keys);
   expect(timed.place).toBeUndefined();
@@ -33,18 +33,18 @@ test('every Termin has all keys, with undefined where a value is missing', () =>
 test('Ort and Quelle are optional: a missing or empty part becomes undefined', () => {
   const md = [
     '- 2026-10-29 ganztägig | Nur Titel',
-    '- 2026-10-29 ganztägig | Mit Ort | Graz',
+    '- 2026-10-29 ganztägig | Mit Ort | Probedorf',
     '- 2026-10-29 ganztägig | Ort leer | | Google',
-    '- 2026-10-29 ganztägig | Quelle leer | Graz |',
+    '- 2026-10-29 ganztägig | Quelle leer | Probedorf |',
     '- 2026-10-29 ganztägig | Beide leer |   |   ',
     '- 2026-10-29 08:00 bis 09:00 | Mit Zeit, nur Titel',
     '- 2026-10-29 08:00 bis 09:00 | Mit Zeit, Ort leer |  | Outlook',
   ].join('\n');
   expect(parseTermine(md).map((t) => [t.title, t.place, t.source])).toEqual([
     ['Nur Titel', undefined, undefined],
-    ['Mit Ort', 'Graz', undefined],
+    ['Mit Ort', 'Probedorf', undefined],
     ['Ort leer', undefined, 'Google'],
-    ['Quelle leer', 'Graz', undefined],
+    ['Quelle leer', 'Probedorf', undefined],
     ['Beide leer', undefined, undefined],
     ['Mit Zeit, nur Titel', undefined, undefined],
     ['Mit Zeit, Ort leer', undefined, 'Outlook'],
@@ -52,8 +52,8 @@ test('Ort and Quelle are optional: a missing or empty part becomes undefined', (
 });
 
 test('trims every part', () => {
-  const [t] = parseTermine('- 2026-10-29 08:00 bis 09:00 |   Titel  mit  Lücke  |\tGraz  |  Outlook   \n');
-  expect(t).toMatchObject({ title: 'Titel  mit  Lücke', place: 'Graz', source: 'Outlook' });
+  const [t] = parseTermine('- 2026-10-29 08:00 bis 09:00 |   Titel  mit  Lücke  |\tProbedorf  |  Outlook   \n');
+  expect(t).toMatchObject({ title: 'Titel  mit  Lücke', place: 'Probedorf', source: 'Outlook' });
 });
 
 test('skips malformed lines', () => {
@@ -64,9 +64,9 @@ test('skips lines without a title', () => {
   const md = [
     '- 2026-10-29 ganztägig',
     '- 2026-10-29 ganztägig |',
-    '- 2026-10-29 ganztägig |    | Graz | Outlook',
+    '- 2026-10-29 ganztägig |    | Probedorf | Outlook',
     '- 2026-10-29 08:00 bis 09:00 |',
-    '- 2026-10-29 08:00 bis 09:00 |  | Graz',
+    '- 2026-10-29 08:00 bis 09:00 |  | Probedorf',
     '- 2026-10-29 08:00 bis 09:00 | Mit Titel',
   ].join('\n');
   expect(titles(parseTermine(md))).toEqual(['Mit Titel']);
@@ -121,7 +121,7 @@ test('accepts exactly the clock times 00:00 to 23:59, as start and as end', () =
 test('skips lines with more than four parts', () => {
   const md = [
     '- 2026-10-29 ganztägig | Titel | mit | Strich | Outlook',
-    '- 2026-10-29 ganztägig | Genau vier | Graz | Outlook',
+    '- 2026-10-29 ganztägig | Genau vier | Probedorf | Outlook',
   ].join('\n');
   expect(titles(parseTermine(md))).toEqual(['Genau vier']);
 });
@@ -160,7 +160,7 @@ test('reads CRLF files like LF files', () => {
   expect(parseTermine(crlf)).toHaveLength(3);
   expect(parseTermine(crlf)).toEqual(parseTermine(lf));
   // Das Zeilenende bleibt nicht im letzten Feld hängen, auch nicht, wenn das Feld leer ist.
-  const [onlyTitle, emptySource] = parseTermine('- 2026-10-29 ganztägig | A\r\n- 2026-10-29 ganztägig | B | Graz |\r\n');
+  const [onlyTitle, emptySource] = parseTermine('- 2026-10-29 ganztägig | A\r\n- 2026-10-29 ganztägig | B | Probedorf |\r\n');
   expect(onlyTitle.title).toBe('A');
   expect(emptySource.source).toBeUndefined();
 });
@@ -206,7 +206,7 @@ test('termineAm does not change the list it gets', () => {
 });
 
 test('a byte order mark at the start of the file does not hide the first line', () => {
-  const lines = '- 2026-10-29 08:00 bis 14:00 | Abstimmung Beispiel 2027 | Klagenfurt | Outlook\n- 2026-10-30 ganztägig | Schulung Beispiel\n';
+  const lines = '- 2026-10-29 08:00 bis 14:00 | Abstimmung Beispiel 2027 | Musterstadt | Outlook\n- 2026-10-30 ganztägig | Schulung Beispiel\n';
   expect(parseTermine(`\uFEFF${lines}`)).toEqual(parseTermine(lines));
   expect(titles(parseTermine(`\uFEFF${lines}`))).toEqual(['Abstimmung Beispiel 2027', 'Schulung Beispiel']);
   // Auch mit Windows-Zeilenenden, und vor einer Überschrift schadet es nicht.

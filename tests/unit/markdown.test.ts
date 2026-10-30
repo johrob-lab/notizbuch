@@ -37,7 +37,7 @@ test('the fixture note renders as expected', () => {
       '<h2>Morgenbriefing (automatisch)</h2>',
       '<h3>Termine heute</h3>',
       '<ul>',
-      '<li data-line="9">08:00 bis 14:00 Abstimmung Beispiel 2027 (Klagenfurt)</li>',
+      '<li data-line="9">08:00 bis 14:00 Abstimmung Beispiel 2027 (Musterstadt)</li>',
       '</ul>',
       '<h3>Offene Punkte</h3>',
       '<ul>',

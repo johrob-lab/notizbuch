@@ -6,7 +6,7 @@ const D = '2026-10-29';
 const termine = parseTermine(
   [
     '- 2026-10-29 16:00 bis 17:00 | Sperren & "Muster" <2027> | Raum 1',
-    '- 2026-10-29 08:00 bis 14:00 | Abstimmung Beispiel 2027 | Klagenfurt | Outlook',
+    '- 2026-10-29 08:00 bis 14:00 | Abstimmung Beispiel 2027 | Musterstadt | Outlook',
     '- 2026-10-29 ganztägig | Schulung Beispiel',
     '- 2026-10-30 09:00 bis 10:00 | Anderer Tag',
   ].join('\n'),
@@ -90,8 +90,8 @@ test('a title that gives no topic matches the meeting named Besprechung', () => 
 });
 
 test('a meeting request from a timed appointment carries the day, the time, the title and the place', () => {
-  const [timed] = parseTermine('- 2026-10-29 08:00 bis 14:00 | Abstimmung Beispiel 2027 | Klagenfurt | Outlook\n');
-  expect(meetingRequest(D, timed)).toEqual({ datum: D, zeit: '08:00', thema: 'Abstimmung Beispiel 2027', ort: 'Klagenfurt' });
+  const [timed] = parseTermine('- 2026-10-29 08:00 bis 14:00 | Abstimmung Beispiel 2027 | Musterstadt | Outlook\n');
+  expect(meetingRequest(D, timed)).toEqual({ datum: D, zeit: '08:00', thema: 'Abstimmung Beispiel 2027', ort: 'Musterstadt' });
   const [noPlace] = parseTermine('- 2026-10-29 08:00 bis 14:00 | Ohne Ort\n');
   expect(meetingRequest(D, noPlace)).toEqual({ datum: D, zeit: '08:00', thema: 'Ohne Ort', ort: undefined });
 });

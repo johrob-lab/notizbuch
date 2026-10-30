@@ -949,18 +949,18 @@ test('meeting from Termin', async ({ page }) => {
   const repo = await openSeeded(page, DAY);
   const entry = meetings(page).getByRole('button', { name: /Abstimmung Beispiel 2027/ });
   await expect(entry).toContainText('08:00');
-  await expect(entry).toContainText('Klagenfurt');
+  await expect(entry).toContainText('Musterstadt');
   await entry.click();
 
   await expect.poll(() => hash(page)).toBe(hashOf(BASE, 1));
   await expect(field(page, 'Zeit')).toHaveValue('08:00');
   await expect(field(page, 'Thema')).toHaveValue(THEMA);
-  await expect(field(page, 'Ort')).toHaveValue('Klagenfurt');
+  await expect(field(page, 'Ort')).toHaveValue('Musterstadt');
   await expect(field(page, 'Datum')).toHaveValue(TODAY);
   await upload(page, repo, 1);
   const [put] = repo.puts;
   expect(put.path).toBe(PAGE1);
-  for (const part of [`data-thema="${THEMA}"`, 'data-datum="2026-10-29"', 'data-zeit="08:00"', 'data-ort="Klagenfurt"', 'data-seitennr="1"', `data-schluessel="${BASE}"`]) {
+  for (const part of [`data-thema="${THEMA}"`, 'data-datum="2026-10-29"', 'data-zeit="08:00"', 'data-ort="Musterstadt"', 'data-seitennr="1"', `data-schluessel="${BASE}"`]) {
     expect(put.text, part).toContain(part);
   }
 });
@@ -969,8 +969,8 @@ test('an existing meeting is opened instead of a second one', async ({ page }) =
   const other = '2026-10-29 1000 Team Runde';
   const repo = await openSeeded(page, DAY, {
     files: {
-      [PAGE1]: pageText(1, { ort: 'Klagenfurt' }),
-      [`${FILES}/${BASE} S2.svg`]: pageText(2, { ort: 'Klagenfurt' }),
+      [PAGE1]: pageText(1, { ort: 'Musterstadt' }),
+      [`${FILES}/${BASE} S2.svg`]: pageText(2, { ort: 'Musterstadt' }),
       [`${FILES}/${other} S1.svg`]: pageText(1, { thema: 'Team Runde', zeit: '10:00' }, other),
     },
   });
@@ -980,7 +980,7 @@ test('an existing meeting is opened instead of a second one', async ({ page }) =
   // Zu dem Termin gibt es die Besprechung schon: Ein Tipp öffnet sie, es entsteht keine zweite.
   await list.getByRole('button', { name: /Abstimmung Beispiel 2027/ }).click();
   await expect.poll(() => hash(page)).toBe(hashOf(BASE, 1));
-  await expect(field(page, 'Ort')).toHaveValue('Klagenfurt');
+  await expect(field(page, 'Ort')).toHaveValue('Musterstadt');
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
   expect(await queued(page)).toEqual({});
@@ -1117,7 +1117,7 @@ test('a Termin whose page can not be looked up opens the question with a message
   repo.failReads = false;
   await question.getByRole('button', { name: 'Anlegen' }).click();
   await expect.poll(() => hash(page)).toBe(hashOf(BASE, 1));
-  await expect(field(page, 'Ort')).toHaveValue('Klagenfurt');
+  await expect(field(page, 'Ort')).toHaveValue('Musterstadt');
   await upload(page, repo, 1);
   expect(repo.puts[0].path).toBe(PAGE1);
 });
@@ -1202,7 +1202,7 @@ test('many appointments scroll inside the card, and the last one can still be op
 // ---------- Fehlende und kaputte Dateien ----------
 
 test('a BOM at the start of Termine.md does not hide the first appointment', async ({ page }) => {
-  const termine = '﻿- 2026-10-29 08:00 bis 14:00 | Abstimmung Beispiel 2027 | Klagenfurt | Outlook\n';
+  const termine = '﻿- 2026-10-29 08:00 bis 14:00 | Abstimmung Beispiel 2027 | Musterstadt | Outlook\n';
   await openSeeded(page, DAY, { files: { [TERMINE]: termine } });
   await expect(meetings(page).getByRole('button', { name: /Abstimmung Beispiel 2027/ })).toBeVisible();
   await expect(calendar(page).getByRole('link', { name: 'Do 29.10.2026, heute, 1 Termin', exact: true })).toBeVisible();

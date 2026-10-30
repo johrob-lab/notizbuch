@@ -56,7 +56,7 @@ test('tasks get a real checkbox named after their visible text, and every list i
     ['Reorga abstimmen', true],
   ]);
   expect(pencils(host).map((b) => b.getAttribute('aria-label'))).toEqual([
-    'Bearbeiten: 08:00 bis 14:00 Abstimmung Beispiel 2027 (Klagenfurt)',
+    'Bearbeiten: 08:00 bis 14:00 Abstimmung Beispiel 2027 (Musterstadt)',
     'Bearbeiten: Liste Planobjekte ergänzen (fällig 30.10.)',
     'Bearbeiten: Urlaube im Plan nachziehen',
     'Bearbeiten: Reorga abstimmen',
