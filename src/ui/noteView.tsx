@@ -20,6 +20,8 @@ export type NoteContext = {
   editing: { line: number; saving: boolean } | null;
   /** Der Text im Eingabefeld. Das Feld beginnt damit, wenn es erscheint, und meldet jede Änderung (`onDraft`) hierher zurück. */
   draft: { current: string };
+  /** Die Notiz wird nur gezeigt (das zweite Fenster eines Geräts): Die Kästchen sind gesperrt, und es gibt keine Stifte. */
+  readOnly?: boolean;
   /** Ein Kästchen wurde angetippt: die Zeile und die Quellzeile, wie sie gezeigt wurde. */
   onToggle(line: number, source: string): void;
   /** Ein Stift wurde angetippt. */
@@ -223,7 +225,7 @@ function item(li: Element, ctx: NoteContext): ComponentChildren {
   const checkbox =
     own !== null && box !== undefined ? (
       <label class="haken-flaeche">
-        <input type="checkbox" checked={box !== ' '} aria-label={name} disabled={editing} onChange={() => ctx.onToggle(line, own)} />
+        <input type="checkbox" checked={box !== ' '} aria-label={name} disabled={editing || ctx.readOnly === true} onChange={() => ctx.onToggle(line, own)} />
       </label>
     ) : null;
 
@@ -237,7 +239,7 @@ function item(li: Element, ctx: NoteContext): ComponentChildren {
     ) : (
       <span class="text">{convertNodes(textNodes.filter((node) => !isCheckbox(node)), ctx, false)}</span>
     ),
-    own !== null && !editing ? (
+    own !== null && !editing && ctx.readOnly !== true ? (
       <button type="button" class="stift" aria-label={`Bearbeiten: ${name}`} disabled={ctx.editing !== null} onClick={() => ctx.onEdit(line, own)}>
         <Icon name="pen" />
       </button>

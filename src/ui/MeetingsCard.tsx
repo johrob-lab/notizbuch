@@ -39,6 +39,8 @@ function pagesText(count: number): string {
 }
 
 export function MeetingsCard({ engine, day, rect, termine, listDir }: Props) {
+  // Das zweite Fenster eines Geräts darf keine Besprechung anlegen. Vorhandene lassen sich öffnen und lesen.
+  const locked = engine.readOnly;
   // Die Seiten der Besprechungen eines Tages liegen im Ordner seines Jahres.
   const folder = useMemo(() => {
     const page = tagPagePath(day);
@@ -138,6 +140,7 @@ export function MeetingsCard({ engine, day, rect, termine, listDir }: Props) {
         open(meeting);
         return;
       }
+      if (locked) return;
       const request = meetingRequest(day, termin);
       // Ein ganztägiger Termin hat keine Uhrzeit: Die Frage schlägt eine vor.
       if (!request) return ask({ thema: termin.title, zeit: ALL_DAY_TIME, ort: termin.place });
@@ -164,7 +167,7 @@ export function MeetingsCard({ engine, day, rect, termine, listDir }: Props) {
     const { termin, meeting } = entry;
     return (
       <li key={`${index} ${termin.start ?? 'ganztaegig'} ${termin.title}`}>
-        <button type="button" class="eintrag-zeile" onClick={() => void openTermin(termin, meeting)}>
+        <button type="button" class="eintrag-zeile" disabled={locked && !meeting} onClick={() => void openTermin(termin, meeting)}>
           <span class="zeit">{termin.allDay ? 'ganztägig' : termin.start}</span>
           <span class="titel">{termin.title}</span>
           {termin.place && <span class="zusatz">{termin.place}</span>}
@@ -177,7 +180,7 @@ export function MeetingsCard({ engine, day, rect, termine, listDir }: Props) {
   return (
     <section class="karte besprechungen" aria-label="Besprechungen" style={cardStyle(rect)}>
       <ul class="eintraege">{entries.length === 0 ? <li class="leer">Keine Termine</li> : entries.map(row)}</ul>
-      <button type="button" class="knopf neu" onClick={() => void guarded(() => ask({ thema: '', zeit: nextFullHour() }))}>
+      <button type="button" class="knopf neu" disabled={locked} onClick={() => void guarded(() => ask({ thema: '', zeit: nextFullHour() }))}>
         + Besprechung
       </button>
     </section>

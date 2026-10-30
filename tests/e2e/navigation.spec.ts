@@ -170,10 +170,13 @@ test('an address that is not a page opens today', async ({ page }) => {
   }
 });
 
-test('the settings address shows a note and keeps the bars', async ({ page }) => {
+test('the settings address shows the settings and keeps the bars', async ({ page }) => {
   await openSeeded(page, DAY);
   await link(page, 'Einstellungen').click();
-  await expect(page.getByText('Einstellungen folgen.')).toBeVisible();
+  expect(await hash(page)).toBe('#/einstellungen');
+  await expect(page.getByRole('heading', { name: 'Einstellungen' })).toBeVisible();
+  await expect(link(page, 'Einstellungen')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByText('Einstellungen folgen.')).toHaveCount(0);
   await expect(page.getByTestId('surface')).toHaveCount(0);
   await expect(page.getByRole('navigation', { name: 'Monate' })).toHaveCount(0);
   await expect(page.getByTestId('status')).toHaveText('Gesichert');

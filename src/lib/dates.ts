@@ -110,9 +110,14 @@ export function monthGrid(month: string): Day[][] {
   );
 }
 
+/** Zum Beispiel `29.10.2026`. */
+export function formatDay(d: Day): string {
+  return `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}`;
+}
+
 /** Zum Beispiel `Do 29.10.2026`. */
 export function formatDayLong(d: Day): string {
-  return `${WEEKDAY_NAMES[weekdayIndex(d)]} ${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}`;
+  return `${WEEKDAY_NAMES[weekdayIndex(d)]} ${formatDay(d)}`;
 }
 
 /**

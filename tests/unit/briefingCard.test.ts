@@ -178,3 +178,34 @@ test('a server error is no unreadable note and is tried again, a note that is no
   expect(broken.engine.lookup.mock.calls.length).toBe(asked);
   expect(addButton(other).disabled).toBe(true);
 });
+
+// ---------- Ein Fenster, das nur lesen darf ----------
+
+test('a card of a read-only engine can be read but not ticked, edited or added to, and writes nothing', async () => {
+  const fake = fakeEngine({ text: note, unknown: false });
+  (fake.engine as { readOnly?: boolean }).readOnly = true; // das zweite Fenster eines Geräts
+  const host = mount(fake.as);
+  await loaded(host);
+  // Die Kästchen sind gesperrt, es gibt keine Stifte zum Bearbeiten und kein Feld zum Ergänzen
+  expect(box(host, NAME1)!.disabled).toBe(true);
+  expect(box(host, NAME2)!.disabled).toBe(true);
+  expect(host.querySelector('button.stift')).toBeNull();
+  expect(host.querySelector('form.ergaenzen')).toBeNull();
+  expect(host.textContent).toContain(NAME1); // gelesen werden kann die Notiz
+  // Auch ein Ereignis, das trotzdem ankommt, schreibt nichts, und das Kästchen zeigt weiter, was in der Notiz steht
+  tick(host, NAME1);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(fake.engine.write).not.toHaveBeenCalled();
+  expect(box(host, NAME1)!.checked).toBe(false);
+  expect(polite(host).textContent).toBe('');
+  expect(alert(host).textContent).toBe('');
+});
+
+test('a card of an engine that writes still has its boxes, pens and the form for additions', async () => {
+  const fake = fakeEngine({ text: note, unknown: false });
+  const host = mount(fake.as);
+  await loaded(host);
+  expect(box(host, NAME1)!.disabled).toBe(false);
+  expect(host.querySelector('button.stift')).not.toBeNull();
+  expect(host.querySelector('form.ergaenzen')).not.toBeNull();
+});

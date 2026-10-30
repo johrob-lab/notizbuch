@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { todayVienna } from '../lib/dates';
 import type { SyncEngine } from '../sync/engine';
 import { nextRoute, prevRoute, routeHash, viewRoute, type Route, type Steps } from './router';
@@ -12,9 +12,17 @@ type Props = {
    * einen Tag, eine Woche oder einen Monat. Solange eine Besprechung sie noch nicht liefert, sind beide Pfeile grau.
    */
   steps?: Steps;
+  /**
+   * Ein Hinweis, der beim Start der App kommt (zum Beispiel, dass der Zugang bald abläuft). Er steht wie jede Meldung da, bis man ihn
+   * schließt, und kommt nicht wieder, wenn man blättert: Er gehört zum Start, nicht zur Seite. Ändert sich der Text, ersetzt der neue den
+   * alten, `null` nimmt ihn weg.
+   */
+  startNotice?: string | null;
+  /** Dieses Fenster liest nur (das zweite Fenster eines Geräts): Der Stand des Abgleichs gehört dem anderen und fehlt hier. */
+  passive?: boolean;
 };
 
-type Note = { id: number; text: string; alert: boolean };
+type Note = { id: number; text: string; alert: boolean; start?: boolean };
 
 const SOON = 'kommt mit Stufe C';
 
@@ -62,13 +70,24 @@ function Step({ label, symbol, from, to }: { label: string; symbol: string; from
  * Die Leiste oben: Blättern, die Ansichten, der Stand des Abgleichs und die Einstellungen. Hier laufen auch die
  * Meldungen der Engine auf (Konfliktkopie, Fehler beim Abgleich) und bleiben, bis man sie schließt.
  */
-export function TopBar({ route, engine, steps }: Props) {
+export function TopBar({ route, engine, steps, startNotice, passive }: Props) {
   const [notes, setNotes] = useState<Note[]>([]);
   const lastId = useRef(0);
   const announce = useCallback((text: string, alert: boolean) => {
     // Dieselbe Meldung nur einmal: Ein Fehler, der sich wiederholt, soll die Leiste nicht füllen.
     setNotes((list) => (list.some((n) => n.text === text) ? list : [...list, { id: ++lastId.current, text, alert }]));
   }, []);
+
+  // Der Hinweis zum Start läuft nur, wenn sich sein Text ändert (nicht bei jeder Seite): Wer ihn geschlossen hat, sieht ihn
+  // beim Blättern nicht wieder. Ein neuer Text ersetzt den alten, auch wenn der noch offen ist.
+  useEffect(() => {
+    const id = ++lastId.current;
+    setNotes((list) => {
+      const rest = list.filter((n) => !n.start);
+      if (startNotice) return [...rest, { id, text: startNotice, alert: false, start: true }];
+      return rest.length === list.length ? list : rest;
+    });
+  }, [startNotice]);
 
   // Vor dem ersten Zeichnen und nicht danach: Die Engine ist beim Start schon am Abgleichen, und eine Meldung, die vor
   // dem Anmelden kommt, ginge verloren.
@@ -120,7 +139,8 @@ export function TopBar({ route, engine, steps }: Props) {
           ),
         )}
       </nav>
-      <StatusPill engine={engine} />
+      {/* Das Fenster, das nur liest, hat keinen Stand zu zeigen. Die leere Fläche hält das Zahnrad rechts. */}
+      {passive ? <span class="status" /> : <StatusPill engine={engine} />}
       <a class="pill zahnrad" href="#/einstellungen" aria-label="Einstellungen" aria-current={route.view === 'einstellungen' ? 'page' : undefined}>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d={GEAR} />

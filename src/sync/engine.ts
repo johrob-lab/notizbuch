@@ -3,7 +3,7 @@ import { copyPathFor, mergeByKind } from './conflicts';
 import { AuthError, ConflictError, OfflineError, RateLimitError, statusOf, type GitHubClient } from './github';
 import { normalizePath, PathNotAllowedError } from './paths';
 import type { SyncState, SyncStatus } from './status';
-import { syncedRecord, type FileRecord, type OutboxEntry, type Store } from './store';
+import { syncedRecord, type FileRecord, type OutboxEntry, type Store, type StoreTx } from './store';
 
 export { statusLabel, type SyncState, type SyncStatus } from './status';
 
@@ -23,6 +23,17 @@ const MAX_COPY_NUMBER = 99;
 /** Alle Tabs einer Origin teilen sich die Datenbank, darum gleicht immer nur einer von ihnen ab. */
 const LOCK_NAME = 'notizbuch-sync';
 
+/**
+ * Diese Engine darf nicht schreiben: Sie gehört dem zweiten Fenster eines Geräts (nur das erste schreibt), oder sie ist
+ * beendet, weil das Repository gewechselt wurde. Nichts davon landet in der Warteschlange, im Speicher oder auf GitHub.
+ */
+export class ReadOnlyError extends Error {
+  constructor(message = 'Dieses Fenster darf nicht schreiben.') {
+    super(message);
+    this.name = 'ReadOnlyError';
+  }
+}
+
 type Remote = { text: string; sha: string };
 /** Die Fassung auf GitHub, aus der der Text entstand, den die Seite gerade hält. */
 type PageVersion = { sha: string | null; baseText: string | null };
@@ -32,6 +43,9 @@ type Timer = ReturnType<typeof setTimeout>;
 function isStop(error: unknown): boolean {
   return error instanceof AuthError || error instanceof OfflineError || error instanceof RateLimitError;
 }
+
+/** Die Bereiche, über die eine Schreib-Transaktion des Speichers geht. */
+type Areas = Parameters<Store['transact']>[0];
 
 /** Kennt GitHub den alten Commit nicht mehr, kann der Vergleich nichts liefern: 404, bei einer unbekannten sha auch 422. */
 function isUnknownCommit(error: unknown): boolean {
@@ -68,9 +82,14 @@ export class SyncEngine {
   onError?: (i: { path: string; error: unknown }) => void;
 
   readonly #remoteListeners = new Set<(paths: string[]) => void>();
-  readonly #client: SyncClient;
+  /** Zugang und Gerät können sich ändern, während die Engine läuft (neuer Token, anderes Gerät in den Einstellungen). */
+  #client: SyncClient;
   readonly #store: Store;
-  readonly #device: string;
+  #device: string;
+  /** Das zweite Fenster eines Geräts: liest nur. */
+  readonly #readOnly: boolean;
+  /** Beendet für immer (`close`). */
+  #closed = false;
   #state: SyncState = 'gesichert';
   #pending = 0;
   #flushing: Promise<void> | null = null;
@@ -96,17 +115,45 @@ export class SyncEngine {
   /** Zählt die Starts: Ein `stop()` während `start()` wartet, macht diesen Start ungültig. */
   #session = 0;
 
-  constructor(o: { client: SyncClient; store: Store; device: string }) {
+  constructor(o: { client: SyncClient; store: Store; device: string; readOnly?: boolean }) {
     this.#client = o.client;
     this.#store = o.store;
     this.#device = o.device;
+    this.#readOnly = o.readOnly ?? false;
+  }
+
+  /**
+   * Ob diese Engine nur liest: im zweiten Fenster eines Geräts und nach `close`. Eine solche Engine startet nichts (keine
+   * Abfrage, kein Hochladen, kein Zuhören), nimmt keine Änderung an und legt nichts im Speicher an. Lesen geht weiter: aus
+   * der lokalen Kopie, sonst von GitHub, ohne sich den Text zu merken.
+   */
+  get readOnly(): boolean {
+    return this.#frozen;
+  }
+
+  get #frozen(): boolean {
+    return this.#readOnly || this.#closed;
+  }
+
+  /** Das Gerät in den Commit-Texten ändert sich sofort, auch für Änderungen, die schon warten. */
+  setDevice(device: string): void {
+    this.#device = device;
+  }
+
+  /**
+   * Ab jetzt gehen alle Anfragen über diesen Client (ein neuer Token). Die Warteschlange bleibt, wie sie ist. Der Aufrufer hat
+   * den Zugang geprüft, darum gilt „Zugang erneuern“ nicht mehr; scheitert auch der neue, setzt der nächste Aufruf es wieder.
+   */
+  setClient(client: SyncClient): void {
+    this.#client = client;
+    if (this.#state === 'zugang') this.#setState('gesichert');
   }
 
   // ---------- Start und Ende ----------
 
   /** Lädt die Warteschlange, bittet den Browser, die Daten zu behalten, gleicht ab und wacht über Sichtbarkeit und Netz. */
   async start(): Promise<void> {
-    if (this.#started) return;
+    if (this.#started || this.#frozen) return;
     this.#started = true;
     const session = ++this.#session;
     await this.#refreshPending();
@@ -139,6 +186,16 @@ export class SyncEngine {
     clearTimeout(this.#textTimer);
     clearTimeout(this.#inkTimer);
     this.#started = false;
+  }
+
+  /**
+   * Beendet die Engine für immer, zum Beispiel weil das Repository gewechselt wird. Von da an startet sie nicht mehr, nimmt
+   * keine Änderung an, lädt nichts hoch und legt nichts im Speicher an: Was gerade unterwegs ist (ein Hochladen, das aufs
+   * Schloss wartet, eine Antwort von GitHub), wird weder abgeschickt noch übernommen. Gelesen wird weiter, ohne zu merken.
+   */
+  close(): void {
+    this.#closed = true;
+    this.stop();
   }
 
   // ---------- Fremde Änderungen melden ----------
@@ -189,7 +246,7 @@ export class SyncEngine {
     const local = await this.#store.get('files', path);
     if (local) {
       this.#pageGets(path, local.text, { sha: local.sha, baseText: local.base });
-      void this.#refreshInBackground(path);
+      if (!this.#frozen) void this.#refreshInBackground(path);
       return { text: local.text, unknown: false };
     }
     // Gelöscht, das Löschen steht noch aus.
@@ -199,15 +256,17 @@ export class SyncEngine {
       remote = await this.#call(() => this.#client.getFile(path));
     } catch (error) {
       if (isStop(error)) {
-        this.#noteStop(error);
+        if (!this.#frozen) this.#noteStop(error);
         return { text: null, unknown: true };
       }
       throw error;
     }
     if (!remote) return { text: this.#pageGetsNothing(path), unknown: false };
     const fetched = remote;
+    // Ein Fenster ohne Schreibrecht und eine beendete Engine zeigen, was auf GitHub liegt, und merken sich nichts davon.
+    if (this.#frozen) return { text: fetched.text, unknown: false };
     // Während der Anfrage kann jemand geschrieben oder gelöscht haben, dann gilt das.
-    const kept = await this.#store.transact(['files', 'outbox'], async (tx) => {
+    const kept = await this.#transact(['files', 'outbox'], async (tx) => {
       const [existing, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
       if (existing) return existing;
       if (queued?.deleted) return null;
@@ -235,7 +294,8 @@ export class SyncEngine {
 
   /** Speichert sofort lokal und stellt die Änderung in die Warteschlange. Hochgeladen wird nach 2 s (Text) bzw. 10 s (Handschrift). */
   async write(path: string, text: string, kind: 'md' | 'svg'): Promise<void> {
-    await this.#store.transact(['files', 'outbox'], async (tx) => {
+    if (this.#frozen) throw new ReadOnlyError();
+    await this.#transact(['files', 'outbox'], async (tx) => {
       const [record, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
       // Die erste Grundlage bleibt: Bei mehreren Änderungen vor dem Hochladen zählt der Stand, den GitHub zuletzt hatte.
       // Ohne offene Änderung zählt die Fassung, aus der der Text der Seite entstand. Das ist nicht unbedingt die lokale
@@ -250,7 +310,7 @@ export class SyncEngine {
       ]);
     });
     this.#pageText.set(path, text);
-    this.#schedule(kind);
+    if (!this.#frozen) this.#schedule(kind);
     await this.#refreshPending();
   }
 
@@ -260,8 +320,9 @@ export class SyncEngine {
    * Fassung ist. Alles andere hat dieses Gerät nie gesehen und bleibt.
    */
   async remove(path: string): Promise<void> {
+    if (this.#frozen) throw new ReadOnlyError();
     this.#pageGetsNothing(path);
-    const alreadyQueued = await this.#store.transact(['files', 'outbox'], async (tx) => {
+    const alreadyQueued = await this.#transact(['files', 'outbox'], async (tx) => {
       const [record, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
       if (queued?.deleted) return true;
       const baseSha = queued ? queued.baseSha : (record?.sha ?? null);
@@ -283,7 +344,7 @@ export class SyncEngine {
       return false;
     });
     if (alreadyQueued) return;
-    this.#schedule('md');
+    if (!this.#frozen) this.#schedule('md');
     await this.#refreshPending();
   }
 
@@ -363,6 +424,27 @@ export class SyncEngine {
     });
   }
 
+  /**
+   * Jede Änderung an GitHub geht hier durch. Geprüft wird in dem Augenblick, in dem die Anfrage abgeschickt wird, nicht
+   * früher: Ein Hochladen, das auf das Schloss oder auf eine Antwort gewartet hat, während die Engine beendet wurde, geht nie raus.
+   */
+  #upload<T>(run: () => Promise<T>): Promise<T> {
+    return this.#call(() => {
+      if (this.#frozen) throw new ReadOnlyError();
+      return run();
+    });
+  }
+
+  /**
+   * Jede Änderung am Speicher geht hier durch. Die Prüfung und das Anlegen der Transaktion folgen ohne Pause aufeinander, und
+   * eine Transaktion steht in der Reihenfolge, in der sie angelegt wird: Wer `close` ruft und danach den Speicher leert,
+   * sieht entweder alles, was diese Engine zuvor geschrieben hat, oder sie schreibt nichts mehr.
+   */
+  #transact<T>(areas: Areas, work: (tx: StoreTx) => Promise<T>): Promise<T> {
+    if (this.#frozen) return Promise.reject(new ReadOnlyError());
+    return this.#store.transact(areas, work);
+  }
+
   #message(path: string): string {
     return `Notizbuch: ${path.slice(path.lastIndexOf('/') + 1)} (${this.#device})`;
   }
@@ -387,6 +469,7 @@ export class SyncEngine {
    * fertig sind, und wirft nie.
    */
   flush(): Promise<void> {
+    if (this.#frozen) return Promise.resolve();
     if (this.#flushing) {
       this.#flushAgain = true;
       return this.#flushing;
@@ -398,7 +481,7 @@ export class SyncEngine {
           // Zwischen dieser Prüfung und `#flushing = null` gibt es kein await: Ein Aufruf geht nie verloren.
         } while (this.#flushAgain);
       } catch (error) {
-        this.onError?.({ path: '', error });
+        if (!(error instanceof ReadOnlyError)) this.onError?.({ path: '', error });
       } finally {
         this.#flushing = null;
       }
@@ -415,6 +498,7 @@ export class SyncEngine {
   /** Ein Durchgang unter dem Schloss. Wer ab jetzt `flush` ruft, bekommt einen weiteren. */
   async #flushPass(): Promise<void> {
     this.#flushAgain = false;
+    if (this.#frozen) return; // beendet, während der Durchgang auf das Schloss wartete
     await this.#refreshPending(); // die Warteschlange kann aus einer früheren Sitzung oder einem anderen Tab stammen
     await this.#flushOnce();
     await this.#refreshPending();
@@ -426,7 +510,7 @@ export class SyncEngine {
     for (;;) {
       // Jedes Mal neu lesen: Neue Einträge (zum Beispiel Konfliktkopien) kommen im selben Durchgang dran.
       const next = (await this.#store.getAll('outbox')).filter((e) => !seen.has(e.path)).sort(byQueueTime)[0];
-      if (!next) return;
+      if (!next || this.#frozen) return;
       seen.add(next.path);
       if (await this.#send(next.path)) return; // Netz oder Zugang fehlen: Alles bleibt in der Warteschlange
     }
@@ -436,20 +520,28 @@ export class SyncEngine {
   async #send(path: string): Promise<boolean> {
     const entry = await this.#store.get('outbox', path);
     if (!entry) return false;
+    if (this.#frozen) return true;
     this.#current = path;
     try {
       if (entry.deleted) await this.#sendDelete(entry);
       else await this.#sendWrite(entry);
       return false;
     } catch (error) {
-      if (this.#noteStop(error)) return true;
+      if (this.#noteStop(error) || error instanceof ReadOnlyError) return true;
       // Ein nicht erlaubter Pfad wird nie erlaubt: Die Änderung bleibt nicht ewig in der Warteschlange.
-      if (error instanceof PathNotAllowedError) await this.#store.delete('outbox', path);
+      if (error instanceof PathNotAllowedError) await this.#dropQueued(path);
       this.onError?.({ path, error });
       return false;
     } finally {
       this.#current = null;
     }
+  }
+
+  /** Nimmt eine Änderung aus der Warteschlange, die nie hochgeladen werden kann (nicht erlaubter Pfad). */
+  async #dropQueued(path: string): Promise<void> {
+    await this.#transact(['outbox'], async (tx) => {
+      await tx.objectStore('outbox').delete(path);
+    });
   }
 
   async #sendWrite(entry: OutboxEntry): Promise<void> {
@@ -458,7 +550,7 @@ export class SyncEngine {
       return this.#settle(entry, { sha: entry.baseSha, text: entry.text });
     }
     try {
-      const { sha } = await this.#call(() => this.#client.putFile(entry.path, entry.text, entry.baseSha, this.#message(entry.path)));
+      const { sha } = await this.#upload(() => this.#client.putFile(entry.path, entry.text, entry.baseSha, this.#message(entry.path)));
       await this.#settle(entry, { sha, text: entry.text });
     } catch (error) {
       if (!isStaleBase(error, entry.baseSha)) throw error;
@@ -474,7 +566,7 @@ export class SyncEngine {
    */
   async #settle(sent: OutboxEntry, uploaded: Remote): Promise<void> {
     const { path } = sent;
-    const localText = await this.#store.transact(['files', 'outbox'], async (tx) => {
+    const localText = await this.#transact(['files', 'outbox'], async (tx) => {
       const [record, current] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
       const writes: Promise<unknown>[] = [];
       let text = record?.text ?? null; // die lokale Kopie danach
@@ -521,7 +613,7 @@ export class SyncEngine {
         baseSha = remote.sha;
       }
       try {
-        const { sha } = await this.#call(() => this.#client.putFile(path, text, baseSha, this.#message(path)));
+        const { sha } = await this.#upload(() => this.#client.putFile(path, text, baseSha, this.#message(path)));
         return await this.#settle(entry, { sha, text });
       } catch (error) {
         if (!isStaleBase(error, baseSha)) throw error; // sonst hat sich die Datei schon wieder geändert: noch einmal
@@ -537,7 +629,7 @@ export class SyncEngine {
   async #keepRemote(entry: OutboxEntry, remote: Remote): Promise<void> {
     const { path } = entry;
     const copyPath = await this.#freeCopyPath(path);
-    const wantsCopy = await this.#store.transact(['files', 'outbox'], async (tx) => {
+    const wantsCopy = await this.#transact(['files', 'outbox'], async (tx) => {
       const current = await tx.objectStore('outbox').get(path);
       const wants = !current?.deleted; // wer die Seite inzwischen gelöscht hat, braucht keine Kopie
       const ours = current && !current.deleted ? current.text : entry.text;
@@ -589,7 +681,7 @@ export class SyncEngine {
         sha = remote.sha;
       }
       const version = sha;
-      await this.#call(() => this.#client.deleteFile(path, version, this.#message(path)));
+      await this.#upload(() => this.#client.deleteFile(path, version, this.#message(path)));
       await this.#settleDelete(entry);
     } catch (error) {
       if (error instanceof ConflictError) return this.#cancelDelete(entry);
@@ -603,7 +695,7 @@ export class SyncEngine {
   /** Die Datei ist auf GitHub weg. Wurde danach wieder geschrieben, ist das jetzt eine neue Datei. */
   async #settleDelete(sent: OutboxEntry): Promise<void> {
     const { path } = sent;
-    await this.#store.transact(['files', 'outbox'], async (tx) => {
+    await this.#transact(['files', 'outbox'], async (tx) => {
       const [record, current] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
       const writes: Promise<unknown>[] = [];
       if (current?.deleted) writes.push(tx.objectStore('outbox').delete(path));
@@ -623,7 +715,7 @@ export class SyncEngine {
     const { path } = sent;
     const remote = known ?? (await this.#call(() => this.#client.getFile(path)));
     if (!remote) return this.#settleDelete(sent);
-    const wasBasedOn = await this.#store.transact(['files', 'outbox'], async (tx) => {
+    const wasBasedOn = await this.#transact(['files', 'outbox'], async (tx) => {
       const current = await tx.objectStore('outbox').get(path);
       if (!current?.deleted) return null;
       await Promise.all([
@@ -649,11 +741,12 @@ export class SyncEngine {
    * trotzdem sofort. Fehler kommen nie nach außen.
    */
   async pollRemote(): Promise<void> {
+    if (this.#frozen) return;
     try {
       const head = await this.#call(() => this.#client.headSha());
       const last = await this.#store.get('meta', 'lastHead');
       if (last === undefined) {
-        await this.#store.put('meta', head, 'lastHead');
+        await this.#rememberHead(head);
         return;
       }
       if (last === head) return;
@@ -671,7 +764,7 @@ export class SyncEngine {
           try {
             if (await this.#refreshCopy(path, true)) refreshed.push(path);
           } catch (error) {
-            if (isStop(error)) throw error;
+            if (isStop(error) || error instanceof ReadOnlyError) throw error;
             this.onError?.({ path, error }); // eine kaputte Datei hält die anderen nicht auf
           }
         }
@@ -680,10 +773,18 @@ export class SyncEngine {
         // schriebe sie weiter auf den alten Text, und der Upload überschriebe die fremde Änderung.
         if (refreshed.length > 0) this.#remoteChanged(refreshed);
       }
-      await this.#store.put('meta', head, 'lastHead');
+      await this.#rememberHead(head);
     } catch (error) {
+      if (error instanceof ReadOnlyError) return; // beendet, während die Abfrage lief
       if (!this.#noteStop(error)) this.onError?.({ path: '', error });
     }
+  }
+
+  /** Der Stand von `main`, bis zu dem die Abfrage alles gesehen hat. Gehört zum Repository der Engine, nie zu einem anderen. */
+  async #rememberHead(head: string): Promise<void> {
+    await this.#transact(['meta'], async (tx) => {
+      await tx.objectStore('meta').put(head, 'lastHead');
+    });
   }
 
   /**
@@ -707,7 +808,7 @@ export class SyncEngine {
    * weder geschrieben noch hochgeladen wurde. Die Fassung, die die Seite hält, bleibt unberührt: Erst `read` ändert sie.
    */
   async #adopt(path: string, seen: FileRecord, remote: Remote | null): Promise<boolean> {
-    return this.#store.transact(['files', 'outbox'], async (tx) => {
+    return this.#transact(['files', 'outbox'], async (tx) => {
       const [record, queued] = await Promise.all([tx.objectStore('files').get(path), tx.objectStore('outbox').get(path)]);
       const fresh = !queued && record !== undefined && record.sha === seen.sha;
       if (fresh) {
@@ -722,6 +823,7 @@ export class SyncEngine {
     try {
       if (await this.#refreshCopy(path, false)) this.#remoteChanged([path]);
     } catch (error) {
+      if (error instanceof ReadOnlyError) return;
       if (!this.#noteStop(error)) this.onError?.({ path, error });
     }
   }

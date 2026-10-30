@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import {
   addDays,
+  formatDay,
   formatDayLong,
   isValidDay,
   isoWeekKey,
@@ -172,6 +173,12 @@ test('long day format', () => {
   expect(formatDayLong('2026-10-31')).toBe('Sa 31.10.2026');
   expect(formatDayLong('2026-11-01')).toBe('So 01.11.2026');
   expect(formatDayLong('2027-01-05')).toBe('Di 05.01.2027');
+});
+
+test('short day format is day, month and year with dots', () => {
+  expect(formatDay('2027-10-29')).toBe('29.10.2027');
+  expect(formatDay('2026-01-05')).toBe('05.01.2026');
+  expect(formatDay('2028-02-29')).toBe('29.02.2028');
 });
 
 test('isValidDay accepts real calendar days in the form YYYY-MM-DD', () => {

@@ -69,6 +69,27 @@ test('the status pill shows exactly the label of the engine status and keeps its
   expect(pill.className).toContain('status-zugang');
 });
 
+test('the status pill leads to the settings when the access has to be renewed, and only then', async () => {
+  const engine = fakeEngine({ state: 'zugang', pending: 0 });
+  await mount(h(StatusPill, { engine }));
+  const pill = host.querySelector('[data-testid="status"]')!;
+  expect(pill.textContent).toBe('Zugang erneuern');
+  const link = pill.querySelector('a')!;
+  expect(link.getAttribute('href')).toBe('#/einstellungen');
+  expect(link.textContent).toBe('Zugang erneuern');
+  expect(all('[data-testid="status"]')).toHaveLength(1);
+  await act(() => {
+    engine.status.value = { state: 'gesichert', pending: 0 };
+  });
+  expect(pill.querySelector('a')).toBeNull();
+  expect(pill.textContent).toBe('Gesichert');
+  await act(() => {
+    engine.status.value = { state: 'wartet', pending: 1 };
+  });
+  expect(pill.querySelector('a')).toBeNull();
+  expect(pill.textContent).toBe('Wartet auf Netz · 1 Änderung');
+});
+
 // ---------- Monatsreiter ----------
 
 test('the month tabs run from January to December of the year and open the month', async () => {
@@ -254,4 +275,50 @@ test('a hook that somebody else set meanwhile is not taken away', async () => {
   engine.onError = other;
   await act(() => render(null, host));
   expect(engine.onError).toBe(other);
+});
+
+// ---------- Hinweis zum Start und Fenster ohne Schreibrecht ----------
+
+const EXPIRY = 'Dein Zugang läuft am 05.11.2026 ab. Bitte rechtzeitig erneuern.';
+
+test('a notice for the start is shown once, can be closed, and does not come back on other pages', async () => {
+  const engine = fakeEngine();
+  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine, startNotice: EXPIRY }));
+  const notes = all('.meldung');
+  expect(notes).toHaveLength(1);
+  expect(notes[0].textContent).toContain(EXPIRY);
+  expect(notes[0].getAttribute('role')).toBe('status'); // ein Hinweis, kein Fehler
+  await act(() => (notes[0].querySelector('button') as HTMLElement).click());
+  expect(all('.meldung')).toHaveLength(0);
+  // Blättern ändert die Seite, nicht den Start: Der Hinweis kommt nicht wieder
+  await mount(h(TopBar, { route: route('#/woche/2026-W44'), engine, startNotice: EXPIRY }));
+  await mount(h(TopBar, { route: route('#/einstellungen'), engine, startNotice: EXPIRY }));
+  expect(all('.meldung')).toHaveLength(0);
+});
+
+test('a new text for the start notice replaces the old one, and none takes it away, but not the other notes', async () => {
+  const engine = fakeEngine();
+  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine, startNotice: EXPIRY }));
+  await act(() => item('Index').click());
+  expect(all('.meldung').map((n) => n.textContent)).toEqual([expect.stringContaining(EXPIRY), expect.stringContaining('Index kommt mit Stufe C')]);
+  const next = 'Dein Zugang läuft am 12.11.2026 ab. Bitte rechtzeitig erneuern.';
+  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine, startNotice: next }));
+  expect(all('.meldung').map((n) => n.textContent)).toEqual([expect.stringContaining('Index kommt mit Stufe C'), expect.stringContaining(next)]);
+  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine, startNotice: null }));
+  expect(all('.meldung').map((n) => n.textContent)).toEqual([expect.stringContaining('Index kommt mit Stufe C')]);
+});
+
+test('without a start notice there is no note', async () => {
+  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
+  expect(all('.meldung')).toHaveLength(0);
+  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine(), startNotice: null }));
+  expect(all('.meldung')).toHaveLength(0);
+});
+
+test('a window that may not write shows no sync status of its own, but keeps the gear', async () => {
+  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine(), passive: true }));
+  expect(all('[data-testid="status"]')).toHaveLength(0);
+  expect(item('Einstellungen').getAttribute('href')).toBe('#/einstellungen');
+  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine(), passive: false }));
+  expect(all('[data-testid="status"]')).toHaveLength(1);
 });

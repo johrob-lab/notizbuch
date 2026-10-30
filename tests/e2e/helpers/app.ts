@@ -40,6 +40,12 @@ export type OpenOptions = {
   omit?: string[];
   /** Dateien, die das Repo mit Bytes ausliefert, die kein UTF-8 sind: Die App kann sie nicht lesen, und das ändert sich nie. */
   invalidUtf8?: string[];
+  /** Name des Repos im Mock und in den Einstellungen (`besitzer/name`). Ohne Angabe `muster/vault-test`. */
+  repo?: string;
+  /** Der gespeicherte Token. Ohne Angabe ein erfundener. */
+  token?: string;
+  /** Weitere Einstellungen, die gespeichert werden oder die Vorgaben ersetzen (zum Beispiel `tokenExpiry`). */
+  settings?: Record<string, unknown>;
 };
 
 export type Put = { path: string; text: string; message: string; sha: string | null };
@@ -47,10 +53,24 @@ export type Delete = { path: string; sha: string; message: string };
 
 /** Das Repo im Speicher. `puts` und `deletes` sind die Schreibzugriffe der App, in der Reihenfolge, in der sie ankamen. */
 export type RepoMock = {
+  /** Name des Repos, `besitzer/name`. */
+  name: string;
   puts: Put[];
   deletes: Delete[];
-  /** Anfragen, die der Mock nicht kennt. Sie bekommen den Status 501. */
+  /** Anfragen, die der Mock nicht kennt. Sie bekommen den Status 501. Auch Anfragen an ein Repo, das kein Mock der Seite ist. */
   unhandled: string[];
+  /** Alle Anfragen an dieses Repo als `METHOD /pfad`, in der Reihenfolge, in der sie ankamen. */
+  requests: string[];
+  /** Der Token jeder Anfrage in der Reihenfolge, in der sie ankam (aus dem Kopf `Authorization`). */
+  used: string[];
+  /** Die Token, die GitHub annimmt. `null`: jeder. Jeder andere bekommt auf jede Anfrage den Status 401, wie bei GitHub. */
+  tokens: string[] | null;
+  /** Ob der Token in diesem Repo schreiben darf (`permissions.push` in der Antwort auf die Frage nach dem Repo). */
+  canWrite: boolean;
+  /** Status der Antwort auf die Frage nach dem Repo, mit der die Einrichtung den Zugang prüft. Ohne Fehler 200. */
+  checkStatus: number;
+  /** Solange das ein Versprechen ist, antwortet GitHub auf die Frage nach dem Repo erst, wenn es erfüllt ist. */
+  checkGate: Promise<void> | null;
   /** Solange das `true` ist, scheitert jede Anfrage an GitHub wie ohne Netz. */
   offline: boolean;
   /** Solange das `true` ist, antwortet GitHub auf jede Anfrage nach einer Datei mit einem Serverfehler (500). */
@@ -84,6 +104,7 @@ function githubBase64(text: string): string {
 const NOT_UTF8 = Buffer.from([0x41, 0xff, 0xfe, 0x42]);
 
 function createRepo(
+  name: string,
   extra: Record<string, string>,
   omit: string[] = [],
   invalidUtf8: string[] = [],
@@ -115,7 +136,7 @@ function createRepo(
       body: JSON.stringify(body),
     });
 
-  const contentsPrefix = `/repos/${REPO}/contents/`;
+  const contentsPrefix = `/repos/${name}/contents/`;
 
   /** Die Einträge eines Ordners, so wie die Contents-API sie liefert (Name, Pfad, sha, Art). Leer, wenn es den Ordner nicht gibt. */
   const folderEntries = (folder: string) => {
@@ -137,11 +158,21 @@ function createRepo(
     return [...entries.values()];
   };
 
+  const requests: string[] = [];
+  const used: string[] = [];
+
   const mock: ReturnType<typeof createRepo> = {
+    name,
     files,
     puts,
     deletes,
     unhandled,
+    requests,
+    used,
+    tokens: null,
+    canWrite: true,
+    checkStatus: 200,
+    checkGate: null,
     offline: false,
     failReads: false,
     failWrites: false,
@@ -158,6 +189,19 @@ function createRepo(
         unhandled.push(`${method} ${url.pathname}`);
         return json(route, 501, { message: `Der Mock kennt ${method} ${url.pathname} nicht.` });
       };
+
+      requests.push(`${method} ${url.pathname}`);
+      const token = (request.headers().authorization ?? '').replace(/^Bearer /, '');
+      used.push(token);
+      // Ein Token, den GitHub nicht kennt, scheitert überall mit 401: bei der Frage nach dem Repo wie bei jeder Datei.
+      if (mock.tokens !== null && !mock.tokens.includes(token)) return json(route, 401, { message: 'Bad credentials' });
+
+      // Die Frage nach dem Repo selbst: Damit prüft die Einrichtung, ob der Token ins Repo schreiben darf.
+      if (method === 'GET' && url.pathname === `/repos/${name}`) {
+        if (mock.checkGate) await mock.checkGate;
+        if (mock.checkStatus !== 200) return json(route, mock.checkStatus, { message: 'Server Error' });
+        return json(route, 200, { full_name: name, permissions: { admin: false, push: mock.canWrite, pull: true } });
+      }
 
       if (url.pathname.startsWith(contentsPrefix)) {
         const path = url.pathname
@@ -217,11 +261,11 @@ function createRepo(
         return fail();
       }
 
-      if (method === 'GET' && url.pathname === `/repos/${REPO}/branches/main`) {
+      if (method === 'GET' && url.pathname === `/repos/${name}/branches/main`) {
         return json(route, 200, { name: 'main', commit: { sha: head() } });
       }
 
-      const compare = new RegExp(`^/repos/${REPO}/compare/([0-9a-f]+)\\.\\.\\.([0-9a-f]+)$`).exec(url.pathname);
+      const compare = new RegExp(`^/repos/${name}/compare/([0-9a-f]+)\\.\\.\\.([0-9a-f]+)$`).exec(url.pathname);
       if (method === 'GET' && compare) {
         const from = commits.findIndex((c) => c.sha === compare[1]);
         const to = commits.findIndex((c) => c.sha === compare[2]);
@@ -230,7 +274,7 @@ function createRepo(
         return json(route, 200, { files: [...new Set(paths)].map((filename) => ({ filename })) });
       }
 
-      const blob = new RegExp(`^/repos/${REPO}/git/blobs/([0-9a-f]+)$`).exec(url.pathname);
+      const blob = new RegExp(`^/repos/${name}/git/blobs/([0-9a-f]+)$`).exec(url.pathname);
       if (method === 'GET' && blob) {
         const found = [...files.values()].find((t) => blobSha(t) === blob[1]);
         if (found === undefined) return json(route, 404, { message: 'Not Found' });
@@ -243,6 +287,67 @@ function createRepo(
   return mock;
 }
 
+type Mock = ReturnType<typeof createRepo>;
+
+/** Die Repos, die eine Seite per Mock kennt. Eine Anfrage an ein anderes Repo bekommt 404 und steht in `unhandled`. */
+const registries = new WeakMap<Page, Map<string, Mock>>();
+
+/** Hängt ein Repo an eine Seite. Alle Anfragen an GitHub laufen über eine einzige Weiche, die nach dem Namen des Repos wählt. */
+async function register(page: Page, mock: Mock): Promise<void> {
+  let known = registries.get(page);
+  if (!known) {
+    const repos = new Map<string, Mock>();
+    known = repos;
+    registries.set(page, repos);
+    await page.route('https://api.github.com/**', (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const wanted = /^\/repos\/([^/]+\/[^/]+)/.exec(url.pathname)?.[1];
+      const target = wanted === undefined ? undefined : repos.get(decodeURIComponent(wanted));
+      if (!target) {
+        // Ein Repo, das der Test nicht kennt: Die App hat mit einem Repo gesprochen, mit dem sie nicht sprechen sollte.
+        [...repos.values()][0]?.unhandled.push(`${request.method()} ${url.pathname}`);
+        return route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          headers: { 'access-control-allow-origin': '*' },
+          body: JSON.stringify({ message: 'Not Found' }),
+        });
+      }
+      return target.offline ? route.abort('internetdisconnected') : target.handle(route);
+    });
+  }
+  known.set(mock.name, mock);
+}
+
+/** Ein weiteres Repo auf derselben Seite, zum Beispiel das, zu dem die Einstellungen wechseln. */
+export async function addRepo(page: Page, name: string, o: Pick<OpenOptions, 'files' | 'omit' | 'invalidUtf8'> = {}): Promise<RepoMock> {
+  const repo = createRepo(name, o.files ?? {}, o.omit, o.invalidUtf8);
+  await register(page, repo);
+  return repo;
+}
+
+/** Alle Repos der einen Seite antworten auch auf der anderen, zum Beispiel in einem zweiten Fenster desselben Browsers. */
+export async function shareRepos(from: Page, to: Page): Promise<void> {
+  for (const mock of registries.get(from)?.values() ?? []) await register(to, mock);
+}
+
+/**
+ * Öffnet die App auf einem Gerät, das noch nicht eingerichtet ist: ohne Einstellungen, mit leerer Datenbank. GitHub antwortet
+ * aus dem Repo im Speicher, das der Rückgabewert beschreibt (Standard `johrob-lab/2-gehirn-test`, eines der beiden zur Wahl).
+ */
+export async function openFresh(
+  page: Page,
+  o: { repo?: string; tokens?: string[] | null; canWrite?: boolean; hash?: string } = {},
+): Promise<RepoMock> {
+  const repo = createRepo(o.repo ?? 'johrob-lab/2-gehirn-test', {});
+  repo.tokens = o.tokens ?? null;
+  repo.canWrite = o.canWrite ?? true;
+  await register(page, repo);
+  await page.goto(`/notizbuch/${o.hash ?? ''}`);
+  return repo;
+}
+
 /**
  * Spielt die Einstellungen in die IndexedDB des Geräts, bevor die App startet, und öffnet dann `hash` (zum Beispiel
  * `#/tag/2026-10-29`). Dafür gibt es keinen Testcode in der App: Die Seite steht zuerst auf einer Datei des
@@ -250,18 +355,19 @@ function createRepo(
  * GitHub antwortet aus dem Repo im Speicher, das der Rückgabewert beschreibt.
  */
 export async function openSeeded(page: Page, hash: string, o: OpenOptions = {}): Promise<RepoMock> {
-  const repo = createRepo(o.files ?? {}, o.omit, o.invalidUtf8);
+  const repo = createRepo(o.repo ?? REPO, o.files ?? {}, o.omit, o.invalidUtf8);
   repo.offline = o.offline ?? false;
   repo.failReads = o.failReads ?? false;
   repo.failWrites = o.failWrites ?? false;
-  await page.route('https://api.github.com/**', (route) => (repo.offline ? route.abort('internetdisconnected') : repo.handle(route)));
+  await register(page, repo);
 
   const settings = {
-    token: TOKEN,
-    repo: REPO,
+    token: o.token ?? TOKEN,
+    repo: o.repo ?? REPO,
     device: o.device ?? 'iPad',
     smoothing: 'mittel',
     prediction: true,
+    ...o.settings,
   };
   await page.goto(STATIC_URL);
   await page.evaluate(
@@ -331,6 +437,40 @@ function idbRead(page: Page, store: 'files' | 'outbox' | 'settings' | 'meta', ke
 export async function queued(page: Page): Promise<Record<string, string>> {
   const entries = ((await idbRead(page, 'outbox')) ?? []) as { path: string; text: string }[];
   return Object.fromEntries(entries.map((e) => [e.path, e.text]));
+}
+
+/** Die Pfade der Dateien, die dieses Gerät lokal hält (Kopien von GitHub und eigene, noch nicht hochgeladene). */
+export async function localFiles(page: Page): Promise<string[]> {
+  const entries = ((await idbRead(page, 'files')) ?? []) as { path: string }[];
+  return entries.map((e) => e.path).sort();
+}
+
+/**
+ * Stellt eine Änderung in die Warteschlange der App, wie es ein anderes Fenster oder ein später Abschluss einer Seite täte.
+ * Schreibt direkt in die IndexedDB (nur für Tests); die Datei gibt es auf GitHub noch nicht.
+ */
+export async function queueChange(page: Page, path: string, text: string): Promise<void> {
+  await page.evaluate(
+    (entry) =>
+      new Promise<void>((resolve, reject) => {
+        const open = indexedDB.open('notizbuch');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const tx = db.transaction('outbox', 'readwrite');
+          tx.objectStore('outbox').put({ ...entry, kind: 'md', baseSha: null, baseText: null, queuedAt: Date.now() });
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+          tx.onerror = () => {
+            db.close();
+            reject(tx.error);
+          };
+        };
+      }),
+    { path, text },
+  );
 }
 
 /** Die gespeicherten Einstellungen dieses Geräts. */

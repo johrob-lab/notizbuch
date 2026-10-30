@@ -99,6 +99,8 @@ type Props = {
 
 export function BriefingCard({ engine, day, rect }: Props) {
   const path = dailyNotePath(day);
+  // Das zweite Fenster eines Geräts liest die Notiz nur: Kästchen gesperrt, keine Stifte, kein Feld zum Ergänzen.
+  const locked = engine.readOnly;
   const [state, setState] = useState<State>(START);
   // Der Zustand auch außerhalb des Zeichnens: Ein Vorgang, der auf die Platte wartet, liest und ändert ihn danach.
   const current = useRef(state);
@@ -228,7 +230,7 @@ export function BriefingCard({ engine, day, rect }: Props) {
 
   const onToggle = (line: number, source: string) => {
     const now = current.current;
-    if (now.phase !== 'bereit') {
+    if (now.phase !== 'bereit' || locked) {
       update({}); // das Kästchen hat sich unter dem Finger gedreht: neu zeichnen, damit es wieder zeigt, was in der Notiz steht
       return;
     }
@@ -243,7 +245,7 @@ export function BriefingCard({ engine, day, rect }: Props) {
 
   const onEdit = (line: number, source: string) => {
     const now = current.current;
-    if (now.phase !== 'bereit' || now.editing) return;
+    if (locked || now.phase !== 'bereit' || now.editing) return;
     draft.current = visibleText(source);
     update({ editing: { line, source, saving: false }, notice: null });
   };
@@ -257,7 +259,7 @@ export function BriefingCard({ engine, day, rect }: Props) {
   const onSave = (text: string) => {
     const now = current.current;
     const editing = now.editing;
-    if (!editing || editing.saving || now.phase !== 'bereit') return;
+    if (locked || !editing || editing.saving || now.phase !== 'bereit') return;
     // Ohne sichtbaren Text bliebe von der Zeile nichts: Gelöscht wird hier nie, das Feld bleibt offen.
     if (text.replace(/%%/g, '').trim() === '') return;
     // Unverändert: Es gibt nichts zu schreiben, und die Zeile bliebe nicht einmal Byte für Byte gleich (Marker wandern ans Ende).
@@ -278,7 +280,7 @@ export function BriefingCard({ engine, day, rect }: Props) {
   /** Ergänzt die Notiz. `true`, wenn der Eintrag in der Notiz steht. */
   const onAdd = async (wanted: string, asTask: boolean): Promise<boolean> => {
     const now = current.current;
-    if (now.phase !== 'bereit' || now.pending > 0) return false;
+    if (locked || now.phase !== 'bereit' || now.pending > 0) return false;
     // Ohne sichtbaren Text gibt es nichts zu ergänzen, und es entsteht auch keine Notiz.
     if (wanted.replace(/%%/g, '').trim() === '') return false;
     const outcome = await act(
@@ -329,7 +331,7 @@ export function BriefingCard({ engine, day, rect }: Props) {
   // dazu (es steht im Feld selbst): Sonst würde bei jedem Zeichen die ganze Notiz neu zerlegt.
   const editing = state.editing;
   const noteEditing = useMemo(() => (editing ? { line: editing.line, saving: editing.saving } : null), [editing?.line, editing?.saving]);
-  const context = useMemo<NoteContext>(() => ({ lines, editing: noteEditing, draft, ...handlers }), [lines, noteEditing, handlers]);
+  const context = useMemo<NoteContext>(() => ({ lines, editing: noteEditing, draft, readOnly: locked, ...handlers }), [lines, noteEditing, locked, handlers]);
   const intro = useMemo(() => (html.intro === '' ? null : noteToVNodes(html.intro, context)), [html.intro, context]);
   const bodies = useMemo(() => html.parts.map((part) => (part === '' ? null : noteToVNodes(part, context))), [html.parts, context]);
 
@@ -383,7 +385,7 @@ export function BriefingCard({ engine, day, rect }: Props) {
           </button>
         </div>
       )}
-      <AddForm ready={ready} busy={state.pending > 0} onAdd={onAdd} />
+      {!locked && <AddForm ready={ready} busy={state.pending > 0} onAdd={onAdd} />}
     </section>
   );
 }

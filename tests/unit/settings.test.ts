@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { forceCloseDatabase, IDBFactory } from 'fake-indexeddb';
 import { unwrap } from 'idb';
 import { afterEach, beforeEach, expect, test } from 'vitest';
-import { loadSettings, saveSettings, type Settings } from '../../src/lib/settings';
+import { loadSettings, saveSettings, updateSettings, type Settings } from '../../src/lib/settings';
 import { openStore, type Store } from '../../src/sync/store';
 
 // Alles hier ist erfunden, auch der Token.
@@ -87,4 +87,50 @@ test('settings still load after the browser terminated the connection', async ()
   await saveSettings(store, settings);
   await store.run(async (db) => forceCloseDatabase(unwrap(db) as never));
   expect(await loadSettings(store)).toEqual(settings);
+});
+
+// ---------- Einstellungen ändern ----------
+
+test('an update changes what the callback changes and keeps the rest', async () => {
+  await saveSettings(store, settings);
+  const saved = await updateSettings(store, (now) => ({ ...now, smoothing: 'stark', prediction: false }));
+  expect(saved).toEqual({ ...settings, smoothing: 'stark', prediction: false });
+  expect(await loadSettings(store)).toEqual(saved);
+  // Auch das, was die Einstellungsseite nicht kennt, bleibt: Ort des Schnellwechsels und Ablaufdatum
+  expect(saved?.quickSwitchPos).toEqual([40, 120]);
+  expect(saved?.tokenExpiry).toBe('2027-10-29');
+});
+
+test('an update of a device that is not set up writes nothing', async () => {
+  let called = false;
+  const saved = await updateSettings(store, (now) => {
+    called = true;
+    return now;
+  });
+  expect(saved).toBeNull();
+  expect(called).toBe(false);
+  expect(await loadSettings(store)).toBeNull();
+});
+
+test('two updates at once both apply', async () => {
+  await saveSettings(store, settings);
+  const [a, b, c] = await Promise.all([
+    updateSettings(store, (now) => ({ ...now, smoothing: 'leicht' })),
+    updateSettings(store, (now) => ({ ...now, prediction: false })),
+    updateSettings(store, (now) => ({ ...now, device: 'Firmen-PC' })),
+  ]);
+  expect(a).not.toBeNull();
+  expect(b).not.toBeNull();
+  expect(c).not.toBeNull();
+  expect(await loadSettings(store)).toEqual({ ...settings, smoothing: 'leicht', prediction: false, device: 'Firmen-PC' });
+});
+
+test('an update still saves after the browser closed the connection in the background', async () => {
+  await saveSettings(store, settings);
+  await store.run(async (db) => db.close());
+  const saved = await updateSettings(store, (now) => ({ ...now, smoothing: 'aus' }));
+  expect(saved?.smoothing).toBe('aus');
+  const again = await openStore();
+  expect((await loadSettings(again))?.smoothing).toBe('aus');
+  again.close();
 });

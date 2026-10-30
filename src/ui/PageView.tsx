@@ -95,7 +95,10 @@ function placeCards(layer: HTMLElement | null, view: View): void {
 }
 
 export function PageView(p: Props) {
-  const { engine, layout, path, readOnly, sigma, prediction, kopf, overlay } = p;
+  const { engine, layout, path, sigma, prediction, kopf, overlay } = p;
+  // Das zweite Fenster eines Geräts (die Engine liest nur) schreibt nichts, auch keine Kopfdaten.
+  const locked = engine.readOnly;
+  const readOnly = p.readOnly || locked;
   const stage = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
@@ -167,7 +170,7 @@ export function PageView(p: Props) {
       completePage: head?.complete,
       layoutFor: head?.layoutFor,
       // Am Firmen-PC lässt sich der Kopf tippen, auch wo nicht geschrieben wird.
-      headerWritable: head !== undefined,
+      headerWritable: head !== undefined && !locked,
       surface: {
         getPage: () => view.getPage(),
         setPage: (page) => view.setPage(page, layout.fields, shownFor(page.meta)),
@@ -194,7 +197,7 @@ export function PageView(p: Props) {
       session.close();
       view.destroy();
     };
-  }, [engine, layout, path, days, today, readOnly, sigma, prediction, palm]);
+  }, [engine, layout, path, days, today, readOnly, locked, sigma, prediction, palm]);
 
   // Die Karten liegen über der Fläche und fangen Berührungen und Rad ab, die auf ihnen beginnen. `watchCards` gibt der Seite, was
   // die Karte nicht selbst braucht: Finger, die ziehen oder zoomen, und das Rad. Auch das Tor gegen Handballen gilt auf den Karten.

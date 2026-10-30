@@ -58,15 +58,17 @@ type FormProps = {
   label: string;
   /** Am Firmen-PC lässt sich der Kopf tippen, aber keine Seite anlegen oder löschen. */
   readOnly: boolean;
+  /** Das zweite Fenster eines Geräts: Nichts lässt sich ändern, auch der Kopf nicht. */
+  locked: boolean;
   problem: string;
   onAdd(): void;
   onDelete(): void;
 };
 
-function Form({ tools, projects, label, readOnly, problem, onAdd, onDelete }: FormProps) {
+function Form({ tools, projects, label, readOnly, locked, problem, onAdd, onDelete }: FormProps) {
   const { meta } = tools;
   // Solange die Seite nicht gelesen ist, lässt sich nichts ändern: Sonst entstünde neben einer Seite, die man noch nicht sieht, eine zweite.
-  const ready = tools.phase === 'bereit';
+  const ready = tools.phase === 'bereit' && !locked;
   const listed = projects ?? [];
   const options = meta.projekt && !listed.includes(meta.projekt) ? [...listed, meta.projekt] : listed;
   // Ein Datum oder eine Zeit, die keine gültige Angabe ist (geleert, halb getippt), wird nicht gespeichert. Beim Verlassen
@@ -151,7 +153,10 @@ function Form({ tools, projects, label, readOnly, problem, onAdd, onDelete }: Fo
 }
 
 export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }: Props) {
-  const { engine, readOnly } = rest;
+  const { engine } = rest;
+  // Im zweiten Fenster eines Geräts (die Engine liest nur) gilt dasselbe wie am Firmen-PC, und der Kopf lässt sich auch nicht tippen.
+  const locked = engine.readOnly;
+  const readOnly = rest.readOnly || locked;
   // Der Vault schreibt Umlaute als ein Zeichen: Auch eine Adresse mit Buchstabe plus Trema führt zu derselben Datei.
   const base = address.normalize('NFC');
   const path = besprechungPagePath(base, n);
@@ -299,6 +304,7 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
         projects={projects}
         label={pageLabel(pages, n, complete)}
         readOnly={readOnly}
+        locked={locked}
         problem={problem}
         onAdd={() => void addPage(tools)}
         onDelete={() => void deletePage(tools)}
@@ -306,5 +312,5 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
     ),
   };
 
-  return <PageView key={attempt} {...rest} layout={layout} path={path} kopf={head} />;
+  return <PageView key={attempt} {...rest} readOnly={readOnly} layout={layout} path={path} kopf={head} />;
 }
