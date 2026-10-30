@@ -194,7 +194,8 @@ export class PageSession {
   /**
    * Der Ausgangspunkt für `mergePages`, gelesen wie die Seite, die gezeigt wird: Was `completePage` ergänzt (Kopfdaten, die
    * eine ältere Datei nicht hat), ist keine Änderung dieser Sitzung und darf nicht gegen die Änderung eines anderen Geräts
-   * gewinnen. Ohne Ausgangspunkt, oder wenn er sich nicht lesen lässt, gibt es keinen: Dann werden nur die Striche vereint.
+   * gewinnen. Ohne Ausgangspunkt, oder wenn er sich nicht lesen lässt, gibt es keinen: Dann werden die Striche vereint, und
+   * bei den Kopfdaten gilt, was der gelesene Text angibt.
    */
   #baseText(base: string | null): string | undefined {
     if (base === null) return undefined;

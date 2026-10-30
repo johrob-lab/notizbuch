@@ -247,8 +247,8 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
   // auf diesem Gerät gibt, wird nie überschrieben.
   // Bekannte Grenze: Ob eine Nummer frei ist, sagt `engine.read`. Ohne Netz kennt sie nur Seiten, die dieses Gerät hat, eine
   // Seite, die es nur auf GitHub gibt, gilt dann als frei. Die neue Seite trägt deren Nummer, und beim Abgleich trifft sie
-  // auf die vorhandene Datei: `mergePages` führt beide zusammen. Es geht kein Strich verloren, nur die Kopfdaten kommen
-  // dann von der neuen Seite, weil es keine gemeinsame Fassung gibt.
+  // auf die vorhandene Datei: `mergePages` führt beide zusammen. Es geht kein Strich verloren, und weil es keine gemeinsame
+  // Fassung gibt, gelten die Kopfdaten der vorhandenen Datei, wo sie etwas angeben.
   const addPage = async (tools: KopfTools) => {
     if (busy.current) return;
     busy.current = true;

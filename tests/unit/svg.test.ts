@@ -438,7 +438,7 @@ const BACKGROUND =
   '<rect id="papier" x="0" y="0" width="10" height="10"/>' +
   '<text x="5" y="5">Ergänzungen &amp; mehr &lt;2027&gt;</text>';
 
-test('mergePages keeps header, background and groups of ours and appends the strokes only theirs has', () => {
+test('mergePages keeps background and groups of ours and appends the strokes only theirs has', () => {
   const ours = serializePage(
     tagPage([strokeAt(300, 400, 'rot', 'o1'), strokeAt(900, 400, 'blau', 'o2')], { thema: 'meins' }),
     FIELDS,
@@ -465,7 +465,8 @@ test('mergePages keeps header, background and groups of ours and appends the str
     { feld: 'frei', datum: DAY, ids: ['t4'] },
   ]);
   const page = parsePage(merged);
-  expect(page).toMatchObject({ kind: 'tag', key: DAY, meta: { thema: 'meins' } });
+  // Ohne gemeinsamen Ausgangspunkt gelten die Kopfdaten von theirs, wo es welche hat.
+  expect(page).toMatchObject({ kind: 'tag', key: DAY, meta: { thema: 'deren' } });
   expect(page.strokes.find((s) => s.id === 'o1')?.color).toBe('rot');
   expect(merged).toContain(`<g data-hintergrund="1">${BACKGROUND}</g>`);
   expect(merged).not.toContain('fremd');
@@ -634,13 +635,32 @@ test('with a base, nothing changes on either side: the result is the page', () =
   expect(mergePages(page, page, page)).toBe(page);
 });
 
-test('without a base the merge is the plain union: the header is ours, an erased stroke comes back', () => {
-  const ours = meetingSvg({ projekt: '' }, 'a');
-  const theirs = meetingSvg({ projekt: 'Beispielprojekt A' }, 'a', 'b');
+test('without a base the strokes are united, an erased stroke comes back', () => {
+  const ours = meetingSvg({}, 'a', 'o1');
+  const theirs = meetingSvg({}, 'a', 'b');
   const merged = mergePages(ours, theirs);
-  expect(parsePage(merged).meta.projekt).toBe('');
-  expect(strokeIds(merged)).toEqual(['a', 'b']);
+  expect(strokeIds(merged)).toEqual(['a', 'b', 'o1']);
   expect(mergePages(ours, theirs, undefined)).toBe(merged);
+});
+
+test('without a base the header comes from theirs wherever theirs has a value, ours only fills what theirs lacks or leaves empty', () => {
+  // Am PC wurde die Besprechung aus dem Termin angelegt und das Projekt gewählt. Das iPad hat dieselbe Besprechung ohne Netz
+  // aus demselben Termin neu angelegt: Es kennt die Datei nicht, sein Projekt ist leer, den Ort hat es dazugeschrieben.
+  const ours = meetingSvg({ projekt: '', ort: 'Raum 3', farbe: 'rot' }, 'o1');
+  const theirs = meetingSvg({ projekt: 'Beispielprojekt A', ort: '', zeit: '09:30', raum: 'B' }, 't1');
+  const page = parsePage(mergePages(ours, theirs));
+  expect(page.meta).toEqual({
+    thema: 'Abstimmung Beispiel 2027',
+    datum: DAY,
+    zeit: '09:30', // beide haben einen Wert: der von theirs
+    ort: 'Raum 3', // theirs leer: ours füllt
+    projekt: 'Beispielprojekt A', // ours leer: theirs
+    seitennr: '1',
+    farbe: 'rot', // nur ours hat die Angabe
+    raum: 'B', // nur theirs hat die Angabe
+  });
+  expect(Object.keys(page.meta)).toEqual([...HEADER_ORDER, 'farbe', 'raum']); // die Reihenfolge von ours, dann was nur theirs hat
+  expect(page.strokes.map((s) => s.id).sort()).toEqual(['o1', 't1']);
 });
 
 test('a base that is not a readable page is no base: the merge is the plain union', () => {

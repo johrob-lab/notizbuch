@@ -461,12 +461,13 @@ test('svg: a stroke erased elsewhere stays erased when strokes were drawn here',
   expect(idsOf(fake.files[M].text)).toEqual(['a', 'o']);
 });
 
-test('svg: a page that was created on both devices has no common version: the strokes of both and the header of this device', async () => {
+test('svg: a page that was created on both devices has no common version: the strokes of both and the header set on the other device', async () => {
   fake.files[M] = { text: meetingPage({ projekt: 'Beispielprojekt A' }, 'r'), sha: 's2' };
-  await e.write(M, meetingPage({}, 'o'), 'svg'); // hier nie gelesen: keine gemeinsame Fassung
+  await e.write(M, meetingPage({ ort: 'Raum 3' }, 'o'), 'svg'); // hier nie gelesen: keine gemeinsame Fassung, Projekt leer
   await e.flush();
   expect(idsOf(fake.files[M].text)).toEqual(['o', 'r']);
-  expect(parsePage(fake.files[M].text).meta.projekt).toBe('');
+  expect(parsePage(fake.files[M].text).meta).toMatchObject({ projekt: 'Beispielprojekt A', ort: 'Raum 3' });
+  expect(h.conflicts).toEqual([]);
 });
 
 // ---------- Weitergeschrieben, während zusammengeführt hochgeladen wird ----------

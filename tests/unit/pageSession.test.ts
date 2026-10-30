@@ -1172,7 +1172,7 @@ test('a header that the session completed is no change against the page it read:
   expect(ids(surface.page)).toEqual(['a', 'mine']);
 });
 
-test('a page that could not be read before has no base: strokes of both come together and the header stays ours', async () => {
+test('a page that could not be read before has no base: strokes of both come together and the header of the page that was read wins', async () => {
   const engine = fakeEngine(null); // die Datei gibt es noch nicht
   const surface = fakeSurface();
   const { session } = open(engine, surface);
@@ -1189,7 +1189,8 @@ test('a page that could not be read before has no base: strokes of both come tog
   await reading;
 
   expect(ids(surface.page)).toEqual(['r', 'mine']);
-  expect(surface.page.meta).toEqual({ thema: 'Meins' });
+  // Ohne Ausgangspunkt kannte diese Sitzung die Datei nicht: Die Kopfdaten der Datei gelten, wo sie etwas angeben.
+  expect(surface.page.meta).toEqual({ thema: 'Deren' });
 });
 
 // Eine Seite, die sich zwischendurch nicht lesen ließ, hat keinen Ausgangspunkt mehr: Was inzwischen mit ihr geschah, weiß

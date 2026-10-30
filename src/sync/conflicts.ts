@@ -7,7 +7,8 @@ import { mergeText } from '../lib/merge';
 /**
  * Führt unsere Fassung mit der fremden zusammen. `baseText` ist der gemeinsame Ausgangspunkt, nötig, um zu sehen, wer was
  * geändert hat: bei Text, welche Zeilen, bei einer Seite, welche Kopfdaten und welche Striche (ein radierter Strich kommt
- * nicht zurück). Ohne ihn werden bei einer Seite nur die Striche vereint. Das Ergebnis ist der zusammengeführte Text,
+ * nicht zurück). Ohne ihn werden bei einer Seite die Striche vereint, und bei den Kopfdaten gilt, was `theirs` angibt
+ * (siehe `mergePages`). Das Ergebnis ist der zusammengeführte Text,
  * oder `null`, wenn sich beide Fassungen nicht sicher vereinen lassen: Text, der an derselben Stelle verschieden
  * geändert wurde, oder eine Seite, die nicht lesbar ist.
  */

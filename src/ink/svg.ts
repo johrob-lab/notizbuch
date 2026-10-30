@@ -294,23 +294,40 @@ function mergeMeta(ours: Record<string, string>, theirs: Record<string, string>,
 }
 
 /**
+ * Die Kopfdaten ohne gemeinsamen Ausgangspunkt, Schlüssel für Schlüssel: Was `theirs` angibt (nicht leer), gilt, `ours`
+ * füllt nur, was `theirs` nicht hat oder leer lässt. Ohne Ausgangspunkt hat dieses Gerät die Datei nie gesehen, ihre
+ * Geschichte steht in `theirs`: Am PC wurde zum Beispiel das Projekt gewählt, während das iPad ohne Netz dieselbe Seite
+ * neu und mit leerem Projekt anlegte. Die Reihenfolge ist die von `ours`, Angaben, die nur `theirs` hat, folgen.
+ */
+function preferTheirs(ours: Record<string, string>, theirs: Record<string, string>): Record<string, string> {
+  const merged: Record<string, string> = {};
+  for (const key of new Set([...Object.keys(ours), ...Object.keys(theirs)])) {
+    const value = theirs[key] ? theirs[key] : (ours[key] ?? theirs[key]);
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged;
+}
+
+/**
  * Führt zwei Fassungen derselben Seite zusammen: alle Striche beider, ein Strich mit gleicher `id` nur einmal, und
- * zwar der von `oursSvg`. Der Hintergrund kommt von `oursSvg`, die Kopfdaten auch, solange es keine `baseSvg` gibt (siehe
- * unten). Ein Strich bleibt in der Feldgruppe (`data-feld` und `data-datum`), in der er in seiner Datei stand. Zuerst
- * stehen die Gruppen von `oursSvg` mit ihren Strichen, dahinter die Striche von `theirsSvg`, die `oursSvg` nicht hat,
- * jeweils am Ende ihrer Gruppe in ihrer Reihenfolge. Gruppen, die nur `theirsSvg` hat, kommen hinter die von `oursSvg`,
- * die Gruppen „frei“ zuletzt. Das Ergebnis ist eine gültige Seite, und noch einmal mit derselben Fassung zusammengeführt
- * bleibt es gleich.
+ * zwar der von `oursSvg`. Seitentyp, Schlüssel und Hintergrund kommen von `oursSvg`, die Kopfdaten Schlüssel für Schlüssel
+ * aus beiden (siehe unten). Ein Strich bleibt in der Feldgruppe (`data-feld` und `data-datum`), in der er in seiner Datei
+ * stand. Zuerst stehen die Gruppen von `oursSvg` mit ihren Strichen, dahinter die Striche von `theirsSvg`, die `oursSvg`
+ * nicht hat, jeweils am Ende ihrer Gruppe in ihrer Reihenfolge. Gruppen, die nur `theirsSvg` hat, kommen hinter die von
+ * `oursSvg`, die Gruppen „frei“ zuletzt. Das Ergebnis ist eine gültige Seite, und noch einmal mit derselben Fassung
+ * zusammengeführt bleibt es gleich.
  *
  * Mit `baseSvg`, der Fassung, aus der beide entstanden sind, wird dreiseitig zusammengeführt, damit keine Änderung der
  * einen Seite von der anderen zurückgenommen wird, die davon nichts weiß:
  * - Kopfdaten Schlüssel für Schlüssel: Was `oursSvg` gegenüber `baseSvg` geändert hat, gilt, alles andere kommt von
  *   `theirsSvg`. Haben beide denselben Schlüssel verschieden geändert, gewinnt `oursSvg`. Angaben, die nur eine Seite hat,
- *   bleiben. Seitentyp, Schlüssel, Hintergrund und Gruppen kommen weiter von `oursSvg`.
+ *   bleiben.
  * - Striche sind unveränderlich, ein Strich ist da oder nicht. Steht einer in `baseSvg` und fehlt in einer der beiden
  *   Fassungen, wurde er dort radiert und bleibt auch im Ergebnis weg. Jeder Strich, der in `baseSvg` nicht stand, bleibt.
- * Ohne `baseSvg`, oder wenn sie sich nicht lesen lässt, werden nur die Striche vereinigt, und die Kopfdaten kommen ganz von
- * `oursSvg`: Wer sie geändert hat, ließe sich nur raten.
+ * Ohne `baseSvg`, oder wenn sie sich nicht lesen lässt, werden die Striche vereinigt (was nur eine Seite radiert hat, kommt
+ * zurück: Ob radiert wurde, ließe sich nur raten). Bei den Kopfdaten gilt dann, was `theirsSvg` angibt, und `oursSvg` füllt
+ * nur, was dort fehlt oder leer ist: Ohne Ausgangspunkt kannte dieses Gerät die Datei nicht, ihre Geschichte steht in
+ * `theirsSvg`.
  * Wirft wie `parsePage`, wenn eine der beiden Dateien keine lesbare Seite ist.
  */
 export function mergePages(oursSvg: string, theirsSvg: string, baseSvg?: string): string {
@@ -342,6 +359,6 @@ export function mergePages(oursSvg: string, theirsSvg: string, baseSvg?: string)
   }
   const ordered = [...groups.filter((g) => g.feld !== FREI), ...groups.filter((g) => g.feld === FREI)];
   const background = ours.background ? Array.from(ours.background.childNodes, (child) => markup(child)).join('') : '';
-  const head = base ? { ...ours.head, meta: mergeMeta(ours.head.meta, theirs.head.meta, base.head.meta) } : ours.head;
-  return writeSvg(head, background, ordered);
+  const meta = base ? mergeMeta(ours.head.meta, theirs.head.meta, base.head.meta) : preferTheirs(ours.head.meta, theirs.head.meta);
+  return writeSvg({ ...ours.head, meta }, background, ordered);
 }
