@@ -43,7 +43,7 @@ function Platzhalter({ text }: { text: string }) {
 function Seite({ route, listDir, onSteps, ...page }: { route: Route; listDir: ListDir; onSteps(steps: Steps | null): void } & PageProps) {
   switch (route.view) {
     case 'tag':
-      return <TagPage day={route.key} {...page} />;
+      return <TagPage day={route.key} listDir={listDir} {...page} />;
     case 'woche':
       return <WochePage week={route.key} {...page} />;
     case 'monat':

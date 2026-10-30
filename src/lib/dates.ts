@@ -30,6 +30,23 @@ function weekdayIndex(d: Day): number {
   return (new Date(utcMidnight(d)).getUTCDay() + 6) % 7;
 }
 
+const viennaHour = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Vienna',
+  hour: '2-digit',
+  hourCycle: 'h23',
+});
+
+/**
+ * Die nächste volle Stunde als `HH:00`, nach der Uhr in Wien: Um 12:20 ist es `13:00`, um 12:00 genau auch, um 23:30
+ * `00:00`. Gerechnet wird mit der Uhrzeit an der Wand und nicht mit Millisekunden, darum gibt es auch am Tag der
+ * Zeitumstellung eine Uhrzeit, die in der Zeit davor oder danach liegt (zum Beispiel `02:00` um 01:30 am 28.03.2027). Das
+ * ist nur ein Vorschlag für ein Eingabefeld.
+ */
+export function nextFullHour(now: Date = new Date()): string {
+  const hour = Number(viennaHour.formatToParts(now).find((part) => part.type === 'hour')?.value ?? '0');
+  return `${pad2((hour + 1) % 24)}:00`;
+}
+
 /** Heutiger Tag in Wiener Zeit, unabhängig von der Zeitzone des Geräts. */
 export function todayVienna(now: Date = new Date()): Day {
   // Die Teile einzeln lesen (formatToParts) statt format(): so hängt das Ergebnis nicht vom Datumsmuster ab.

@@ -9,7 +9,8 @@ import { holidaysAT } from '../lib/holidays';
 // Rechnung ohne DOM und ohne Uhr: Dieselbe Eingabe ergibt denselben Text. Was von heute abhängt, steht nur in
 // `todayMarks` und kommt nie in die Datei.
 
-type Rect = [x: number, y: number, w: number, h: number];
+/** Ein Rechteck auf der Seite: Ecke oben links, Breite, Höhe (Seiteneinheiten). */
+export type Rect = [x: number, y: number, w: number, h: number];
 
 export type Layout = {
   kind: PageKind;

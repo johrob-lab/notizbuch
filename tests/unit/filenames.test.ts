@@ -8,6 +8,7 @@ import {
   monatPagePath,
   sanitizeThema,
   tagPagePath,
+  TERMINE_PATH,
   wochePagePath,
 } from '../../src/lib/filenames';
 
@@ -78,4 +79,8 @@ test('conflictPath inserts the marker before the last extension only', () => {
   expect(conflictPath('05 Daily Notes/ohne Endung')).toBe('05 Daily Notes/ohne Endung (Konflikt)');
   // ein Punkt im Ordnernamen ist keine Dateiendung
   expect(conflictPath('04 Ressourcen/Version 1.2/Notiz')).toBe('04 Ressourcen/Version 1.2/Notiz (Konflikt)');
+});
+
+test('the appointments file lives in the read only calendar folder', () => {
+  expect(TERMINE_PATH).toBe('04 Ressourcen/Kalender/Termine.md');
 });

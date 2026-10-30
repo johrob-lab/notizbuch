@@ -278,9 +278,10 @@ test('two-finger tap undoes', async ({ page }) => {
 test('eraser removes the stroke', async ({ page }) => {
   await openSeeded(page, DAY);
   await pen(page).stroke(LINE);
+  // Unter den Karten (bis y = 630) schreibt der Stift nicht: Der zweite Strich liegt im Feld darunter.
   await pen(page).stroke([
-    [200, 600],
-    [320, 600],
+    [200, 700],
+    [320, 700],
   ]);
   await expect.poll(() => strokeCount(page)).toBe(2);
   await button(page, 'Radierer').click();
@@ -291,24 +292,24 @@ test('eraser removes the stroke', async ({ page }) => {
     [260, 1060],
   ]);
   expect(await strokeCount(page)).toBe(1);
-  expect((await currentStrokes(page))[0].pts[0].y).toBeCloseTo(600, 0);
+  expect((await currentStrokes(page))[0].pts[0].y).toBeCloseTo(700, 0);
   // Das Bild folgt im nächsten Bildwechsel.
   await expect.poll(() => inkNear(page, [200, 1000], 4)).toBe(0);
-  expect(await inkNear(page, [200, 600], 4)).toBeGreaterThan(0);
+  expect(await inkNear(page, [200, 700], 4)).toBeGreaterThan(0);
 });
 
 test('undo brings back erased strokes in their place', async ({ page }) => {
   await openSeeded(page, DAY);
   await pen(page).stroke([
-    [200, 600],
-    [320, 600],
+    [200, 700],
+    [320, 700],
   ]);
   await pen(page).stroke(LINE);
   const [first, second] = await strokeIds(page);
   await button(page, 'Radierer').click();
   await pen(page).stroke([
-    [260, 560],
-    [260, 640],
+    [260, 660],
+    [260, 740],
   ]);
   expect(await strokeIds(page)).toEqual([second]);
 

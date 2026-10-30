@@ -30,6 +30,17 @@ export type SurfaceOptions = {
    * er schreibt, und ein Handballen zählt nicht. Das gilt auch, wenn die Seite nur zum Ansehen offen ist.
    */
   onTap?: (at: { x: number; y: number }) => void;
+  /**
+   * Die Ansicht hat sich geändert (verschoben, gezoomt, andere Größe): Ein Ort der Seite liegt auf dem Bildschirm bei
+   * `x + Seitenort * s` (Punkte, von der oberen linken Ecke der Fläche aus). Wer etwas über die Seite legt, das mit ihr
+   * wandern soll (die Karten der Tagesseite), folgt ihr so. Wird beim ersten Zeichnen gerufen und danach nur bei Änderung.
+   */
+  onView?: (view: View) => void;
+  /**
+   * Rechtecke der Seite (x, y, Breite, Höhe in Seiteneinheiten), in denen der Stift nicht schreibt, zum Beispiel unter einer
+   * Karte. Ein Strich, der hineinläuft, endet am Rand, und einer, der darin beginnt, beginnt erst beim Verlassen. Radieren geht überall.
+   */
+  noInk?: readonly (readonly [x: number, y: number, w: number, h: number])[];
 };
 
 type Drawing = { id: number; builder: StrokeBuilder; box: Box; current: Stroke; hist: { x: number; y: number; t: number }[] };
@@ -95,6 +106,7 @@ export class InkSurface {
   private rect = { left: 0, top: 0 };
   private view: View = { s: 1, x: 0, y: 0 };
   private hasView = false;
+  private reportedView: View | null = null;
 
   // Verlauf
   private readonly history = new History();
@@ -308,6 +320,15 @@ export class InkSurface {
     this.rect = { left: r.left, top: r.top };
   }
 
+  /** Sagt `onView` die Ansicht, wenn sie sich seit der letzten Meldung geändert hat. */
+  private reportView(): void {
+    const { s, x, y } = this.view;
+    const last = this.reportedView;
+    if (last && last.s === s && last.x === x && last.y === y) return;
+    this.reportedView = { s, x, y };
+    this.opts.onView?.({ s, x, y });
+  }
+
   private changed(): void {
     this.opts.onChange(this.getPage());
   }
@@ -423,6 +444,7 @@ export class InkSurface {
   /** Die Grundebene ganz neu: Papier und alle Striche, die im Bild liegen. */
   private render(): void {
     if (this.destroyed || !this.hasView) return;
+    this.reportView();
     const { bctx, base, view, dpr } = this;
     bctx.setTransform(1, 0, 0, 1, 0, 0);
     bctx.clearRect(0, 0, base.width, base.height);
@@ -538,34 +560,59 @@ export class InkSurface {
       this.eraserCursor(pos);
       return;
     }
-    const builder = new StrokeBuilder({
+    const builder = this.newBuilder();
+    this.drawing = { id: e.pointerId, builder, box: emptyBox(), current: builder.stroke(), hist: [] };
+    this.addSample(e);
+    this.liveUpdate();
+  }
+
+  private newBuilder(): StrokeBuilder {
+    return new StrokeBuilder({
       color: this.color,
       widthMm: this.widthMm,
       sigma: this.opts.sigma,
       t: Date.now(),
       minDist: 0.6 / this.view.s, // auf dem Bildschirm immer gleich weit, egal wie weit hineingezoomt ist
     });
-    this.drawing = { id: e.pointerId, builder, box: emptyBox(), current: builder.stroke(), hist: [] };
-    this.addSample(e);
-    this.liveUpdate();
+  }
+
+  /** Liegt der Ort der Seite in einem Rechteck, in dem der Stift nicht schreibt? */
+  private inNoInk(p: Pt2): boolean {
+    return (this.opts.noInk ?? []).some(([x, y, w, h]) => p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h);
   }
 
   private addSample(ev: PointerEvent): void {
     const d = this.drawing!;
     const pos = this.local(ev);
+    const pt = this.toPage(pos.x, pos.y);
+    if (this.inNoInk(pt)) {
+      this.cutStroke();
+      return;
+    }
     d.hist.push({ x: pos.x, y: pos.y, t: ev.timeStamp });
     if (d.hist.length > 12) d.hist.shift();
-    const pt = this.toPage(pos.x, pos.y);
     if (d.builder.add(pt.x, pt.y, ev.pressure)) growBox(d.box, pt);
   }
 
-  /** Der Stift hebt ab. Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. */
-  private finishDraw(commit: boolean): void {
+  /**
+   * Der Stift kommt in ein Rechteck ohne Tinte: Der Strich bis hierher ist fertig, und der nächste beginnt, wo der Stift das
+   * Rechteck verlässt. Ohne den Schnitt zöge die Linie quer durch das Rechteck von dem Punkt davor zu dem Punkt danach.
+   */
+  private cutStroke(): void {
     const d = this.drawing;
-    this.drawing = null;
+    if (!d || !d.builder.stroke().pts.length) return;
+    this.commitStroke(d);
+    const builder = this.newBuilder();
+    d.builder = builder;
+    d.box = emptyBox();
+    d.current = builder.stroke();
+    d.hist = [];
     this.clearLive(true);
     this.clearPred();
-    if (!d || !commit) return;
+  }
+
+  /** Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. */
+  private commitStroke(d: Drawing): void {
     const s = d.builder.stroke();
     if (!s.pts.length) return;
     this.strokes.push(s);
@@ -573,6 +620,15 @@ export class InkSurface {
     this.drawStroke(this.bctx, s);
     this.history.push({ type: 'add', stroke: s });
     this.changed();
+  }
+
+  /** Der Stift hebt ab. */
+  private finishDraw(commit: boolean): void {
+    const d = this.drawing;
+    this.drawing = null;
+    this.clearLive(true);
+    this.clearPred();
+    if (d && commit) this.commitStroke(d);
   }
 
   // ---------- Radierer (ganze Striche) ----------

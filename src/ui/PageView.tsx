@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { GestureFilter } from '../ink/gestures';
+import { GestureFilter, type View } from '../ink/gestures';
 import { InkSurface } from '../ink/surface';
 import type { FieldBox, InkColor, Page, WidthName } from '../ink/types';
 import { todayVienna } from '../lib/dates';
@@ -69,6 +69,11 @@ type Props = PageProps & {
    * neueste, öffnet sich deswegen aber nicht neu.
    */
   kopf?: Kopf;
+  /**
+   * Bauteile, die über der Schreibfläche liegen und mit der Seite wandern und zoomen (die Karten der Tagesseite). Sie
+   * stehen in Seiteneinheiten, 1192 mal 1590 Punkte groß. Der Stift schreibt nicht in den Rechtecken der Karten (`Layout.cards`).
+   */
+  overlay?: ComponentChildren;
 };
 
 const UNREADABLE = 'Diese Seite lässt sich nicht lesen und wird nicht verändert.';
@@ -78,9 +83,33 @@ const NOT_LOADED = 'Diese Seite konnte nicht geladen werden. Neuer Versuch, soba
 type TestAccess = { currentPage(): Page; toClient(x: number, y: number): { x: number; y: number } };
 const testAccessHolder = (): { __notizbuch?: TestAccess } => window as unknown as { __notizbuch?: TestAccess };
 
+/**
+ * Legt die Ebene mit den Karten auf die Seite: Punkte der Seite werden mit demselben Maßstab und Versatz wie die Schreibfläche
+ * auf den Bildschirm gerechnet. Direkt am Element statt über den Zustand, denn das geschieht bei jedem Bild einer Geste.
+ */
+function placeCards(layer: HTMLElement | null, view: View): void {
+  if (!layer) return;
+  layer.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.s})`;
+  layer.dataset.bereit = ''; // erst jetzt sichtbar: vorher läge sie an der falschen Stelle
+}
+
+/** Kann etwas zwischen `from` und `stop` (der Rahmen der Karten) in dieser Richtung noch scrollen? Dann gehört das Rad ihm. */
+function scrollsFurther(from: EventTarget | null, stop: Element, deltaY: number): boolean {
+  if (deltaY === 0) return false;
+  for (let el = from instanceof Element ? from : null; el && el !== stop; el = el.parentElement) {
+    const { overflowY } = getComputedStyle(el);
+    if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
+      if (deltaY > 0 ? el.scrollTop + el.clientHeight < el.scrollHeight - 1 : el.scrollTop > 0) return true;
+    }
+  }
+  return false;
+}
+
 export function PageView(p: Props) {
-  const { engine, layout, path, readOnly, sigma, prediction, kopf } = p;
+  const { engine, layout, path, readOnly, sigma, prediction, kopf, overlay } = p;
   const host = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
+  const cards = useRef<HTMLDivElement>(null);
   const surface = useRef<InkSurface | null>(null);
   const sessionRef = useRef<PageSession | null>(null);
   const kopfRef = useRef(kopf);
@@ -126,6 +155,9 @@ export function PageView(p: Props) {
         const hit = tapTargetAt(days, x, y);
         if (hit) window.location.hash = routeHash({ view: 'tag', key: hit.day });
       },
+      // Die Karten über der Fläche liegen im Maßstab der Seite und wandern mit ihr. Der Stift schreibt nicht unter sie.
+      onView: (now) => placeCards(cards.current, now),
+      noInk: layout.cards.map((card) => card.rect),
     });
     const first = emptyPage();
     view.setPage(first, layout.fields, shownFor(first.meta));
@@ -173,6 +205,34 @@ export function PageView(p: Props) {
       view.destroy();
     };
   }, [engine, layout, path, days, today, readOnly, sigma, prediction, palm]);
+
+  // Ein Rad über einer Karte bedient die Seite wie über der Fläche: Strg (oder Cmd) mit Rad zoomt, sonst wandert die Seite. Ohne
+  // das zoomte der Browser die ganze Oberfläche. Nur wo die Karte selbst noch in diese Richtung scrollen kann, scrollt sie.
+  const hasCards = overlay !== undefined;
+  useEffect(() => {
+    const around = frame.current;
+    const surfaceHost = host.current;
+    if (!around || !surfaceHost) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey) && scrollsFurther(e.target, around, e.deltaY)) return;
+      e.preventDefault();
+      surfaceHost.dispatchEvent(
+        new WheelEvent('wheel', {
+          clientX: e.clientX,
+          clientY: e.clientY,
+          deltaX: e.deltaX,
+          deltaY: e.deltaY,
+          deltaMode: e.deltaMode,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+    around.addEventListener('wheel', onWheel, { passive: false });
+    return () => around.removeEventListener('wheel', onWheel);
+  }, [hasCards]);
 
   const chooseTool = (t: Tool) => {
     setTool(t);
@@ -235,6 +295,14 @@ export function PageView(p: Props) {
       {kopf && tools && <div class="kopf">{kopf.form(tools)}</div>}
       <div class="buehne">
         <div class="flaeche" data-testid="surface" ref={host} />
+        {/* Die Karten gehören nicht zur Schreibfläche: Sie liegen daneben und sind echte Bedienelemente (Kästchen, Knöpfe, Felder). */}
+        {overlay && (
+          <div class="karten-rahmen" ref={frame}>
+            <div class="karten" ref={cards}>
+              {overlay}
+            </div>
+          </div>
+        )}
         {/* Die Tageszahlen sind auf der Seite gezeichnet. Als Links sind sie auch mit der Tastatur und für Sprachausgabe da. */}
         {days.length > 0 && (
           <nav class="tage" aria-label="Tage dieser Seite">

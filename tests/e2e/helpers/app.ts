@@ -36,6 +36,8 @@ export type OpenOptions = {
   device?: Device;
   /** Dateien, die zusätzlich im Repo liegen (oder die Fassung aus dem Mini-Vault ersetzen). */
   files?: Record<string, string>;
+  /** Dateien des Mini-Vaults, die im Repo fehlen sollen (zum Beispiel `Termine.md`). */
+  omit?: string[];
 };
 
 export type Put = { path: string; text: string; message: string; sha: string | null };
@@ -74,12 +76,13 @@ function githubBase64(text: string): string {
   return Buffer.from(text, 'utf8').toString('base64').replace(/(.{60})/g, '$1\n');
 }
 
-function createRepo(extra: Record<string, string>): RepoMock & { files: Map<string, string>; handle(route: Route): Promise<void> } {
+function createRepo(extra: Record<string, string>, omit: string[] = []): RepoMock & { files: Map<string, string>; handle(route: Route): Promise<void> } {
   const files = new Map<string, string>();
   for (const full of walk(VAULT_DIR)) {
     const path = relative(VAULT_DIR, full).split(sep).join('/').normalize('NFC');
     files.set(path, readFileSync(full, 'utf8'));
   }
+  for (const path of omit) files.delete(path.normalize('NFC'));
   for (const [path, text] of Object.entries(extra)) files.set(path.normalize('NFC'), text);
 
   const commits: { sha: string; paths: string[] }[] = [{ sha: blobSha('start'), paths: [] }];
@@ -223,7 +226,7 @@ function createRepo(extra: Record<string, string>): RepoMock & { files: Map<stri
  * GitHub antwortet aus dem Repo im Speicher, das der Rückgabewert beschreibt.
  */
 export async function openSeeded(page: Page, hash: string, o: OpenOptions = {}): Promise<RepoMock> {
-  const repo = createRepo(o.files ?? {});
+  const repo = createRepo(o.files ?? {}, o.omit);
   repo.failReads = o.failReads ?? false;
   repo.failWrites = o.failWrites ?? false;
   await page.route('https://api.github.com/**', (route) => (o.offline ? route.abort('internetdisconnected') : repo.handle(route)));

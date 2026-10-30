@@ -204,3 +204,17 @@ test('termineAm does not change the list it gets', () => {
   expect(titles(list)).toEqual(['B', 'A']);
   expect(result).not.toBe(list);
 });
+
+test('a byte order mark at the start of the file does not hide the first line', () => {
+  const lines = '- 2026-10-29 08:00 bis 14:00 | Abstimmung Beispiel 2027 | Klagenfurt | Outlook\n- 2026-10-30 ganztägig | Schulung Beispiel\n';
+  expect(parseTermine(`\uFEFF${lines}`)).toEqual(parseTermine(lines));
+  expect(titles(parseTermine(`\uFEFF${lines}`))).toEqual(['Abstimmung Beispiel 2027', 'Schulung Beispiel']);
+  // Auch mit Windows-Zeilenenden, und vor einer Überschrift schadet es nicht.
+  expect(titles(parseTermine(`\uFEFF${lines.replace(/\n/g, '\r\n')}`))).toEqual(['Abstimmung Beispiel 2027', 'Schulung Beispiel']);
+  expect(titles(parseTermine(`\uFEFF# Termine\n${lines}`))).toEqual(['Abstimmung Beispiel 2027', 'Schulung Beispiel']);
+});
+
+test('only a byte order mark at the very start is ignored', () => {
+  expect(parseTermine('# Termine\n\uFEFF- 2026-10-29 08:00 bis 14:00 | Mitten drin\n')).toEqual([]);
+  expect(parseTermine('\uFEFF\uFEFF- 2026-10-29 08:00 bis 14:00 | Zwei\n')).toEqual([]);
+});

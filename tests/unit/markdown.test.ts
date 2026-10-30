@@ -304,3 +304,45 @@ test('a lone carriage return inside a line does not shift the line numbers', () 
     '<ul>\n<li data-line="0"><input type="checkbox" data-line="0"> a - [ ] b</li>\n<li data-line="1"><input type="checkbox" data-line="1" checked> c</li>\n</ul>\n',
   );
 });
+
+test('an embed is a neutral hint, without the file name and without a stray exclamation mark', () => {
+  expect(renderNote('![[2026-10-29 Tag.svg]]\n')).toBe('<p><span class="anhang">Anhang</span></p>\n');
+  expect(renderNote('Davor ![[Bild.png|200]] danach\n')).toBe('<p>Davor <span class="anhang">Anhang</span> danach</p>\n');
+  expect(renderNote('- [ ] Aufgabe ![[Skizze.svg]]\n')).toBe(
+    '<ul>\n<li data-line="0"><input type="checkbox" data-line="0"> Aufgabe <span class="anhang">Anhang</span></li>\n</ul>\n',
+  );
+  // Ein Wikilink ohne Ausrufezeichen bleibt, was er war.
+  expect(renderNote('[[Seite]] und ![[Seite]]\n')).toBe('<p>Seite und <span class="anhang">Anhang</span></p>\n');
+});
+
+test('what looks a little like an embed stays text', () => {
+  expect(renderNote('![[offen\n')).toBe('<p>![[offen</p>\n');
+  expect(renderNote('![[]]\n')).toBe('<p>![[]]</p>\n');
+  expect(renderNote('Hallo! [[Seite]]\n')).toBe('<p>Hallo! Seite</p>\n');
+});
+
+test('a markdown image keeps its markup, the Tagesseite drops it later', () => {
+  expect(renderNote('![Alt](bild.png)\n')).toBe('<p><img src="bild.png" alt="Alt"></p>\n');
+});
+
+test('a range renders only the lines inside it and keeps the line numbers of the whole note', () => {
+  const doc = ['# Titel', '', '## A', '- [ ] eins %%m:1%%', '- zwei', '', '## B', '- [x] drei', ''].join('\n');
+  expect(renderNote(doc, { start: 3, end: 6 })).toBe(
+    '<ul>\n<li data-line="3"><input type="checkbox" data-line="3"> eins</li>\n<li data-line="4">zwei</li>\n</ul>\n',
+  );
+  expect(renderNote(doc, { start: 7, end: 9 })).toBe('<ul>\n<li data-line="7"><input type="checkbox" data-line="7" checked> drei</li>\n</ul>\n');
+  expect(renderNote(doc, { start: 0, end: 0 })).toBe('');
+  expect(renderNote(doc, { start: 0, end: 100 })).toBe(renderNote(doc));
+});
+
+test('a block comment that reaches into a range hides its lines there too', () => {
+  const doc = ['## A', '- sichtbar', '%%', '- versteckt', '## B', '- auch versteckt', '%%', '- wieder sichtbar', ''].join('\n');
+  // Der Kommentar beginnt in Abschnitt A und endet in B: Die Zeilen dazwischen bleiben überall versteckt.
+  expect(renderNote(doc, { start: 1, end: 4 })).toBe('<ul>\n<li data-line="1">sichtbar</li>\n</ul>\n');
+  expect(renderNote(doc, { start: 5, end: 8 })).toBe('<ul>\n<li data-line="7">wieder sichtbar</li>\n</ul>\n');
+});
+
+test('a range never shows the front matter', () => {
+  const doc = '---\ndate: 2026-10-29\n---\n- [ ] a\n';
+  expect(renderNote(doc, { start: 0, end: 4 })).toBe('<ul>\n<li data-line="3"><input type="checkbox" data-line="3"> a</li>\n</ul>\n');
+});

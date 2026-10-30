@@ -7,6 +7,7 @@ import {
   mondayOf,
   monthGrid,
   monthKey,
+  nextFullHour,
   todayVienna,
   weekDays,
 } from '../../src/lib/dates';
@@ -218,4 +219,30 @@ test('isValidDay agrees with addDays for a few years of days', () => {
     d = addDays(d, 1);
   }
   expect(problems).toEqual([]);
+});
+
+test('nextFullHour is the next full hour in Vienna time', () => {
+  expect(nextFullHour(new Date('2026-10-29T11:00:00Z'))).toBe('13:00'); // 12:00 MEZ: die nächste volle Stunde, nicht die jetzige
+  expect(nextFullHour(new Date('2026-10-29T11:20:00Z'))).toBe('13:00');
+  expect(nextFullHour(new Date('2026-10-29T11:59:59Z'))).toBe('13:00');
+  expect(nextFullHour(new Date('2026-10-29T12:00:00Z'))).toBe('14:00');
+  expect(nextFullHour(new Date('2026-07-01T08:30:00Z'))).toBe('11:00'); // 10:30 MESZ
+});
+
+test('nextFullHour around midnight and on both clock change days', () => {
+  expect(nextFullHour(new Date('2026-10-29T22:30:00Z'))).toBe('00:00'); // 23:30 MEZ: nach Mitternacht
+  expect(nextFullHour(new Date('2026-10-29T23:10:00Z'))).toBe('01:00'); // 00:10 MEZ
+  // 25.10.2026: Die Stunde von 02:00 bis 03:00 gibt es zweimal.
+  expect(nextFullHour(new Date('2026-10-25T00:30:00Z'))).toBe('03:00'); // 02:30 MESZ
+  expect(nextFullHour(new Date('2026-10-25T01:30:00Z'))).toBe('03:00'); // 02:30 MEZ
+  // 28.03.2027: Die Stunde von 02:00 bis 03:00 gibt es nicht.
+  expect(nextFullHour(new Date('2027-03-28T00:30:00Z'))).toBe('02:00'); // 01:30 MEZ
+  expect(nextFullHour(new Date('2027-03-28T01:10:00Z'))).toBe('04:00'); // 03:10 MESZ
+});
+
+test('nextFullHour always has the form HH:00', () => {
+  const start = Date.parse('2026-10-24T00:00:00Z');
+  for (let i = 0; i < 24 * 4 * 3; i++) {
+    expect(nextFullHour(new Date(start + i * 15 * 60_000))).toMatch(/^(?:[01]\d|2[0-3]):00$/);
+  }
 });

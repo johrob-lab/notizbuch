@@ -47,6 +47,28 @@ function wikilink(state: StateInline, silent: boolean): boolean {
 }
 
 /**
+ * `![[Datei.svg]]` ist ein eingebetteter Anhang. Die Karte zeigt ihn nicht, sie hat weder die Datei noch darf sie einen
+ * Namen verraten: Es bleibt ein neutraler Hinweis „Anhang“. Ohne Ende (`![[offen`), ohne Namen (`![[]]`) oder mit einem
+ * Zeilenumbruch darin ist es keine Einbettung und bleibt Text. Das Ausrufezeichen gehört dazu, auch das verschwindet.
+ */
+function embed(state: StateInline, silent: boolean): boolean {
+  const { src, pos } = state;
+  if (src.charCodeAt(pos) !== 0x21 || src.charCodeAt(pos + 1) !== 0x5b || src.charCodeAt(pos + 2) !== 0x5b) return false;
+  const close = src.indexOf(']]', pos + 3);
+  if (close < 0) return false;
+
+  const inner = src.slice(pos + 3, close);
+  if (/[\n[\]]/.test(inner) || !inner.trim()) return false;
+
+  if (!silent) {
+    // Eigenes HTML-Token mit festem Text: Nichts davon stammt aus der Notiz.
+    state.push('html_inline', '', 0).content = '<span class="anhang">Anhang</span>';
+  }
+  state.pos = close + 2;
+  return true;
+}
+
+/**
  * Tauscht `[ ]` / `[x]` am Anfang des Listenpunkts bei Token `i` gegen ein echtes Kästchen. Ob es
  * eins gibt und wie es steht (`box`), hat das Zeilenmodell schon entschieden.
  */
@@ -68,6 +90,8 @@ function replaceBox(state: StateCore, i: number, line: number, box: string): voi
 // Rohes HTML aus der Notiz bleibt aus (html: false): Text aus der Notiz wird nie zu Markup.
 const parser = new MarkdownIt({ html: false });
 parser.inline.ruler.before('link', 'wikilink', wikilink);
+// Vor dem Bild: `![[…]]` beginnt wie ein Markdown-Bild, ist aber ein Anhang.
+parser.inline.ruler.before('image', 'embed', embed);
 parser.core.ruler.push('note_items', (state) => {
   // Die Zeilen der Notiz, wie sie in der Datei stehen (mit Markern): `token.map` zählt in denselben Zeilen.
   const lines = (state.env.lines ?? []) as string[];
@@ -88,11 +112,17 @@ parser.core.ruler.push('note_items', (state) => {
  * `data-line`; jede andere Zeile mit `[ ]` zeigt die Klammern als Text. Der YAML-Kopf, ein BOM am
  * Anfang und `%%…%%` erscheinen nicht. Nicht jedes `data-line` ist ein Eintrag im Zeilenmodell: In
  * Zitaten und in `*`- oder nummerierten Listen gibt es Listenelemente, die `isItemLine` nicht kennt.
+ *
+ * Mit `range` (Zeilenindex `start` bis `end`, exklusiv, in der Notiz) erscheinen nur diese Zeilen, zum Beispiel ein
+ * Abschnitt. Die Zeilennummern bleiben die der ganzen Notiz, und Blockkommentare und der YAML-Kopf gelten weiter über
+ * die ganze Notiz: Ein Kommentar, der in einem Abschnitt beginnt und im nächsten endet, versteckt auch dort seine Zeilen.
  */
-export function renderNote(md: string): string {
+export function renderNote(md: string, range?: { start: number; end: number }): string {
   const lines = (md.startsWith(BOM) ? md.slice(1) : md).split('\n');
   // markdown-it bekommt die Zeilen ohne Kopf, Marker und Kommentare, aber mit derselben Zeilenzahl.
   // Ein einzelnes \r mitten in der Zeile würde es als Zeilenumbruch zählen und alle Nummern verschieben.
   const shown = visibleLines(blankFrontmatter(lines)).map((line) => line.replace(/\r/g, ' '));
-  return parser.render(shown.join('\n'), { lines });
+  // Außerhalb des Bereichs leere Zeilen statt weggelassener: So bleiben die Zeilennummern die der ganzen Notiz.
+  const inRange = range ? shown.map((line, i) => (i >= range.start && i < range.end ? line : '')) : shown;
+  return parser.render(inRange.join('\n'), { lines });
 }

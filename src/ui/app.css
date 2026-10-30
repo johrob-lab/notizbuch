@@ -597,3 +597,577 @@ body {
   justify-content: flex-end;
   gap: 12px;
 }
+
+/* Das Feld zum Anlegen in der Rückfrage (Dialog.tsx, `formDialog`): beschriftet, mit Fehlermeldung darunter. */
+.rueckfrage-feld {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: #4a5160;
+}
+
+.rueckfrage-feld input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--linie);
+  border-radius: 10px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.rueckfrage-feld input:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 1px;
+}
+
+.rueckfrage-feld input:disabled {
+  opacity: 0.6;
+}
+
+/* Leer nimmt sie keinen Platz, bleibt aber im Baum: Eine Meldung, die erst später erscheint, wird so von der Sprachausgabe gelesen. */
+.rueckfrage-fehler {
+  margin: 0 0 12px;
+  font-size: 15px;
+  color: #a32a24;
+}
+
+.rueckfrage-fehler:empty {
+  margin: 0;
+}
+
+.knopf.primaer {
+  border-color: var(--gruen);
+  background: var(--gruen);
+  color: #fff;
+}
+
+/*
+ * Die Karten der Tagesseite (TagPage.tsx): echte Bedienelemente über der Schreibfläche. Sie liegen in einer Ebene in
+ * Seiteneinheiten (1192 mal 1590), auf die PageView Maßstab und Versatz der Fläche legt: Sie wandern und zoomen mit der
+ * Seite. Alle Maße darin sind Seiteneinheiten. Auf einem iPad 11 Zoll im Hochformat ist eine Einheit etwa 0,67 Punkte
+ * groß: Schrift ab 17 Einheiten bleibt über 11 Punkten, und 68 Einheiten sind 44 Punkte, so groß wie eine Fläche zum
+ * Treffen mit Finger oder Stift sein soll.
+ */
+.karten-rahmen {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  overflow: clip; /* clip lässt auch kein Scrollen von Hand zu: Ein Feld im Fokus verschiebt die Karten nicht gegen die Seite */
+  pointer-events: none; /* nur die Karten selbst fangen Berührungen ab, der Rest gehört der Schreibfläche */
+}
+
+.karten {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1192px;
+  height: 1590px;
+  transform-origin: 0 0;
+}
+
+/* Bis die Fläche Maßstab und Versatz gemeldet hat, läge die Ebene an der falschen Stelle. */
+.karten:not([data-bereit]) {
+  visibility: hidden;
+}
+
+.karte {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: 44px 12px 10px; /* oben der Name der Karte, den die Seite in den Rahmen zeichnet */
+  overflow: hidden;
+  overflow: clip;
+  color: #2e3630;
+  font-size: 20px;
+  line-height: 1.35;
+  pointer-events: auto;
+  /*
+   * Eine Karte fängt Berührungen ab, die Schreibfläche darunter sieht sie nicht. Mit dem Standardwert würde ein Zwei-Finger-
+   * Zoom, der auf einer Karte beginnt, die ganze Oberfläche im Browser vergrößern (Leiste und Werkzeuge mit). Hier ist nur
+   * das senkrechte Blättern erlaubt; die Seite verschiebt und zoomt man mit Fingern außerhalb der Karten.
+   */
+  touch-action: pan-y;
+}
+
+.karte p {
+  margin: 4px 0;
+}
+
+.karte button,
+.karte a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.karte button:focus-visible,
+.karte a:focus-visible,
+.karte input:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 1px;
+}
+
+.karte .leer {
+  margin: 0;
+  padding: 12px 8px;
+  color: #5f6862;
+}
+
+/* Was man in einer Karte blättern kann, scrollt mit dem Finger senkrecht; alles andere an den Karten ist zum Tippen. */
+.karte .karten-inhalt,
+.karte .eintraege {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+/* ----- Eingaben und Knöpfe in den Karten ----- */
+
+.karte .knopf {
+  min-width: 68px;
+  height: 68px;
+  padding: 0 24px;
+  border-radius: 34px;
+  font-size: 20px;
+}
+
+.karte input[type='text'] {
+  box-sizing: border-box;
+  min-width: 0;
+  height: 68px;
+  padding: 0 14px;
+  border: 1px solid var(--linie);
+  border-radius: 12px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 20px; /* über 16 Punkten, sonst zoomt Safari beim Antippen in die Seite */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* ----- Morgenbriefing ----- */
+
+.karte .vorspann {
+  padding: 0 8px;
+}
+
+/* Die Zwischenüberschriften der Notiz (### im Markdown): klein und dicht über dem, was sie ankündigen. */
+.karte h4:not(.abschnitt) {
+  margin: 10px 8px 0;
+  color: #5f6862;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.karte .abschnitt {
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.karte .abschnitt button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 68px;
+  padding: 0 8px;
+  border: 0;
+  border-top: 1px solid #e3e8e4;
+  background: transparent;
+  color: var(--gruen);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.karte .abschnitt-pfeil {
+  flex: none;
+  width: 24px;
+  text-align: center;
+}
+
+.karte .abschnitt-inhalt {
+  padding: 0 0 8px;
+}
+
+.karte ul,
+.karte ol {
+  margin: 0;
+  padding: 0 0 0 28px;
+}
+
+.karte .abschnitt-inhalt > ul,
+.karte .vorspann > ul {
+  padding-left: 0;
+}
+
+.karte li {
+  margin: 0;
+}
+
+.karte li:not(.eintrag) {
+  list-style-position: inside;
+}
+
+.karte blockquote {
+  margin: 4px 0;
+  padding: 0 0 0 14px;
+  border-left: 4px solid #c9d3cb;
+  color: #5f6862;
+}
+
+.karte pre {
+  margin: 4px 0;
+  overflow-x: auto;
+  font-size: 17px;
+}
+
+.karte code {
+  font-size: 17px;
+}
+
+.karte table {
+  border-collapse: collapse;
+  font-size: 17px;
+}
+
+.karte th,
+.karte td {
+  padding: 2px 8px;
+  border: 1px solid #c9d3cb;
+}
+
+.karte hr {
+  border: 0;
+  border-top: 1px solid #c9d3cb;
+}
+
+.karte .karten-inhalt a {
+  color: #2f5f7a;
+}
+
+.karte .anhang {
+  display: inline-block;
+  padding: 0 10px;
+  border: 1px dashed #b3bdb5;
+  border-radius: 8px;
+  color: #5f6862;
+  font-size: 17px;
+}
+
+/* Ein Eintrag: Kästchen (oder Punkt), Text, Stift. Was darunter gehört (eine Untergliederung), steht in einer eigenen Zeile. */
+.karte li.eintrag {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  list-style: none;
+}
+
+.karte li.eintrag > ul,
+.karte li.eintrag > ol,
+.karte li.eintrag > p,
+.karte li.eintrag > blockquote,
+.karte li.eintrag > pre,
+.karte li.eintrag > table,
+.karte li.eintrag > hr {
+  box-sizing: border-box;
+  flex: 0 0 100%;
+  padding-left: 68px;
+}
+
+.karte li.eintrag > .text {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 4px 0;
+  overflow-wrap: anywhere;
+}
+
+.karte .haken-flaeche,
+.karte .punkt {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 68px;
+  height: 68px;
+}
+
+.karte .haken-flaeche {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.karte .haken-flaeche input {
+  width: 30px;
+  height: 30px;
+  margin: 0;
+  accent-color: var(--gruen);
+  cursor: pointer;
+}
+
+.karte .punkt::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #7d877f;
+}
+
+.karte .stift {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 68px;
+  height: 68px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #5f6862;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.karte .stift svg {
+  width: 28px;
+  height: 28px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.karte .stift:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.karte .bearbeiten {
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.karte .bearbeiten input {
+  flex: 1 1 100%;
+}
+
+.karte .karten-hinweis {
+  flex: none;
+  margin: 6px 0 0;
+  padding: 8px 12px;
+  border: 1px solid #ecd9a0;
+  border-radius: 10px;
+  background: var(--hinweis);
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.karte .karten-hinweis.fehler {
+  border-color: #f0b4ad;
+  background: var(--fehler);
+}
+
+.karte .ergaenzen {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.karte .ergaenzen input[type='text'] {
+  flex: 1 1 0;
+}
+
+.karte .schalter {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 68px;
+  font-size: 18px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.karte .schalter input {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 52px;
+  height: 30px;
+  margin: 0;
+  border-radius: 15px;
+  background: #b3bdb5;
+  cursor: pointer;
+}
+
+.karte .schalter input::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+}
+
+.karte .schalter input:checked {
+  background: var(--gruen);
+}
+
+.karte .schalter input:checked::after {
+  transform: translateX(22px);
+}
+
+/* ----- Kalender ----- */
+
+.karte .monat {
+  margin: 0 0 2px;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.karte .wochentage {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  color: #5f6862;
+  font-size: 17px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.karte .raster {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  min-height: 0;
+}
+
+.karte .tag {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  border-radius: 8px;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  text-decoration: none;
+  touch-action: manipulation;
+}
+
+.karte .tag.aussen {
+  color: #a3aca5;
+}
+
+/* Feiertage wie im Planer. */
+.karte .tag.feiertag {
+  background: #f8efea;
+  color: #a8674f;
+}
+
+.karte .tag.termine::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.karte .tag.heute {
+  box-shadow: inset 0 0 0 2px var(--gruen);
+  font-weight: 700;
+}
+
+.karte .tag.gezeigt {
+  background: var(--gruen);
+  color: #fff;
+  font-weight: 700;
+}
+
+/* ----- Besprechungen ----- */
+
+.karte .eintraege {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.karte .eintrag-zeile {
+  display: grid;
+  grid-template-columns: 104px 1fr;
+  align-items: center;
+  column-gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 68px;
+  padding: 4px 8px;
+  border: 0;
+  border-bottom: 1px solid #e3e8e4;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.karte .eintrag-zeile .zeit {
+  grid-column: 1;
+  color: var(--gruen);
+  font-weight: 700;
+}
+
+.karte .eintrag-zeile .titel {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.karte .eintrag-zeile .zusatz {
+  grid-column: 2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #5f6862;
+  font-size: 17px;
+}
+
+.karte .knopf.neu {
+  flex: none;
+  margin-top: 6px;
+  border-style: dashed;
+}
