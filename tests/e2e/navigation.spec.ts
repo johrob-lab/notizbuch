@@ -223,6 +223,13 @@ test('month tabs show the year of the page', async ({ page }) => {
   await waitForPageOf(page, 'monat', '2027-06');
 });
 
+test('the month tabs of a week follow its Thursday: KW 01 whose Monday is in the old year shows January of the new year', async ({ page }) => {
+  await openSeeded(page, '#/woche/2026-W01'); // Montag, 29.12.2025, bis Sonntag, 4.1.2026
+  await waitForPageOf(page, 'woche', '2026-W01');
+  await expect(link(page, 'Januar 2026')).toHaveAttribute('aria-current', 'true');
+  await expect(link(page, 'Dezember 2025')).toHaveCount(0);
+});
+
 test('every button of the top bar and every tab is at least 44 points', async ({ page }) => {
   await openSeeded(page, DAY);
   const sizes = await page.locator('.topbar .pill, .reiter').evaluateAll((els) =>

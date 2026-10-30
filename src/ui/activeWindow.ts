@@ -1,7 +1,8 @@
-// Ein Fenster je Gerät darf schreiben. Zwei Fenster der App (zwei Tabs, oder die App und ein Tab in Safari) teilen sich die
-// Datenbank im Browser, und zwei Fenster, die dieselbe Seite schreiben, überholen einander: Das eine schreibt auf einen
-// Stand, den das andere schon ersetzt hat. Wer zuerst da ist, hält die Sperre `notizbuch-aktiv`, solange sein Fenster
-// offen ist. Jedes weitere Fenster liest nur. Die Sperre ist die einzige Abstimmung zwischen den Fenstern.
+// Ein Fenster je Speicher darf schreiben. Zwei Fenster der App, die sich die Datenbank im Browser teilen (zwei Tabs im selben
+// Browser), überholen einander, wenn sie dieselbe Seite schreiben: Das eine schreibt auf einen Stand, den das andere schon
+// ersetzt hat. Wer zuerst da ist, hält die Sperre `notizbuch-aktiv`, solange sein Fenster offen ist. Jedes weitere Fenster
+// mit demselben Speicher liest nur. Die Sperre ist die einzige Abstimmung zwischen den Fenstern, und sie gilt je Speicher: Am
+// iPad haben die App auf dem Home-Bildschirm und ein Tab in Safari getrennte Speicher, also auch getrennte Sperren.
 
 /** Der Name der Sperre. Die Engine hat eine eigene (`notizbuch-sync`) für das Hochladen. */
 export const ACTIVE_LOCK = 'notizbuch-aktiv';

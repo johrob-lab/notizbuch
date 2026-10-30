@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { SMOOTHING } from '../ink/types';
 import { AccessChangedError, accessProblem, PendingChangesError, saveAccess, waitingText } from '../lib/access';
-import { monthKey, todayVienna, type Day } from '../lib/dates';
+import { todayVienna, type Day } from '../lib/dates';
 import { expiryWarning, knownExpiry } from '../lib/expiry';
 import { loadSettings, updateSettings, type Settings } from '../lib/settings';
 import { SyncEngine } from '../sync/engine';
@@ -13,7 +13,7 @@ import { BesprechungPage } from './BesprechungPage';
 import { MonatPage } from './MonatPage';
 import { MonthTabs } from './MonthTabs';
 import type { PageProps } from './PageView';
-import { parseRoute, routeHash, shownDay, type Route, type Steps } from './router';
+import { parseRoute, routeHash, shownMonth, type Route, type Steps } from './router';
 import { SettingsPage } from './Settings';
 import { Setup } from './Setup';
 import { TagPage } from './TagPage';
@@ -373,8 +373,9 @@ export function App() {
     void updateSettings(now.store, (saved) => ({ ...saved, quickSwitchPos: pos })).catch(() => undefined);
   };
 
-  // Die Reiter gehören zum Jahr und Monat der Seite. Die Einstellungen sind keine Seite des Kalenders und haben keine.
-  const shown = shownDay(route);
+  // Die Reiter gehören zum Jahr und Monat der Seite, bei einer Woche zu denen ihres Donnerstags. Die Einstellungen sind keine
+  // Seite des Kalenders und haben keine.
+  const shown = shownMonth(route);
 
   // Was gleich unter der Leiste steht und bleibt: Das zweite Fenster eines Geräts liest nur, oder der Zugang wird umgestellt.
   const banner = boot.phase !== 'bereit' ? null : !boot.window.active ? OTHER_WINDOW : switching ? SWITCHING : null;
@@ -422,7 +423,7 @@ export function App() {
                 onQuickSwitchMove={moveQuickSwitch}
               />
             )}
-            {route.view !== 'einstellungen' && <MonthTabs year={Number(shown.slice(0, 4))} current={monthKey(shown)} />}
+            {route.view !== 'einstellungen' && <MonthTabs year={Number(shown.slice(0, 4))} current={shown} />}
           </div>
         </>
       ) : boot.phase === 'einrichten' ? (

@@ -56,6 +56,14 @@ test('trims every part', () => {
   expect(t).toMatchObject({ title: 'Titel  mit  Lücke', place: 'Probedorf', source: 'Outlook' });
 });
 
+test('a line with decomposed umlauts (NFD, a letter and the two dots apart) is read like one with composed umlauts', () => {
+  const nfd = '- 2026-10-30 ganztägig | Übung Beispiel | Mühle | Outlook\n';
+  expect(nfd).not.toBe(nfd.normalize('NFC')); // wirklich zerlegt
+  expect(parseTermine(nfd)).toEqual([
+    { date: '2026-10-30', start: undefined, end: undefined, allDay: true, title: 'Übung Beispiel', place: 'Mühle', source: 'Outlook' },
+  ]);
+});
+
 test('skips malformed lines', () => {
   expect(parseTermine('# Termine\n- morgen irgendwas\n- 2026-13-45 08:00 | x\n')).toEqual([]);
 });

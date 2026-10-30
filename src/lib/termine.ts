@@ -39,11 +39,13 @@ function clean(part: string | undefined): string | undefined {
  * Liest die Termine aus dem Text von `Termine.md`, in der Reihenfolge der Datei. Alles, was keine gültige
  * Terminzeile ist, wird still übersprungen: Überschriften, Leerzeilen, falsche Formate, Tage, die es nicht
  * gibt, Uhrzeiten außerhalb von 00:00 bis 23:59 und Zeilen ohne Titel. Ein Byte Order Mark ganz am Anfang der Datei
- * (manche Editoren schreiben es) gehört nicht zur ersten Zeile: Sonst fehlte genau der erste Termin.
+ * (manche Editoren schreiben es) gehört nicht zur ersten Zeile: Sonst fehlte genau der erste Termin. Jede Zeile wird zuerst
+ * in die NFC-Form gebracht: Ein „ganztägig“ mit zerlegtem Umlaut (Buchstabe und Punkte getrennt) gilt so wie jedes andere.
  */
 export function parseTermine(md: string): Termin[] {
   const termine: Termin[] = [];
-  for (const line of (md.charCodeAt(0) === 0xfeff ? md.slice(1) : md).split(/\r?\n/)) {
+  for (const raw of (md.charCodeAt(0) === 0xfeff ? md.slice(1) : md).split(/\r?\n/)) {
+    const line = raw.normalize('NFC');
     const match = TERMIN_LINE.exec(line);
     if (!match) continue;
     // Gruppen, die nicht mitgespielt haben, sind undefined (auch wenn der Typ von match das nicht zeigt).

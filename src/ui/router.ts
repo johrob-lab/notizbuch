@@ -28,7 +28,14 @@ function isValidWeek(key: string): boolean {
   return WEEK.test(key) && isoWeekKey(weekDays(key)[3]) === key;
 }
 
+// Die Jahre, die eine Adresse haben kann. Darüber und darunter ist kein Kalender mehr, den jemand braucht, und so bleibt jeder
+// Tag, den eine Seite zeigt oder in den sie hineinragt (die Woche über Neujahr, das Raster eines Monats), vierstellig.
+const FIRST_YEAR = 1000;
+const LAST_YEAR = 9998;
+
 function isValidKey(view: 'tag' | 'woche' | 'monat', key: string): boolean {
+  const year = Number(key.slice(0, 4));
+  if (!(year >= FIRST_YEAR && year <= LAST_YEAR)) return false;
   if (view === 'tag') return isValidDay(key);
   return view === 'woche' ? isValidWeek(key) : MONTH.test(key);
 }
@@ -76,7 +83,7 @@ function stepMonth(key: string, delta: number): string {
   return `${String(year).padStart(4, '0')}-${String((index % 12) + 1).padStart(2, '0')}`;
 }
 
-// Einen Tag, eine Woche oder einen Monat weiter. Am Rand des Kalenders (Jahr 0000 und 9999) und bei Besprechung und
+// Einen Tag, eine Woche oder einen Monat weiter. Am Rand des Kalenders (Jahr 1000 und 9998) und bei Besprechung und
 // Einstellungen bleibt die Seite, wo sie ist, statt einen Schlüssel zu erfinden, den es nicht gibt. Die Seiten einer
 // Besprechung blättert die Seite selbst (siehe `Steps`): Welche Seiten es gibt, steht nicht in der Adresse.
 function step(r: Route, delta: 1 | -1): Route {
@@ -109,6 +116,15 @@ export function shownDay(r: Route, today: Day = todayVienna()): Day {
   if (r.view === 'monat') return monthKey(today) === r.key ? today : `${r.key}-01`;
   const day = r.key.slice(0, 10);
   return r.view === 'besprechung' && isValidDay(day) ? day : today;
+}
+
+/**
+ * Der Monat, zu dem die Monatsreiter gehören (Jahr und hervorgehobener Monat), als `YYYY-MM`: der Monat von `shownDay`. Eine
+ * Woche gehört wie in ISO 8601 zu Jahr und Monat ihres Donnerstags. Die KW 01, deren Montag noch im alten Jahr liegt, zeigt
+ * also das neue Jahr, auch wenn heute in ihr liegt.
+ */
+export function shownMonth(r: Route, today: Day = todayVienna()): string {
+  return monthKey(r.view === 'woche' ? weekDays(r.key)[3] : shownDay(r, today));
 }
 
 /** Dieselbe Zeit in einer anderen Ansicht: der Tag, die Woche oder der Monat, in dem `shownDay` liegt. */

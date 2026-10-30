@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { todayVienna } from '../../src/lib/dates';
+import { isoWeekKey, todayVienna } from '../../src/lib/dates';
 import {
   nextRoute,
   parseRoute,
   prevRoute,
   routeHash,
   shownDay,
+  shownMonth,
   viewRoute,
   type Route,
 } from '../../src/ui/router';
@@ -203,12 +204,32 @@ test('arrows never leave a key that parseRoute would refuse, and every step is a
   }
 });
 
+test('day, week and month keys need a year from 1000 to 9998, anything else lands on today', () => {
+  const outside = ['#/tag/0000-01-01', '#/tag/0999-12-31', '#/tag/9999-01-01', '#/woche/0999-W52', '#/woche/9999-W01', '#/monat/0000-01', '#/monat/0999-12', '#/monat/9999-12'];
+  for (const hash of outside) expect(parseRoute(hash), hash).toEqual(TODAY);
+  const lastWeek = isoWeekKey('9998-12-28'); // der 28.12. liegt immer in der letzten Woche seines Jahres
+  const inside: Route[] = [
+    { view: 'tag', key: '1000-01-01' },
+    { view: 'tag', key: '9998-12-31' },
+    { view: 'woche', key: '1000-W01' },
+    { view: 'woche', key: lastWeek },
+    { view: 'monat', key: '1000-01' },
+    { view: 'monat', key: '9998-12' },
+  ];
+  for (const route of inside) expect(parseRoute(routeHash(route)), routeHash(route)).toEqual(route);
+});
+
 test('arrows stop at the end of the calendar instead of making up a key', () => {
-  expect(nextRoute({ view: 'tag', key: '9999-12-31' })).toEqual({ view: 'tag', key: '9999-12-31' });
-  expect(prevRoute({ view: 'tag', key: '0000-01-01' })).toEqual({ view: 'tag', key: '0000-01-01' });
-  expect(nextRoute({ view: 'monat', key: '9999-12' })).toEqual({ view: 'monat', key: '9999-12' });
-  expect(prevRoute({ view: 'monat', key: '0000-01' })).toEqual({ view: 'monat', key: '0000-01' });
-  expect(prevRoute({ view: 'woche', key: '0000-W01' })).toEqual({ view: 'woche', key: '0000-W01' });
+  expect(nextRoute({ view: 'tag', key: '9998-12-31' })).toEqual({ view: 'tag', key: '9998-12-31' });
+  expect(prevRoute({ view: 'tag', key: '1000-01-01' })).toEqual({ view: 'tag', key: '1000-01-01' });
+  expect(nextRoute({ view: 'monat', key: '9998-12' })).toEqual({ view: 'monat', key: '9998-12' });
+  expect(prevRoute({ view: 'monat', key: '1000-01' })).toEqual({ view: 'monat', key: '1000-01' });
+  expect(prevRoute({ view: 'woche', key: '1000-W01' })).toEqual({ view: 'woche', key: '1000-W01' });
+  const lastWeek = isoWeekKey('9998-12-28');
+  expect(nextRoute({ view: 'woche', key: lastWeek })).toEqual({ view: 'woche', key: lastWeek });
+  // Eins davor geht es noch weiter
+  expect(nextRoute({ view: 'tag', key: '9998-12-30' })).toEqual({ view: 'tag', key: '9998-12-31' });
+  expect(prevRoute({ view: 'monat', key: '1000-02' })).toEqual({ view: 'monat', key: '1000-01' });
 });
 
 test('a meeting and the settings do not have arrows that go anywhere', () => {
@@ -233,6 +254,22 @@ test('the shown day follows the page, and today wins when the page contains it',
   expect(shownDay({ view: 'einstellungen', key: '' }, '2026-10-29')).toBe('2026-10-29');
   // Ohne Angabe gilt der heutige Tag in Wiener Zeit
   expect(shownDay({ view: 'einstellungen', key: '' })).toBe(todayVienna());
+});
+
+test('the month tabs follow the page, and for a week its Thursday: KW 01 whose Monday is in the old year shows the new year', () => {
+  // 2026-W01 geht von Montag, 29.12.2025, bis Sonntag, 4.1.2026. Der Donnerstag ist der 1.1.2026.
+  expect(shownMonth({ view: 'woche', key: '2026-W01' }, '2026-10-29')).toBe('2026-01');
+  expect(shownMonth({ view: 'woche', key: '2026-W01' }, '2025-12-30')).toBe('2026-01'); // auch wenn heute noch im alten Jahr in dieser Woche liegt
+  // 2026-W53 geht bis Sonntag, 3.1.2027. Der Donnerstag ist der 31.12.2026.
+  expect(shownMonth({ view: 'woche', key: '2026-W53' }, '2026-10-29')).toBe('2026-12');
+  // Eine Woche über das Monatsende gehört zum Monat ihres Donnerstags, auch an ihrem Sonntag
+  expect(shownMonth({ view: 'woche', key: '2026-W44' }, '2026-11-01')).toBe('2026-10');
+  // Die anderen Seiten: der Monat des Tages, den die Seite zeigt
+  expect(shownMonth({ view: 'tag', key: '2026-12-31' }, '2026-10-29')).toBe('2026-12');
+  expect(shownMonth({ view: 'monat', key: '2027-02' }, '2026-10-29')).toBe('2027-02');
+  expect(shownMonth({ view: 'besprechung', key: '2026-03-02 0800 Muster', n: 1 }, '2026-10-29')).toBe('2026-03');
+  expect(shownMonth({ view: 'einstellungen', key: '' }, '2026-10-29')).toBe('2026-10');
+  expect(shownMonth({ view: 'einstellungen', key: '' })).toBe(todayVienna().slice(0, 7));
 });
 
 test('switching the view keeps the shown date', () => {
