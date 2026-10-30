@@ -76,6 +76,10 @@ function fieldRect(l: Layout, id: string): number[] {
   return l.fields.find((f) => f.id === id)!.rect;
 }
 
+/** Die Linien des Hintergrunds. Jede steht als `M<x> <y>h<Breite>` darin. */
+const linesIn = (bg: string) =>
+  [...bg.matchAll(/M([\d.]+) ([\d.]+)h([\d.]+)/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]), w: Number(m[3]) }));
+
 test('field ids unique, inside the page, right dates', () => {
   for (const l of [tagLayout('2026-10-29'), wocheLayout('2026-W44'), monatLayout('2026-10')]) {
     expect(new Set(l.fields.map((f) => f.id)).size).toBe(l.fields.length);
@@ -97,7 +101,7 @@ test('every layout has unique field ids, fields inside the page and no two field
       const [x, y, w, h] = f.rect;
       expect(x >= 0 && y >= 0 && w > 0 && h > 0 && x + w <= PAGE_W && y + h <= PAGE_H, `${name} ${f.id}`).toBe(true);
       expect(f.label, `${name} ${f.id}`).not.toBe('');
-      expect(['liniert7', 'blanko']).toContain(f.paper);
+      expect(['liniert7', 'liniert6', 'blanko']).toContain(f.paper);
     }
     for (let i = 0; i < l.fields.length; i++) {
       for (let j = i + 1; j < l.fields.length; j++) {
@@ -157,16 +161,28 @@ test('the week has seven day fields Monday to Sunday and one for goals and notes
     'woche',
   ]);
   expect(l.fields.slice(0, 7).map((f) => f.datum)).toEqual(l.fields.slice(0, 7).map((f) => f.id.slice(4)));
-  // Von oben nach unten, die Werktage höher als das Wochenende
+  // Von oben nach unten, alle sieben gleich hoch und gleich breit, jeder mit seiner Kopfzeile und vier Linien
   const days = l.fields.slice(0, 7);
   for (let i = 1; i < 7; i++) expect(days[i].rect[1]).toBeGreaterThanOrEqual(days[i - 1].rect[1] + days[i - 1].rect[3]);
-  expect(days[4].rect[3]).toBeGreaterThan(days[5].rect[3]);
-  expect(days[5].rect[3]).toBe(days[6].rect[3]);
+  expect(new Set(days.map((f) => f.rect[3])).size).toBe(1);
+  expect(new Set(days.map((f) => f.rect[2])).size).toBe(1);
   expect(new Set(days.map((f) => f.rect[0])).size).toBe(1);
-  // Die Zielspalte steht rechts daneben
+  const lines = linesIn(l.background());
+  for (const day of days) {
+    const [x, y, w, h] = day.rect;
+    const mine = lines.filter((ln) => ln.y > y && ln.y <= y + h && ln.x >= x && ln.x + ln.w <= x + w);
+    expect(mine, day.id).toHaveLength(4);
+    expect(mine[0].y - y, day.id).toBeGreaterThanOrEqual(80); // darüber die Kopfzeile mit Tageszahl und Wochentag
+  }
+  // Die Zielspalte steht rechts daneben, als ein Feld, genau wie bisher
   const goals = l.fields[7];
   expect(goals.rect[0]).toBeGreaterThanOrEqual(days[0].rect[0] + days[0].rect[2]);
+  expect(goals.rect).toEqual([684, 188, 392, 1344]);
   expect(goals.paper).toBe('liniert7');
+  expect(goals.label).toBe('Wochenziele und Notizen');
+  // Die Tage füllen ihre Spalte so hoch wie der Rahmen der Zielspalte: von 144 bis 1550
+  expect(days[0].rect[1]).toBe(144);
+  expect(days[6].rect[1] + days[6].rect[3]).toBe(1550);
 });
 
 test('a week over the new year has its days in both years', () => {
@@ -245,10 +261,8 @@ test('a meeting page without a valid date or topic still has a layout', () => {
   expect(besprechungLayout({ datum: '2026-10-29', zeit: '0800' }).key).toBe('2026-10-29 0800 Besprechung');
 });
 
-test('lined fields have lines every 7 mm and end on a line, blank fields have none', () => {
-  // Jede Linie steht als `M<x> <y>h<Breite>` im Hintergrund.
-  const linesIn = (bg: string) =>
-    [...bg.matchAll(/M([\d.]+) ([\d.]+)h([\d.]+)/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]), w: Number(m[3]) }));
+test('lined fields have lines every 7 mm (in the days of the week every 6 mm) and end on a line, blank fields have none', () => {
+  const spacing = { liniert7: 7 * MM, liniert6: 6 * MM };
   for (const l of [tagLayout('2026-10-29'), wocheLayout('2026-W44'), monatLayout('2026-10'), besprechungLayout(MEETING)]) {
     const lines = linesIn(l.background());
     for (const f of l.fields) {
@@ -259,9 +273,10 @@ test('lined fields have lines every 7 mm and end on a line, blank fields have no
         expect(mine, name).toEqual([]);
         continue;
       }
+      expect(f.paper, name).toBe(l.kind === 'woche' && f.id.startsWith('tag-') ? 'liniert6' : 'liniert7');
       expect(mine.length, name).toBeGreaterThan(1);
       const ys = mine.map((ln) => ln.y).sort((a, b) => a - b);
-      for (let i = 1; i < ys.length; i++) expect(ys[i] - ys[i - 1], name).toBe(7 * MM);
+      for (let i = 1; i < ys.length; i++) expect(ys[i] - ys[i - 1], name).toBe(spacing[f.paper]);
       expect(ys.at(-1), name).toBe(y + h); // das Feld hört auf einer Linie auf
       expect(new Set(mine.map((ln) => ln.x)).size, name).toBe(1); // alle Linien beginnen an derselben Stelle
     }
@@ -285,6 +300,9 @@ test('the background is well-formed SVG, covers the page with paper and names it
     expect(woche, name).toContain(name);
   }
   expect(woche).toContain('26. Oktober bis 1. November 2026');
+  // Die Tageszahl in der Kopfzeile eines Tages ist zweistellig, wie im Entwurf: „01 Sonntag“
+  expect(woche).toMatch(/>01<\/text><text [^>]*>Sonntag<\/text>/);
+  expect(woche).toMatch(/>26<\/text><text [^>]*>Montag<\/text>/);
   const monat = monatLayout('2026-10').background();
   expect(monat).toContain('Oktober 2026');
   for (const name of ['Montag', 'Sonntag', 'KW 40', 'KW 44']) expect(monat, name).toContain(name);
@@ -315,6 +333,10 @@ test('holidays are marked with the planner colours: text #a8674f on #f8efea', ()
   expect(fillAt(wocheBg, fieldRect(woche, 'tag-2026-10-26'))).toBe(HOLIDAY);
   expect(fillAt(wocheBg, fieldRect(woche, 'tag-2026-11-01'))).toBe(HOLIDAY);
   expect(fillAt(wocheBg, fieldRect(woche, 'tag-2026-10-28'))).toBe('none');
+  // Der Samstag ist kein Feiertag und hat den Ton des Wochenendes
+  const samstag = fillAt(wocheBg, fieldRect(woche, 'tag-2026-10-31'));
+  expect(samstag).not.toBe(HOLIDAY);
+  expect(samstag).not.toBe('none');
   expect(holidayText(wocheBg, 'Nationalfeiertag')).toBe(true);
   expect(holidayText(wocheBg, 'Allerheiligen')).toBe(true);
   // Eine Woche über den Jahreswechsel kennt die Feiertage beider Jahre

@@ -15,8 +15,11 @@ export type Rect = [x: number, y: number, w: number, h: number];
 export type Layout = {
   kind: PageKind;
   key: string;
-  /** Die Schreibfelder. Sie überlappen nicht, denn ein Strich gehört in das Feld, das seine Mitte enthält. */
-  fields: (FieldBox & { label: string; paper: 'liniert7' | 'blanko' })[];
+  /**
+   * Die Schreibfelder. Sie überlappen nicht, denn ein Strich gehört in das Feld, das seine Mitte enthält. `paper`: liniert
+   * im Abstand von 7 mm, liniert im Abstand von 6 mm (die Tage der Woche) oder ohne Linien.
+   */
+  fields: (FieldBox & { label: string; paper: 'liniert7' | 'liniert6' | 'blanko' })[];
   /** Plätze für Karten, die später aus Text bestehen (Morgenbriefing, Kalender, Besprechungen). */
   cards: { id: string; rect: Rect }[];
   /** Papier, Rahmen, Linien und Beschriftung als SVG-Text für `serializePage`. Beim Aufruf immer derselbe Text. */
@@ -82,10 +85,10 @@ const circle = (cx: number, cy: number, r: number, a: Attrs): string =>
 const text = (x: number, y: number, s: string, a: Attrs = {}): string =>
   `<text x="${num(x)}" y="${num(y)}"${attrs({ 'font-family': FONT, ...a })}>${escText(s)}</text>`;
 
-/** Linien im Abstand von 7 mm: `rows` Stück, die erste eine Zeile unter `y`, die letzte am Ende des Feldes. */
-function ruling(x: number, y: number, w: number, rows: number, color: string): string {
+/** Linien im Abstand `step` (sonst 7 mm): `rows` Stück, die erste eine Zeile unter `y`, die letzte am Ende des Feldes. */
+function ruling(x: number, y: number, w: number, rows: number, color: string, step = LINE): string {
   let d = '';
-  for (let i = 1; i <= rows; i++) d += `M${num(x)} ${num(y + i * LINE)}h${num(w)}`;
+  for (let i = 1; i <= rows; i++) d += `M${num(x)} ${num(y + i * step)}h${num(w)}`;
   return `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.2"/>`;
 }
 
@@ -196,23 +199,21 @@ export function tagLayout(d: Day): Layout {
 
 // ---------- Woche ----------
 
+// Links sieben gleich hohe Tage, jeder mit Kopfzeile und vier Linien im Abstand von 6 mm (7 mm passen siebenmal nicht auf
+// die Seite), rechts daneben ein Feld für Wochenziele und Notizen, so hoch wie die Tage zusammen.
 const WEEK_COLUMN = 600;
 const WEEK_GAP = 8;
-const WEEKDAY_ROWS = 4; // Werktage vier Zeilen, Samstag und Sonntag zwei
+const WEEK_ROWS = 4;
+const WEEK_LINE = 6 * MM;
+const WEEK_DAY = DAY_HEAD + WEEK_ROWS * WEEK_LINE;
 
 export function wocheLayout(weekKey: string): Layout {
   const days = weekDays(weekKey);
   const holiday = holidayLookup();
-  let y = TOP;
-  const sections = days.map((_, i): Rect => {
-    const h = DAY_HEAD + (i < 5 ? WEEKDAY_ROWS : 2) * LINE;
-    const r: Rect = [LEFT, y, WEEK_COLUMN, h];
-    y += h + WEEK_GAP;
-    return r;
-  });
-  const goals: Rect = [LEFT + WEEK_COLUMN + 24, TOP, WIDTH - WEEK_COLUMN - 24, y - WEEK_GAP - TOP];
+  const sections = days.map((_, i): Rect => [LEFT, TOP + i * (WEEK_DAY + WEEK_GAP), WEEK_COLUMN, WEEK_DAY]);
+  const goals: Rect = [LEFT + WEEK_COLUMN + 24, TOP, WIDTH - WEEK_COLUMN - 24, 7 * WEEK_DAY + 6 * WEEK_GAP];
   const fields: Layout['fields'] = [
-    ...days.map((day, i) => ({ id: `tag-${day}`, rect: sections[i], datum: day, label: `${WEEKDAYS[i]} ${dayNumber(day)}`, paper: 'liniert7' as const })),
+    ...days.map((day, i) => ({ id: `tag-${day}`, rect: sections[i], datum: day, label: `${WEEKDAYS[i]} ${dayNumber(day)}`, paper: 'liniert6' as const })),
     { id: 'woche', rect: fieldIn(goals), datum: days[0], label: 'Wochenziele und Notizen', paper: 'liniert7' as const },
   ];
   return {
@@ -225,17 +226,18 @@ export function wocheLayout(weekKey: string): Layout {
       const from = `${dayNumber(first)}. ${MONTHS[Number(first.slice(5, 7)) - 1]}${first.slice(0, 4) === last.slice(0, 4) ? '' : ` ${first.slice(0, 4)}`}`;
       const to = `${dayNumber(last)}. ${MONTHS[Number(last.slice(5, 7)) - 1]} ${last.slice(0, 4)}`;
       const sectionsSvg = days.map((day, i) => {
-        const [x, top, w, h] = sections[i];
+        const [x, top, w] = sections[i];
         const name = holiday(day);
         const tint = name ? COLOR.holidayFill : i >= 5 ? COLOR.soft : 'none';
         const ink = name ? COLOR.holiday : COLOR.text;
+        // Die Linie unter der Kopfzeile endet dort, wo die erste Zeile beginnt: alle vier Zeilen gleich hoch.
         return (
           (tint === 'none' ? '' : rect(sections[i], { rx: 12, fill: tint })) +
-          text(x + 14, top + 36, String(dayNumber(day)), { 'font-size': 28, 'font-weight': 700, fill: ink }) +
+          text(x + 14, top + 36, String(dayNumber(day)).padStart(2, '0'), { 'font-size': 28, 'font-weight': 700, fill: ink }) +
           text(x + 62, top + 36, WEEKDAYS[i], { 'font-size': 18, 'font-weight': 700, fill: ink }) +
           (name ? text(x + w - 14, top + 36, name, { 'font-size': 14, 'font-weight': 700, 'text-anchor': 'end', fill: COLOR.holiday }) : '') +
-          rect([x + INSET, top + 44, w - 2 * INSET, 1.5], { fill: name ? COLOR.holiday : COLOR.ring }) +
-          ruling(x + INSET, top + DAY_HEAD, w - 2 * INSET, (h - DAY_HEAD) / LINE, name ? COLOR.holidayLine : COLOR.line)
+          rect([x + INSET, top + DAY_HEAD - 1.5, w - 2 * INSET, 1.5], { fill: name ? COLOR.holiday : COLOR.ring }) +
+          ruling(x + INSET, top + DAY_HEAD, w - 2 * INSET, WEEK_ROWS, name ? COLOR.holidayLine : COLOR.line, WEEK_LINE)
         );
       });
       return (

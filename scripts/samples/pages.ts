@@ -40,6 +40,7 @@ function seeded<T>(seed: number, build: (rng: () => number) => T): T {
 }
 
 const LINE = 42; // Zeilenabstand: 7 mm bei 6 Einheiten je Millimeter
+const WEEK_LINE = 36; // Zeilenabstand in den Tagen der Woche: 6 mm
 
 // ---------- Schreiber ----------
 
@@ -236,7 +237,7 @@ function weekPage(): Built {
     const s = new Scribe(rng, Date.UTC(2026, 9, 26, 6, 10));
     const dayRow = (id: string, i: number): { x: number; y: number } => {
       const r = field(layout, id);
-      return { x: r[0] + 30, y: r[1] + 50 + (i + 1) * LINE - 9 };
+      return { x: r[0] + 30, y: r[1] + 50 + (i + 1) * WEEK_LINE - 8 };
     };
     const tue = dayRow('tag-2026-10-27', 0);
     s.text('Zahnarzt 15:00', tue.x, tue.y, 'schwarz', 2.2);
