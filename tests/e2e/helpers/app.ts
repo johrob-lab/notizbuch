@@ -102,6 +102,26 @@ function createRepo(extra: Record<string, string>): RepoMock & { files: Map<stri
 
   const contentsPrefix = `/repos/${REPO}/contents/`;
 
+  /** Die Einträge eines Ordners, so wie die Contents-API sie liefert (Name, Pfad, sha, Art). Leer, wenn es den Ordner nicht gibt. */
+  const folderEntries = (folder: string) => {
+    const prefix = `${folder}/`;
+    const entries = new Map<string, Record<string, string | number>>();
+    for (const [filePath, fileText] of files) {
+      if (!filePath.startsWith(prefix)) continue;
+      const rest = filePath.slice(prefix.length);
+      const slash = rest.indexOf('/');
+      const name = slash === -1 ? rest : rest.slice(0, slash);
+      if (entries.has(name)) continue;
+      entries.set(
+        name,
+        slash === -1
+          ? { type: 'file', name, path: filePath, sha: blobSha(fileText), size: Buffer.byteLength(fileText, 'utf8') }
+          : { type: 'dir', name, path: `${folder}/${name}`, sha: blobSha(`tree ${folder}/${name}`), size: 0 },
+      );
+    }
+    return [...entries.values()];
+  };
+
   const mock: ReturnType<typeof createRepo> = {
     files,
     puts,
@@ -133,7 +153,12 @@ function createRepo(extra: Record<string, string>): RepoMock & { files: Map<stri
         const text = files.get(path);
         if (method === 'GET') {
           if (mock.failReads) return json(route, 500, { message: 'Server Error' });
-          if (text === undefined) return json(route, 404, { message: 'Not Found' });
+          if (text === undefined) {
+            // Ein Ordner: GitHub liefert die Liste seiner Dateien und Unterordner. Einen leeren oder fehlenden Ordner gibt es nicht (404).
+            const entries = folderEntries(path);
+            if (entries.length > 0) return json(route, 200, entries);
+            return json(route, 404, { message: 'Not Found' });
+          }
           return json(route, 200, {
             type: 'file',
             path,

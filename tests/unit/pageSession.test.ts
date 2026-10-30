@@ -178,11 +178,18 @@ function fakeCues() {
   };
 }
 
-function open(
-  engine: ReturnType<typeof fakeEngine>,
-  surface: ReturnType<typeof fakeSurface>,
-  o: { readOnly?: boolean; path?: string; cues?: ReturnType<typeof fakeCues>; fields?: FieldBox[]; background?: string } = {},
-) {
+type OpenOptions = {
+  readOnly?: boolean;
+  path?: string;
+  cues?: ReturnType<typeof fakeCues>;
+  fields?: FieldBox[];
+  background?: string;
+  completePage?: (page: Page) => Page;
+  layoutFor?: (meta: Record<string, string>) => { fields: FieldBox[]; background: string };
+  headerWritable?: boolean;
+};
+
+function open(engine: ReturnType<typeof fakeEngine>, surface: ReturnType<typeof fakeSurface>, o: OpenOptions = {}) {
   const phases: Phase[] = [];
   const saveFailed: boolean[] = [];
   const session = new PageSession({
@@ -192,6 +199,9 @@ function open(
     readOnly: o.readOnly ?? false,
     fields: o.fields ?? FIELDS,
     background: o.background ?? BACKGROUND,
+    completePage: o.completePage,
+    layoutFor: o.layoutFor,
+    headerWritable: o.headerWritable,
     surface,
     retryCues: o.cues?.subscribe,
     onPhase: (p) => phases.push(p),
@@ -877,4 +887,176 @@ test('a session that is closed does not touch the page any more', async () => {
   await loading;
   expect(surface.sets).toEqual([]);
   expect(phases).toEqual([]);
+});
+
+// ---------- Kopfdaten (Besprechungen) ----------
+
+/** Eine Seite mit Kopfdaten: Das Thema steht in den Angaben der Seite, der Hintergrund zeigt es (siehe `headLayout`). */
+const withThema = (thema: string, ...strokes: Stroke[]): Page => ({ ...empty(), meta: { thema }, strokes });
+const headLayout = (meta: Record<string, string>) => ({ fields: FIELDS, background: `<rect id="kopf-${meta.thema ?? ''}"/>` });
+const completeThema = (page: Page): Page => ({ ...page, meta: { thema: 'Muster', ...page.meta } });
+
+test('a page without header data is shown completed, and the completed header is written with the next change, not before', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  const surface = fakeSurface();
+  const { session } = open(engine, surface, { completePage: completeThema });
+  await session.reload();
+  expect(surface.page.meta).toEqual({ thema: 'Muster' });
+  expect(engine.writes).toEqual([]); // Lesen allein schreibt nichts
+
+  engine.notify([PATH]);
+  await settle();
+  expect(surface.sets).toHaveLength(1); // dieselbe Seite, also bleibt der Verlauf für Rückgängig
+
+  session.changed({ ...surface.page, strokes: [...surface.page.strokes, stroke('b', 2000)] });
+  await settle();
+  expect(parsePage(engine.writes[0]).meta).toEqual({ thema: 'Muster' });
+});
+
+test('a page that is read keeps the header it has, and only what is missing is completed', async () => {
+  const engine = fakeEngine(serializePage(withThema('Eigenes', stroke('a', 1000)), FIELDS, BACKGROUND));
+  const surface = fakeSurface();
+  await open(engine, surface, { completePage: completeThema }).session.reload();
+  expect(surface.page.meta).toEqual({ thema: 'Eigenes' });
+});
+
+test('every write carries the fields and the background that belong to the header of the page it writes', async () => {
+  const engine = fakeEngine(null);
+  const surface = fakeSurface();
+  const { session } = open(engine, surface, { layoutFor: headLayout });
+  await session.reload();
+  session.changed(withThema('Eins', stroke('a', 1000)));
+  await settle();
+  expect(engine.writes[0]).toContain('<g data-hintergrund="1"><rect id="kopf-Eins"/></g>');
+
+  session.changed(withThema('Zwei', stroke('a', 1000)));
+  await settle();
+  const second = engine.writes[1];
+  expect(second).toContain('<rect id="kopf-Zwei"/>');
+  expect(second).not.toContain('kopf-Eins');
+  expect(parsePage(second).meta).toEqual({ thema: 'Zwei' });
+  expect(ids(second)).toEqual(['a']);
+});
+
+test('what was read and what is unsaved are united under the header of the page that is shown, so a header change is not undone', async () => {
+  const engine = fakeEngine(serializePage(withThema('Eins', stroke('a', 1000, 100)), FIELDS, '<rect id="kopf-Eins"/>'));
+  const surface = fakeSurface();
+  const { session } = open(engine, surface, { layoutFor: headLayout });
+  await session.reload();
+  engine.failWrites = 2;
+  surface.page = withThema('Zwei', stroke('a', 1000, 100), stroke('mine', 5000, 400)); // neuer Kopf und ein neuer Strich zugleich
+  session.changed(surface.page);
+  await settle();
+
+  // ein anderes Gerät hat 'b' ergänzt, mit dem alten Kopf
+  engine.text = serializePage(withThema('Eins', stroke('a', 1000, 100), stroke('b', 500, 200)), FIELDS, '<rect id="kopf-Eins"/>');
+  engine.notify([PATH]);
+  await settle();
+  const saved = engine.writes.at(-1)!;
+  expect(ids(saved).sort()).toEqual(['a', 'b', 'mine']);
+  expect(parsePage(saved).meta).toEqual({ thema: 'Zwei' });
+  expect(saved).toContain('<rect id="kopf-Zwei"/>');
+  expect(saved).not.toContain('kopf-Eins');
+  expect(surface.page.meta).toEqual({ thema: 'Zwei' });
+});
+
+test('on a device that only views, a change of the header is written, and the page stays locked', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  const surface = fakeSurface();
+  const { session } = open(engine, surface, { readOnly: true, headerWritable: true });
+  await session.reload();
+  expect(surface.readOnly).toBe(true);
+  session.changed(withThema('Neu', stroke('a', 1000)));
+  await settle();
+  expect(engine.writes).toHaveLength(1);
+  expect(parsePage(engine.writes[0]).meta).toEqual({ thema: 'Neu' });
+  expect(ids(engine.writes[0])).toEqual(['a']);
+  expect(surface.readOnly).toBe(true);
+});
+
+test('a header change before the page is read is not written, even where the header may be written', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  const surface = fakeSurface();
+  const { session } = open(engine, surface, { readOnly: true, headerWritable: true });
+  session.changed(withThema('Zu früh'));
+  await settle();
+  expect(engine.writes).toEqual([]);
+});
+
+// ---------- Löschen ----------
+
+test('a retired session writes nothing any more: no change, no save that failed before, nothing on closing', async () => {
+  const engine = fakeEngine(null);
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+  engine.failWrites = 1;
+  session.changed(pageOf(stroke('a', 1)));
+  await settle();
+  expect(engine.writes).toHaveLength(1); // gescheitert, der Text wartet auf einen neuen Versuch
+
+  await session.retire();
+  expect(surface.readOnly).toBe(true);
+  session.changed(pageOf(stroke('a', 1), stroke('b', 2)));
+  session.close();
+  await settle();
+  expect(engine.writes).toHaveLength(1);
+  expect(engine.text).toBeNull();
+  expect(engine.flushes).toBe(1); // beim Verlassen geht trotzdem hoch, was in der Warteschlange steht, auch das Löschen
+});
+
+test('retiring waits for the save that is running, and drops the change that waits behind it', async () => {
+  const engine = fakeEngine(null);
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+  const slow = engine.holdWrite();
+  session.changed(pageOf(stroke('a', 1)));
+  await slow.reached;
+  session.changed(pageOf(stroke('a', 1), stroke('b', 2))); // wartet hinter dem laufenden Auftrag
+
+  let retired = false;
+  const retiring = session.retire().then(() => {
+    retired = true;
+  });
+  await settle();
+  expect(retired).toBe(false); // der Auftrag läuft noch: Die Datei darf erst danach gelöscht werden
+  slow.release();
+  await retiring;
+  expect(retired).toBe(true);
+  await settle();
+  expect(engine.writes.map(ids)).toEqual([['a']]);
+});
+
+test('a retired session neither reads nor unlocks the page again', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  const surface = fakeSurface();
+  const { session, phases } = open(engine, surface);
+  await session.reload();
+  await session.retire();
+  const reads = engine.reads;
+  const shown = phases.length;
+
+  engine.notify([PATH]);
+  await session.reload();
+  await settle();
+  expect(engine.reads).toBe(reads);
+  expect(surface.readOnly).toBe(true);
+  expect(phases).toHaveLength(shown);
+});
+
+test('a read that is running when the page is retired does not unlock it', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  const surface = fakeSurface();
+  const { session } = open(engine, surface);
+  await session.reload();
+
+  const slow = engine.holdRead();
+  const reading = session.reload();
+  await slow.reached;
+  await session.retire();
+  slow.release();
+  await reading;
+  expect(surface.readOnly).toBe(true);
+  expect(surface.sets).toHaveLength(1); // nur das erste Anzeigen
 });

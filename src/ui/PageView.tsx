@@ -1,7 +1,8 @@
+import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { GestureFilter } from '../ink/gestures';
 import { InkSurface } from '../ink/surface';
-import type { InkColor, Page, WidthName } from '../ink/types';
+import type { FieldBox, InkColor, Page, WidthName } from '../ink/types';
 import { todayVienna } from '../lib/dates';
 import { tapTargetAt, tapTargets, todayMarks, type Layout } from '../pages/layouts';
 import type { SyncEngine } from '../sync/engine';
@@ -28,6 +29,33 @@ export type PageProps = {
   onQuickSwitchMove(pos: [number, number]): void;
 };
 
+/** Was das Formular über einer Seite mit Kopfdaten von der Seite bekommt. */
+export type KopfTools = {
+  /** Die Kopfdaten, wie sie jetzt gelten. */
+  meta: Record<string, string>;
+  /** Solange die Seite nicht gelesen ist (`bereit`), lässt sich der Kopf nicht ändern: Sonst entstünde neben einer Seite, die man noch nicht sieht, eine zweite. */
+  phase: Phase;
+  /**
+   * Ändert die genannten Kopfdaten: auf dem Bildschirm, im Hintergrund und in der Datei. Die Seite bleibt dieselbe, ihre
+   * Striche und ihr Verlauf für Rückgängig auch, ebenso ein Strich, der gerade entsteht.
+   */
+  edit(patch: Record<string, string>): void;
+  /** Die Seite, wie sie jetzt ist, mit allen Strichen und den neuesten Kopfdaten. */
+  current(): Page;
+  /** Die Seite wird gelöscht: Von ihr wird nichts mehr gespeichert. Endet, wenn kein Speichern mehr läuft. */
+  retire(): Promise<void>;
+};
+
+/** Eine Seite, deren Kopfdaten man ändern kann (die Besprechung): Sie bekommt ein Formular über der Fläche. */
+export type Kopf = {
+  /** Ergänzt eine Seite um das, was ihr fehlt: Kopfdaten aus dem Namen der Besprechung, den Schlüssel aus ihrem Dateinamen. */
+  complete(page: Page): Page;
+  /** Felder und Hintergrund zu bestimmten Kopfdaten: Der Hintergrund der Datei zeigt sie. */
+  layoutFor(meta: Record<string, string>): { fields: FieldBox[]; background: string };
+  /** Das Formular. */
+  form(tools: KopfTools): ComponentChildren;
+};
+
 type Props = PageProps & {
   /**
    * Felder und Hintergrund dieser Seite. Eine andere Seite ist ein neues `PageView` (die App setzt dafür den `key`):
@@ -36,6 +64,11 @@ type Props = PageProps & {
   layout: Layout;
   /** Pfad der Seitendatei im Vault. */
   path: string;
+  /**
+   * Nur für Seiten mit Kopfdaten. Das Formular darf bei jedem Zeichnen ein neues Objekt sein: Die Seite liest immer das
+   * neueste, öffnet sich deswegen aber nicht neu.
+   */
+  kopf?: Kopf;
 };
 
 const UNREADABLE = 'Diese Seite lässt sich nicht lesen und wird nicht verändert.';
@@ -46,9 +79,12 @@ type TestAccess = { currentPage(): Page; toClient(x: number, y: number): { x: nu
 const testAccessHolder = (): { __notizbuch?: TestAccess } => window as unknown as { __notizbuch?: TestAccess };
 
 export function PageView(p: Props) {
-  const { engine, layout, path, readOnly, sigma, prediction } = p;
+  const { engine, layout, path, readOnly, sigma, prediction, kopf } = p;
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<InkSurface | null>(null);
+  const sessionRef = useRef<PageSession | null>(null);
+  const kopfRef = useRef(kopf);
+  kopfRef.current = kopf;
   // Ein Tor gegen Handballen für Fläche und Schnellwechsel: Beide liegen dort, wo beim Schreiben die Hand ruht.
   const [palm] = useState(() => new GestureFilter());
   // Heute, solange die Seite offen ist: Die Markierung und `aria-current` sollen sich nicht mitten im Schreiben ändern.
@@ -60,14 +96,21 @@ export function PageView(p: Props) {
   const [width, setWidth] = useState<WidthName>('mittel');
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const [saveFailed, setSaveFailed] = useState(false);
+  const [kopfMeta, setKopfMeta] = useState<Record<string, string>>(() => kopf?.complete({ kind: layout.kind, key: layout.key, meta: {}, strokes: [] }).meta ?? {});
 
   useEffect(() => {
     const el = host.current;
     if (!el) return;
-    const emptyPage = (): Page => ({ kind: layout.kind, key: layout.key, meta: {}, strokes: [] });
-    // In die Datei kommt der Hintergrund der Seite, auf den Bildschirm dazu die Markierung für heute.
+    const head = kopfRef.current;
+    const emptyPage = (): Page => {
+      const page: Page = { kind: layout.kind, key: layout.key, meta: {}, strokes: [] };
+      return head ? head.complete(page) : page;
+    };
+    // In die Datei kommt der Hintergrund der Seite, auf den Bildschirm dazu die Markierung für heute. Eine Seite mit
+    // Kopfdaten zeigt sie im Hintergrund: Er gehört zu den Kopfdaten, die gerade gelten.
     const background = layout.background();
     const shown = background + todayMarks(layout, today);
+    const shownFor = (meta: Record<string, string>): string => (head ? head.layoutFor(meta).background : shown);
 
     const view: InkSurface = new InkSurface(el, {
       readOnly: true, // bis die Seite gelesen ist
@@ -84,7 +127,8 @@ export function PageView(p: Props) {
         if (hit) window.location.hash = routeHash({ view: 'tag', key: hit.day });
       },
     });
-    view.setPage(emptyPage(), layout.fields, shown);
+    const first = emptyPage();
+    view.setPage(first, layout.fields, shownFor(first.meta));
     view.setTool(tool);
     view.setColor(color);
     view.setWidth(width);
@@ -98,25 +142,32 @@ export function PageView(p: Props) {
       readOnly,
       fields: layout.fields,
       background,
+      completePage: head?.complete,
+      layoutFor: head?.layoutFor,
+      // Am Firmen-PC lässt sich der Kopf tippen, auch wo nicht geschrieben wird.
+      headerWritable: head !== undefined,
       surface: {
         getPage: () => view.getPage(),
-        setPage: (page) => view.setPage(page, layout.fields, shown),
+        setPage: (page) => view.setPage(page, layout.fields, shownFor(page.meta)),
         setReadOnly: (on) => view.setReadOnly(on),
       },
       retryCues,
       onPhase: (next) => {
         setHistory({ canUndo: view.canUndo, canRedo: view.canRedo });
         setPhase(next);
+        setKopfMeta(view.getPage().meta);
         testAccessHolder().__notizbuch = access;
       },
       onSaveFailed: setSaveFailed,
     });
+    sessionRef.current = session;
     setPhase('laden');
     void session.reload();
 
     return () => {
       if (testAccessHolder().__notizbuch === access) delete testAccessHolder().__notizbuch;
       surface.current = null;
+      sessionRef.current = null;
       view.finishInput(); // ein Strich, der gerade entsteht, gehört noch zur Seite
       session.close();
       view.destroy();
@@ -141,6 +192,25 @@ export function PageView(p: Props) {
 
   const canWrite = !readOnly && phase !== 'unlesbar' && phase !== 'nichtGeladen';
 
+  // Eine Änderung am Kopf ändert die Kopfdaten der Fläche an Ort und Stelle (dieselbe Seite, dieselben Striche) und geht
+  // dann wie ein Strich durch die Sitzung: mit allen Strichen, die die Fläche jetzt hat, und den neuen Kopfdaten.
+  const tools: KopfTools | undefined = kopf && {
+    meta: kopfMeta,
+    phase,
+    edit: (patch) => {
+      const view = surface.current;
+      const open = sessionRef.current;
+      if (!view || !open || phase !== 'bereit') return;
+      const now = view.getPage();
+      const meta = kopf.complete({ ...now, meta: { ...now.meta, ...patch } }).meta;
+      setKopfMeta(meta);
+      view.setHead(meta, kopf.layoutFor(meta).background);
+      open.changed(view.getPage());
+    },
+    current: () => surface.current?.getPage() ?? kopf.complete({ kind: layout.kind, key: layout.key, meta: {}, strokes: [] }),
+    retire: () => sessionRef.current?.retire() ?? Promise.resolve(),
+  };
+
   return (
     <div class="seite">
       {/* Nur ansehen heißt: keine Werkzeuge, also auch keine Leiste. Sonst bleibt sie stehen, damit die Seite nicht springt. */}
@@ -162,6 +232,7 @@ export function PageView(p: Props) {
           )}
         </div>
       )}
+      {kopf && tools && <div class="kopf">{kopf.form(tools)}</div>}
       <div class="buehne">
         <div class="flaeche" data-testid="surface" ref={host} />
         {/* Die Tageszahlen sind auf der Seite gezeichnet. Als Links sind sie auch mit der Tastatur und für Sprachausgabe da. */}

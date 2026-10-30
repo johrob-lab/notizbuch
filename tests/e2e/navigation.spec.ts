@@ -170,7 +170,7 @@ test('an address that is not a page opens today', async ({ page }) => {
   }
 });
 
-test('the settings and meeting addresses show a note and keep the bars', async ({ page }) => {
+test('the settings address shows a note and keeps the bars', async ({ page }) => {
   await openSeeded(page, DAY);
   await link(page, 'Einstellungen').click();
   await expect(page.getByText('Einstellungen folgen.')).toBeVisible();
@@ -182,10 +182,18 @@ test('the settings and meeting addresses show a note and keep the bars', async (
   await expect(button(page, 'Nächste Seite')).toHaveAttribute('aria-disabled', 'true');
   await link(page, 'Tag').click();
   await waitForPageOf(page, 'tag', TODAY);
+});
 
-  await go(page, `#/besprechung/${encodeURIComponent('2026-10-29 0800 Muster')}/1`);
-  await expect(page.getByText('Besprechungen folgen.')).toBeVisible();
-  await expect(page.locator('.reiter[aria-current="true"]')).toHaveText('OKT');
+test('a meeting address opens the meeting page, with the top bar and the month tabs of its day', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await go(page, `#/besprechung/${encodeURIComponent('2026-11-04 0800 Muster')}/1`);
+  await waitForPageOf(page, 'besprechung', '2026-11-04 0800 Muster');
+  await expect(page.getByTestId('surface')).toHaveCount(1);
+  await expect(page.getByTestId('status')).toHaveText('Gesichert');
+  await expect(page.locator('.reiter[aria-current="true"]')).toHaveText('NOV');
+  // Die Seiten einer Besprechung blättert die Seite selbst, nicht die Leiste oben.
+  await expect(button(page, 'Vorige Seite')).toHaveAttribute('aria-disabled', 'true');
+  await expect(button(page, 'Nächste Seite')).toHaveAttribute('aria-disabled', 'true');
 });
 
 // ---------- Monatsreiter ----------

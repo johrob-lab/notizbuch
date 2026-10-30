@@ -175,6 +175,16 @@ export class InkSurface {
     this.render();
   }
 
+  /**
+   * Ändert die Kopfdaten der Seite und mit ihnen den Hintergrund (bei Besprechungen zeigt er die Kopfdaten), ohne die Striche,
+   * den Verlauf für Rückgängig und die Ansicht anzutasten. Ein Strich im Gang bleibt. Gemeldet wird nichts: Wer die
+   * Kopfdaten ändert, sorgt selbst dafür, dass die Seite gespeichert wird, und liest sie dazu mit `getPage`.
+   */
+  setHead(meta: Record<string, string>, background: string): void {
+    this.head = { ...this.head, meta: { ...meta } };
+    this.setBackground(background, true);
+  }
+
   /** Die Seite, wie sie jetzt ist: eine Momentaufnahme, spätere Änderungen verändern sie nicht. */
   getPage(): Page {
     return { ...this.head, meta: { ...this.head.meta }, strokes: this.strokes.slice() };
@@ -372,11 +382,15 @@ export class InkSurface {
     ctx.stroke();
   }
 
-  /** Hintergrund als SVG-Bild, damit er bei jedem Zoom scharf bleibt. Gleicher Text: nichts neu laden. */
-  private setBackground(svg: string): void {
+  /**
+   * Hintergrund als SVG-Bild, damit er bei jedem Zoom scharf bleibt. Gleicher Text: nichts neu laden. Mit `keepOld` bleibt das
+   * bisherige Bild stehen, bis das neue geladen ist: Bei jeder Eingabe im Kopf einer Besprechung ändert sich der Hintergrund,
+   * und eine Zeichnung zwischendurch zeigte kurz leeres Papier.
+   */
+  private setBackground(svg: string, keepOld = false): void {
     if (svg === this.backgroundSvg) return;
     this.backgroundSvg = svg;
-    this.background = null;
+    if (!keepOld) this.background = null;
     if (!svg) return;
     const img = new Image();
     img.onload = () => {

@@ -36,6 +36,22 @@ type Options = {
   /** Felder und Hintergrund der Seite, so wie sie in die Datei geschrieben wird (siehe `serializePage`). Jede Seite hat ihre eigenen. */
   fields: FieldBox[];
   background: string;
+  /**
+   * Ergänzt eine Seite, die gelesen wurde, um das, was ihr fehlt (bei Besprechungen Kopfdaten, die eine ältere Datei nicht
+   * hat). Auf ihr Ergebnis angewendet, muss es dieselbe Seite ergeben. Gelesen wird dadurch nichts geschrieben: Die
+   * Ergänzung kommt mit der nächsten Änderung in die Datei.
+   */
+  completePage?: (page: Page) => Page;
+  /**
+   * Felder und Hintergrund passend zu den Kopfdaten einer Seite, für Seiten, deren Hintergrund ihre Kopfdaten zeigt. Jede
+   * Fassung, die geschrieben wird, bekommt die zu ihren eigenen Kopfdaten. Ohne diese Angabe gelten `fields` und `background`.
+   */
+  layoutFor?: (meta: Record<string, string>) => { fields: FieldBox[]; background: string };
+  /**
+   * Auch bei `readOnly` wird geschrieben, was über `changed` kommt: Kopfdaten lassen sich am Firmen-PC tippen. Die Fläche
+   * bleibt gesperrt, Striche kann es dort also nicht geben.
+   */
+  headerWritable?: boolean;
   surface: PageSurface;
   /**
    * Meldet `retry`, sobald ein neuer Versuch Sinn hat, eine Seite zu laden, die sich nicht laden ließ, und gibt die
@@ -70,6 +86,8 @@ export class PageSession {
   readonly #o: Options;
   readonly #stopListening: () => void;
   #closed = false;
+  /** Die Seite wird gelöscht: Von ihr wird nichts mehr geschrieben und nichts mehr gelesen. */
+  #retired = false;
   /** Bis die Seite gelesen ist, wird nicht geschrieben: Sonst entstünde neben einer Seite, die man noch nicht sieht, eine zweite. */
   #phase: Phase = 'laden';
   /** Zählt die Änderungen, die die Fläche meldet (Strich, Radieren, Rückgängig, Wiederholen). */
@@ -101,6 +119,7 @@ export class PageSession {
    * aus. Der Aufruf endet, wenn alles gelesen ist, und wirft nie.
    */
   reload(): Promise<void> {
+    if (this.#retired) return Promise.resolve();
     if (this.#reloading) {
       this.#again = true;
       return this.#reloading;
@@ -110,7 +129,7 @@ export class PageSession {
         do {
           this.#again = false;
           await this.#readAndShow();
-        } while (this.#again && !this.#closed);
+        } while (this.#again && !this.#stopped());
       } finally {
         this.#reloading = null;
       }
@@ -132,8 +151,26 @@ export class PageSession {
     })().catch(() => undefined);
   }
 
+  /**
+   * Die Seite wird gelöscht. Von jetzt an schreibt die Sitzung nichts mehr, auch nicht, was noch auf einen neuen Versuch
+   * wartete, und sie liest nicht mehr. Der Aufruf endet, wenn kein Schreibauftrag mehr läuft: Erst danach darf die Datei
+   * gelöscht werden, sonst legte ihn der laufende Auftrag wieder an. Die Fläche bleibt gesperrt.
+   */
+  async retire(): Promise<void> {
+    this.#retired = true;
+    this.#next = null;
+    this.#o.surface.setReadOnly(true);
+    await this.#idle();
+  }
+
+  /** Die Sitzung hat nichts mehr mit der Seite zu tun: Sie ist geschlossen oder die Seite wird gelöscht. */
+  #stopped(): boolean {
+    return this.#closed || this.#retired;
+  }
+
   #writable(): boolean {
-    return !this.#o.readOnly && this.#phase === 'bereit';
+    if (this.#retired || this.#phase !== 'bereit') return false;
+    return !this.#o.readOnly || this.#o.headerWritable === true;
   }
 
   // ---------- Speichern ----------
@@ -143,7 +180,8 @@ export class PageSession {
 
   /** Der Text der Datei: Felder und Hintergrund der Seite sind bei jedem Schreiben dabei, auch beim Zusammenführen. */
   #serialize(page: Page): string {
-    return serializePage(page, this.#o.fields, this.#o.background);
+    const { fields, background } = this.#o.layoutFor?.(page.meta) ?? this.#o;
+    return serializePage(page, fields, background);
   }
 
   #save(page: Page): void {
@@ -194,7 +232,7 @@ export class PageSession {
   // währenddessen geschrieben, bleiben beide Fassungen erhalten (alle Striche beider, wie beim Abgleich).
 
   async #readAndShow(): Promise<void> {
-    if (this.#closed) return;
+    if (this.#stopped()) return;
     const seen = this.#version;
     if (this.#next !== null) void this.#startWriting(); // ein Text, der nicht gespeichert werden konnte
     await this.#idle(); // alles, was schon geschrieben wurde, steht dann in der Engine
@@ -207,7 +245,7 @@ export class PageSession {
       this.#lock('nichtGeladen');
       return;
     }
-    if (this.#closed) return;
+    if (this.#stopped()) return;
     let page: Page;
     let united = false;
     try {
@@ -219,6 +257,7 @@ export class PageSession {
           united = true;
         }
       }
+      if (this.#o.completePage) page = this.#o.completePage(page);
     } catch {
       this.#lock('unlesbar');
       return;
@@ -239,7 +278,7 @@ export class PageSession {
    * versucht, sobald es Sinn hat.
    */
   #lock(phase: 'unlesbar' | 'nichtGeladen'): void {
-    if (this.#closed) return;
+    if (this.#stopped()) return;
     this.#phase = phase;
     this.#o.surface.setReadOnly(true);
     if (phase === 'nichtGeladen') this.#waitForCue();

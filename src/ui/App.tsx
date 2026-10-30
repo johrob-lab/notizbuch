@@ -5,6 +5,7 @@ import { loadSettings, saveSettings, type Settings } from '../lib/settings';
 import { SyncEngine } from '../sync/engine';
 import { GitHubClient } from '../sync/github';
 import { openStore, type Store } from '../sync/store';
+import { BesprechungPage, type ListDir } from './BesprechungPage';
 import { MonatPage } from './MonatPage';
 import { MonthTabs } from './MonthTabs';
 import type { PageProps } from './PageView';
@@ -18,7 +19,7 @@ type Boot =
   | { phase: 'laden' }
   | { phase: 'einrichten' }
   | { phase: 'fehler' }
-  | { phase: 'bereit'; store: Store; engine: SyncEngine; settings: Settings };
+  | { phase: 'bereit'; store: Store; engine: SyncEngine; settings: Settings; listDir: ListDir };
 
 function useHash(): string {
   const [hash, setHash] = useState(window.location.hash);
@@ -39,7 +40,7 @@ function Platzhalter({ text }: { text: string }) {
   );
 }
 
-function Seite({ route, ...page }: { route: Route } & PageProps) {
+function Seite({ route, listDir, ...page }: { route: Route; listDir: ListDir } & PageProps) {
   switch (route.view) {
     case 'tag':
       return <TagPage day={route.key} {...page} />;
@@ -48,7 +49,7 @@ function Seite({ route, ...page }: { route: Route } & PageProps) {
     case 'monat':
       return <MonatPage month={route.key} {...page} />;
     case 'besprechung':
-      return <Platzhalter text="Besprechungen folgen." />;
+      return <BesprechungPage base={route.key} n={route.n ?? 1} listDir={listDir} {...page} />;
     case 'einstellungen':
       return <Platzhalter text="Einstellungen folgen." />;
   }
@@ -75,13 +76,11 @@ export function App() {
           setBoot({ phase: 'einrichten' });
           return;
         }
-        engine = new SyncEngine({
-          client: new GitHubClient({ token: settings.token, repo: settings.repo }),
-          store,
-          device: settings.device,
-        });
+        const client = new GitHubClient({ token: settings.token, repo: settings.repo });
+        engine = new SyncEngine({ client, store, device: settings.device });
         await engine.start();
-        if (!stopped) setBoot({ phase: 'bereit', store, engine, settings });
+        // Die Dateilisten (Projekte, Seiten einer Besprechung) holt die Oberfläche selbst: Sie gehören nicht zum Abgleich.
+        if (!stopped) setBoot({ phase: 'bereit', store, engine, settings, listDir: (folder) => client.listDir(folder) });
       } catch {
         if (!stopped) setBoot({ phase: 'fehler' });
       }
@@ -118,6 +117,7 @@ export function App() {
             <Seite
               key={routeHash(route)}
               route={route}
+              listDir={boot.listDir}
               engine={boot.engine}
               readOnly={boot.settings.device === 'Firmen-PC'}
               sigma={SMOOTHING[boot.settings.smoothing] ?? SMOOTHING.mittel}

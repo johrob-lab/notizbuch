@@ -68,6 +68,92 @@ body {
   min-width: 0;
 }
 
+/*
+ * Der Kopf einer Besprechung unter der Leiste mit den Werkzeugen: Thema, Datum, Zeit, Ort, Projekt und die Seiten. Rechts
+ * bleibt der Streifen der Monatsreiter frei, sonst lägen Felder unter ihnen und ein Tipp träfe den Reiter.
+ */
+.kopf {
+  touch-action: manipulation;
+  padding: 8px max(56px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  background: var(--leiste);
+  border-bottom: 1px solid var(--linie);
+}
+
+.kopfdaten {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px 12px;
+}
+
+.feld {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.feld.thema {
+  flex: 2 1 240px;
+}
+
+.feld.ort {
+  flex: 1 1 140px;
+}
+
+.feld label {
+  font-size: 12px;
+  color: #4a5160;
+}
+
+/* 16 Punkte und mehr: Darunter zoomt Safari beim Antippen in die Seite. Der Text lässt sich markieren, auch wenn die App es sonst sperrt. */
+.feld input,
+.feld select {
+  box-sizing: border-box;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--linie);
+  border-radius: 10px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.feld input:disabled,
+.feld select:disabled {
+  opacity: 0.6;
+}
+
+.feld input:focus-visible,
+.feld select:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 1px;
+}
+
+.seitenleiste {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.seitenzahl {
+  font-size: 15px;
+  color: #4a5160;
+  white-space: nowrap;
+}
+
+.kopfhinweis {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 14px;
+  color: #a32a24;
+}
+
 .grp {
   display: flex;
   gap: 2px;
@@ -450,4 +536,64 @@ body {
 
 .schnellwechsel[data-tool='eraser'] {
   background: #7a3b36;
+}
+
+/* Knöpfe außerhalb der Leisten (Kopf der Besprechung, Rückfrage): mit Finger, Stift und Maus gleich zu treffen. */
+.knopf {
+  box-sizing: border-box;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--linie);
+  border-radius: 22px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.knopf:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.knopf:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+.knopf.gefahr {
+  border-color: #a32a24;
+  background: #a32a24;
+  color: #fff;
+}
+
+/* Die Rückfrage der App (Dialog.tsx): mitten auf dem Bildschirm, dahinter nichts zu treffen. */
+.rueckfrage {
+  box-sizing: border-box;
+  width: min(360px, calc(100% - 32px));
+  padding: 20px;
+  border: 1px solid var(--linie);
+  border-radius: 14px;
+  background: var(--leiste);
+  color: inherit;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.3);
+}
+
+.rueckfrage::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+
+.rueckfrage-text {
+  margin: 0 0 16px;
+  font-size: 18px;
+}
+
+.rueckfrage-knoepfe {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
 }
