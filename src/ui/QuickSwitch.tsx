@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { TAP_SLOP_PX, type GestureFilter } from '../ink/gestures';
-import { Icon } from './Toolbar';
+import { Icon, type IconName } from './Toolbar';
 import type { Tool } from './toolChoices';
 
 /** Durchmesser des Knopfs und Abstand zum Rand der Bühne, in Bildschirmpunkten. */
@@ -29,6 +29,11 @@ type Props = {
    * nichts, und die Tastatur wechselt.
    */
   onOpen?(): void;
+  /**
+   * Was der Knopf statt des Werkzeugs zeigt, Symbol und Name (das Rad, wenn es kein Werkzeug zu wechseln gibt). Dann zeigt er weder
+   * das Werkzeug noch dessen Farbe, und `aria-label` und `title` sind der Name.
+   */
+  face?: { icon: IconName; label: string };
 };
 
 type Drag = {
@@ -57,7 +62,7 @@ const inside = (e: PointerEvent, box: DOMRect) => e.clientX >= box.left && e.cli
  * Die Maus bleibt außen vor: Sie schreibt nicht, also wechselt sie auch kein Werkzeug. Mit `onOpen` (das Rad im Vollbild)
  * öffnen der gehaltene Stift, ein Fingertipp, ein Mausklick und die Tastatur die Werkzeuge; Fingertipps gehen durch dasselbe Tor.
  */
-export function QuickSwitch({ tool, partial, pos, filter, onToggle, onMove, onOpen }: Props) {
+export function QuickSwitch({ tool, partial, pos, filter, onToggle, onMove, onOpen, face }: Props) {
   const drag = useRef<Drag | null>(null);
   const moving = useRef<[number, number] | null>(null);
   const hold = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -186,13 +191,15 @@ export function QuickSwitch({ tool, partial, pos, filter, onToggle, onMove, onOp
       type="button"
       class="schnellwechsel"
       data-testid="quick-switch"
-      data-tool={tool}
-      data-modus={tool === 'eraser' && partial ? 'stueck' : undefined}
-      aria-label="Werkzeug wechseln"
+      data-tool={face ? undefined : tool}
+      data-modus={!face && tool === 'eraser' && partial ? 'stueck' : undefined}
+      aria-label={face ? face.label : 'Werkzeug wechseln'}
       title={
-        onOpen
-          ? 'Mit dem Stift antippen: Kugelschreiber oder Radierer. Stift halten oder mit dem Finger antippen: alle Werkzeuge. Mit dem Finger verschieben.'
-          : 'Mit dem Stift antippen: Kugelschreiber oder Radierer. Mit dem Finger verschieben.'
+        face
+          ? face.label
+          : onOpen
+            ? 'Mit dem Stift antippen: Kugelschreiber oder Radierer. Stift halten oder mit dem Finger antippen: alle Werkzeuge. Mit dem Finger verschieben.'
+            : 'Mit dem Stift antippen: Kugelschreiber oder Radierer. Mit dem Finger verschieben.'
       }
       style={{
         left: `calc(${INSET}px + ${fx} * (100% - ${free}px))`,
@@ -208,7 +215,7 @@ export function QuickSwitch({ tool, partial, pos, filter, onToggle, onMove, onOp
         if (e.detail === 0) (onOpen ?? onToggle)();
       }}
     >
-      <Icon name={tool === 'eraser' ? 'eraser' : 'pen'} />
+      <Icon name={face ? face.icon : tool === 'eraser' ? 'eraser' : 'pen'} />
     </button>
   );
 }

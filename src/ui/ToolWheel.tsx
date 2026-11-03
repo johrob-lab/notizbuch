@@ -4,14 +4,21 @@ import { QuickSwitch } from './QuickSwitch';
 import type { Pt } from './ringLayout';
 import type { ActionButton, ToolAction } from './toolActions';
 import type { Tool } from './toolChoices';
+import type { IconName } from './Toolbar';
 import { ToolRing } from './ToolRing';
+
+/** Gibt es kein Werkzeug zu wechseln, zeigt das Rad keines: drei Punkte, und es heißt nach dem, was der Ring dann bietet. */
+const NEUTRAL: { icon: IconName; label: string } = { icon: 'menu', label: 'Blättern und Ansicht' };
 
 type Props = {
   tool: Tool;
   partial: boolean;
   pos?: [number, number];
   filter: GestureFilter;
-  /** Ohne Schreiben (Firmen-PC, Seite nicht lesbar, Fenster liest nur) öffnet auch der Stifttipp den Ring: Es gibt nichts zu wechseln. */
+  /**
+   * Ohne Schreiben (Firmen-PC, Seite nicht lesbar, Fenster liest nur) gibt es nichts zu wechseln: Auch der Stifttipp öffnet den Ring,
+   * und das Rad zeigt drei Punkte und heißt „Blättern und Ansicht“.
+   */
   canWrite: boolean;
   actions: { inner: ActionButton[]; outer: ActionButton[] };
   onToggle(): void;
@@ -47,6 +54,7 @@ export function ToolWheel(p: Props) {
         onToggle={p.canWrite ? p.onToggle : open}
         onMove={p.onMove}
         onOpen={open}
+        face={p.canWrite ? undefined : NEUTRAL}
       />
       {ring && (
         <ToolRing anchor={ring.anchor} area={ring.area} actions={p.actions} filter={p.filter} onAction={p.onAction} onClose={() => setRing(null)} />

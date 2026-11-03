@@ -225,6 +225,7 @@ test('the tools for fullscreen can be chosen in the settings', async ({ page }) 
 test('a pen tap on the wheel switches pen and eraser', async ({ page }) => {
   await openSeeded(page, DAY, { settings: ON });
   const wheel = page.getByTestId('quick-switch');
+  await expect(wheel).toHaveAttribute('aria-label', 'Werkzeug wechseln');
   await expect(wheel).toHaveAttribute('data-tool', 'pen');
   await pen(page).tapOn(QUICK);
   await expect(wheel).toHaveAttribute('data-tool', 'eraser');
@@ -323,6 +324,11 @@ test('the ring stays on the screen when the wheel sits in a corner', async ({ pa
 test('next and today in the ring change the page', async ({ page }) => {
   await openSeeded(page, DAY, { settings: ON });
   await touch(page).tapOn(QUICK);
+  await expect(ring(page).first()).toBeVisible();
+  // Unten im Ring liest man ‹ Heute › von links nach rechts.
+  const back = (await page.locator(im('Voriger Tag')).boundingBox())!;
+  const forward = (await page.locator(im('Nächster Tag')).boundingBox())!;
+  expect(back.x + back.width).toBeLessThanOrEqual(forward.x);
   await tapTop(page, 'touch', im('Nächster Tag'));
   await waitForPageOf(page, '2026-10-30');
   await expect(page).toHaveURL(/#\/tag\/2026-10-30$/);
@@ -356,7 +362,12 @@ test('Vollbild aus in the ring brings the bars back', async ({ page }) => {
 
 test('on the office PC the ring only has paging and Vollbild aus', async ({ page }) => {
   await openSeeded(page, DAY, { device: 'Firmen-PC', settings: ON });
-  await page.getByTestId('quick-switch').click();
+  // Das Rad wechselt hier kein Werkzeug: Es heißt nach dem, was es bietet.
+  const wheel = page.getByTestId('quick-switch');
+  await expect(wheel).toHaveAttribute('aria-label', 'Blättern und Ansicht');
+  await expect(wheel).toHaveAttribute('title', 'Blättern und Ansicht');
+  await expect(wheel).not.toHaveAttribute('data-tool');
+  await wheel.click();
   await expect(ring(page).first()).toBeVisible();
   expect(await ringLabels(page)).toEqual(ONLY_VIEW);
   await expect(page.locator(im('Kugelschreiber'))).toHaveCount(0);
@@ -435,6 +446,7 @@ test('a stroke that ends on the wheel opens nothing', async ({ page }) => {
 test('an unreadable page still lets you leave fullscreen', async ({ page }) => {
   await openSeeded(page, DAY, { settings: ON, files: { [TAG]: BROKEN } });
   await expect(page.getByText(UNREADABLE)).toBeVisible();
+  await expect(page.getByTestId('quick-switch')).toHaveAttribute('aria-label', 'Blättern und Ansicht');
   await pen(page).tapOn(QUICK); // ohne Schreiben öffnet auch der Stifttipp den Ring
   await expect(ring(page).first()).toBeVisible();
   expect(await ringLabels(page)).toEqual(ONLY_VIEW);

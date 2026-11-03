@@ -1,4 +1,5 @@
-// Wo die Knöpfe des Rings sitzen: zwei Kreise um die Mitte, der erste Knopf jedes Kreises genau darüber, dann im Uhrzeigersinn.
+// Wo die Knöpfe des Rings sitzen: zwei Kreise um die Mitte, der erste Knopf jedes Kreises genau darüber, dann gegen den
+// Uhrzeigersinn. So liest man unten im Ring ‹ Heute › von links nach rechts (bei den Knöpfen aus `toolActions` in ihrer Reihenfolge).
 
 export const RING = { inner: 62, outer: 118, item: 44, margin: 8 };
 
@@ -13,7 +14,7 @@ function clampAxis(v: number, size: number, reach: number): number {
 
 function circle(center: Pt, radius: number, n: number): Pt[] {
   return Array.from({ length: n }, (_, i) => {
-    const angle = (-90 + (i * 360) / n) * (Math.PI / 180);
+    const angle = (-90 - (i * 360) / n) * (Math.PI / 180);
     return { x: center.x + radius * Math.cos(angle), y: center.y + radius * Math.sin(angle) };
   });
 }

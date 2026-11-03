@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { GestureFilter, TAP_SLOP_PX } from '../../src/ink/gestures';
 import { HOLD_MS, QuickSwitch } from '../../src/ui/QuickSwitch';
 import type { Tool } from '../../src/ui/toolChoices';
+import { ICONS } from '../../src/ui/Toolbar';
 
 // Der Schnellwechsel teilt das Tor gegen Handballen mit der Schreibfläche: Er nimmt keine Hand an, solange der Stift
 // aufliegt, und der Stift auf ihm eröffnet die Pause für die Seite. Die Zeit der Ereignisse gibt der Test vor.
@@ -23,13 +24,14 @@ function rect(left: number, top: number, width: number, height: number): DOMRect
   return { left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) } as DOMRect;
 }
 
-/** Mit `open` bekommt der Knopf `onOpen`, wie das Rad im Vollbild. */
-function mount(tool: Tool = 'pen', o: { open?: boolean } = {}) {
+/** Mit `open` bekommt der Knopf `onOpen`, wie das Rad im Vollbild, mit `face` ein anderes Gesicht als das Werkzeug. */
+function mount(tool: Tool = 'pen', o: { open?: boolean; partial?: boolean; face?: { icon: 'menu'; label: string } } = {}) {
   host = document.createElement('div');
   document.body.append(host);
   render(
     h(QuickSwitch, {
       tool,
+      partial: o.partial,
       filter,
       onToggle: () => {
         toggles++;
@@ -42,6 +44,7 @@ function mount(tool: Tool = 'pen', o: { open?: boolean } = {}) {
             opens++;
           }
         : undefined,
+      face: o.face,
     }),
     host,
   );
@@ -271,6 +274,18 @@ test('the keyboard toggles through a click without a pointer, a click that follo
 test('it shows the tool that is in use', () => {
   mount('eraser');
   expect(button.dataset.tool).toBe('eraser');
+  expect(button.getAttribute('aria-label')).toBe('Werkzeug wechseln');
+  expect(button.querySelector('path')!.getAttribute('d')).toBe(ICONS.eraser);
+});
+
+test('with a face it shows that icon and name instead of the tool, and nothing of the tool', () => {
+  mount('eraser', { open: true, partial: true, face: { icon: 'menu', label: 'Blättern und Ansicht' } });
+  expect(button.getAttribute('aria-label')).toBe('Blättern und Ansicht');
+  expect(button.title).toBe('Blättern und Ansicht');
+  expect(ICONS.menu).toBeTruthy();
+  expect(button.querySelector('path')!.getAttribute('d')).toBe(ICONS.menu);
+  expect(button.dataset.tool).toBeUndefined();
+  expect(button.dataset.modus).toBeUndefined();
 });
 
 test('without onOpen a pen that stays long on the button still toggles when it lifts', () => {
