@@ -120,7 +120,7 @@ export function PageView(p: Props) {
   const days = useMemo(() => tapTargets(layout), [layout]);
   const [phase, setPhase] = useState<Phase>('laden');
   // Die Werkzeugwahl gilt für alle Seiten (siehe `inkPrefs`): Wer radiert und weiterblättert, radiert weiter.
-  const { tool, color, width } = inkPrefs.value;
+  const { tool, color, width, eraserSize, eraserMode } = inkPrefs.value;
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const [saveFailed, setSaveFailed] = useState(false);
   const [meterText, setMeterText] = useState('');
@@ -168,6 +168,7 @@ export function PageView(p: Props) {
       view.setTool(chosen.tool);
       view.setColor(chosen.color);
       view.setWidth(chosen.width);
+      view.setEraser(chosen.eraserSize, chosen.eraserMode);
     });
     surface.current = view;
 
@@ -263,7 +264,11 @@ export function PageView(p: Props) {
               width={width}
               canUndo={history.canUndo}
               canRedo={history.canRedo}
+              eraserSize={eraserSize}
+              eraserMode={eraserMode}
               onTool={chooseTool}
+              onEraserSize={(size) => setInkPrefs({ eraserSize: size, tool: 'eraser' })}
+              onEraserMode={(mode) => setInkPrefs({ eraserMode: mode, tool: 'eraser' })}
               onColor={chooseColor}
               onWidth={chooseWidth}
               onUndo={() => surface.current?.undo()}
@@ -330,6 +335,7 @@ export function PageView(p: Props) {
         {canWrite && (
           <QuickSwitch
             tool={tool}
+            partial={eraserMode === 'stueck'}
             pos={p.quickSwitchPos}
             filter={palm}
             onToggle={() => chooseTool(tool === 'pen' ? 'eraser' : 'pen')}

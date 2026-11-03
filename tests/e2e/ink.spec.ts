@@ -93,7 +93,11 @@ test('toolbar sets color and width', async ({ page }) => {
   await expect.poll(() => strokeCount(page)).toBe(1);
   expect((await currentStrokes(page))[0]).toMatchObject({ color: 'rot', widthMm: 0.4 });
 
+  // Beim Radierer stehen statt Farben und Breiten seine Größen und Arten da. Zurück beim Stift sind die Farben wieder da.
   await button(page, 'Radierer').click();
+  await expect(button(page, 'Blau')).toHaveCount(0);
+  await expect(button(page, 'Radierer mittel')).toHaveAttribute('aria-pressed', 'true');
+  await button(page, 'Kugelschreiber').click();
   await button(page, 'Blau').click();
   await expect(button(page, 'Kugelschreiber')).toHaveAttribute('aria-pressed', 'true');
   await expect(button(page, 'Radierer')).toHaveAttribute('aria-pressed', 'false');
@@ -803,17 +807,72 @@ test('tool survives page change and reload', async ({ page }) => {
   await button(page, 'Rot (offen)').click();
   await button(page, 'Breit (0,4 mm)').click();
   await button(page, 'Radierer').click();
-  const chosen = async () => ({
+  await button(page, 'Radierer groß').click();
+  await button(page, 'Nur Stück').click();
+  const eraser = async () => ({
     eraser: await button(page, 'Radierer').getAttribute('aria-pressed'),
+    size: await button(page, 'Radierer groß').getAttribute('aria-pressed'),
+    mode: await button(page, 'Nur Stück').getAttribute('aria-pressed'),
+  });
+  const ink = async () => ({
     red: await button(page, 'Rot (offen)').getAttribute('aria-pressed'),
     wide: await button(page, 'Breit (0,4 mm)').getAttribute('aria-pressed'),
   });
   await page.goto(`/notizbuch/${NEXT_DAY}`);
-  await expect.poll(chosen).toEqual({ eraser: 'true', red: 'true', wide: 'true' });
+  await expect.poll(eraser).toEqual({ eraser: 'true', size: 'true', mode: 'true' });
   await page.waitForTimeout(600); // gespeichert wird 500 ms nach der letzten Wahl
   await page.reload();
-  await expect.poll(chosen).toEqual({ eraser: 'true', red: 'true', wide: 'true' });
+  await expect.poll(eraser).toEqual({ eraser: 'true', size: 'true', mode: 'true' });
   await pen(page).stroke(LINE);
   await page.waitForTimeout(100);
   expect(await strokeCount(page)).toBe(0); // der Radierer schreibt nicht
+  await button(page, 'Kugelschreiber').click();
+  await expect.poll(ink).toEqual({ red: 'true', wide: 'true' });
+});
+
+test('eraser sizes change the hit area', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await pen(page).stroke([
+    [200, 1000],
+    [320, 1000],
+  ]);
+  const { scale } = await viewOf(page);
+  const off = 8 / scale; // 8 Bildschirmpunkte neben dem Strich
+  await button(page, 'Radierer').click();
+  await button(page, 'Radierer klein').click();
+  await pen(page).stroke([
+    [150, 1000 + off],
+    [370, 1000 + off],
+  ]);
+  expect(await strokeCount(page)).toBe(1);
+  await button(page, 'Radierer groß').click();
+  await pen(page).stroke([
+    [150, 1000 + off],
+    [370, 1000 + off],
+  ]);
+  expect(await strokeCount(page)).toBe(0);
+});
+
+test('partial eraser leaves two pieces', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await pen(page).stroke([
+    [200, 1000],
+    [320, 1000],
+  ]);
+  const [orig] = await strokeIds(page);
+  await button(page, 'Radierer').click();
+  await button(page, 'Nur Stück').click();
+  await pen(page).stroke([
+    [260, 960],
+    [260, 1040],
+  ]);
+  const after = await currentStrokes(page);
+  expect(after).toHaveLength(2);
+  expect(after.map((s) => s.id)).not.toContain(orig);
+  expect(Math.max(...after[0].pts.map((q) => q.x))).toBeLessThan(260);
+  expect(Math.min(...after[1].pts.map((q) => q.x))).toBeGreaterThan(260);
+  await button(page, 'Rückgängig').click();
+  expect(await strokeIds(page)).toEqual([orig]);
+  await button(page, 'Wiederholen').click();
+  expect(await strokeCount(page)).toBe(2);
 });

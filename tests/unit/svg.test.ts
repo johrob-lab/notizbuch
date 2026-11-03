@@ -687,3 +687,15 @@ test('mergePages reads the base strictly only when it needs it: an unreadable pa
   expect(() => mergePages('kaputt', meetingSvg({}, 'a'), base)).toThrow(/SVG/);
   expect(() => mergePages(meetingSvg({}, 'a'), 'kaputt', base)).toThrow(/SVG/);
 });
+
+test('merge after partial erase keeps the cut', async () => {
+  const { cutStroke } = await import('../../src/ink/erase');
+  const whole: Stroke = { id: 'a', tool: 'kugel', color: 'schwarz', widthMm: 0.2, t: 1, w: 1.2, pts: [{ x: 100, y: 300, w: 1.2 }, { x: 400, y: 300, w: 1.2 }] };
+  let n = 0;
+  const pieces = cutStroke(whole, { x: 250, y: 300 }, 5, () => `p${++n}`)!;
+  const base = serializePage(tagPage([whole]), FIELDS, '');
+  const ours = serializePage(tagPage(pieces), FIELDS, '');
+  const merged = parsePage(mergePages(ours, base, base)).strokes.map((s) => s.id);
+  expect(merged).not.toContain('a');
+  expect(merged.sort()).toEqual(['p1', 'p2']);
+});

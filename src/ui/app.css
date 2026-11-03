@@ -1480,3 +1480,20 @@ body {
   border-radius: 4px;
   pointer-events: none;
 }
+
+/* Radiergröße: Kreise statt Punkte, Radierart als kurze Wörter. */
+.tb .ring {
+  display: inline-block;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.tb.text {
+  width: auto;
+  padding: 0 10px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.schnellwechsel[data-modus='stueck'] {
+  outline: 2px dashed currentColor;
+  outline-offset: -6px;
+}

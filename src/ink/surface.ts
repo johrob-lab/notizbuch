@@ -1,11 +1,12 @@
 import { boundsOf, emptyBox, growBox, lineWidth, type Box } from './bounds';
-import { hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
+import { cutStroke, ERASER_PX, ERASER_STEP_PX, hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
 import { clampView, GestureFilter, gestureView, isFingerTap, isTwoFingerTap, SIDE_MARGIN_PX, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
 import { History, restore, type Removed } from './history';
 import { fixedSegments, tailStart } from './live';
 import { InkMeter } from './meter';
 import { extrapolate } from './predict';
-import { StrokeBuilder } from './stroke';
+import { newStrokeId, StrokeBuilder } from './stroke';
+import type { EraserMode, EraserSize } from '../lib/settings';
 import { INK, MM, PAGE_H, PAGE_W, PAPER, WIDTH_MM, type FieldBox, type InkColor, type Page, type Pt, type Stroke, type WidthName } from './types';
 
 // Die Schreibfläche: drei Canvas-Ebenen übereinander (Grund mit Papier und fertigen Strichen, Live mit dem Strich, der
@@ -50,10 +51,21 @@ export type SurfaceOptions = {
  * `tailArea` der Bereich des Endstücks auf der Vorhersage-Ebene.
  */
 type Drawing = { id: number; builder: StrokeBuilder; color: InkColor; box: Box; drawn: number; tailArea: Box | null; hist: { x: number; y: number; t: number }[] };
-type Erasing = { id: number; removed: Removed[]; last: Pt2 };
+/**
+ * Ein Radiervorgang. Ganze Striche: `removed` sind die herausgenommenen. Nur das Stück: `before` ist die Liste vom Beginn
+ * (für Rückgängig), `cuts` ordnet jedem zerschnittenen Original seine Reststücke zu, `origin` jedem Stück sein Original.
+ */
+type Erasing = {
+  id: number;
+  mode: EraserMode;
+  removed: Removed[];
+  before: Stroke[];
+  cuts: Map<string, Stroke[]>;
+  origin: Map<string, string>;
+  last: Pt2;
+};
 type Gesture = { revert: View; ref: View; from: Pt2[]; moved: boolean; snapView: View | null };
 
-const ERASER_RADIUS_PX = 10;
 /** Ab so vielen Punkten auf der Seite zoomt eine Geste nur das Bild und zeichnet erst am Ende neu. */
 const HEAVY_POINTS = 8000;
 const MIN_ZOOM = 0.3;
@@ -103,6 +115,8 @@ export class InkSurface {
   private tool: 'pen' | 'eraser' = 'pen';
   private color: InkColor = 'schwarz';
   private widthMm = WIDTH_MM.mittel;
+  private eraserPx = ERASER_PX.mittel;
+  private eraserMode: EraserMode = 'strich';
 
   // Ansicht: `view` rechnet Seiteneinheiten in Bildschirmpunkte um (x * s + x), `fit` ist der Maßstab für die Seitenbreite.
   private dpr = 1;
@@ -188,11 +202,20 @@ export class InkSurface {
   setPage(p: Page, _fields: FieldBox[], background: string): void {
     // Was gerade entsteht, bleibt: Ein Strich kommt am Ende zur neuen Seite dazu. Radiert der Stift gerade, bleiben die
     // Striche weg, die er schon erfasst hat, und er radiert weiter (auch aus der neuen Seite).
-    const erased = this.erasing ? new Set(this.erasing.removed.map((r) => r.stroke.id)) : null;
+    const er = this.erasing;
+    const erased = er ? new Set(er.removed.map((r) => r.stroke.id)) : null;
     this.head = { kind: p.kind, key: p.key, meta: { ...p.meta } };
     this.strokes = p.strokes.slice();
     this.history.clear();
-    if (this.erasing && erased) this.erasing.removed = takeOutIds(this.strokes, erased);
+    if (er && erased) er.removed = takeOutIds(this.strokes, erased);
+    if (er?.mode === 'stueck') {
+      // Was schon zerschnitten ist, bleibt zerschnitten: Jedes Original weicht seinen Stücken.
+      er.before = this.strokes.slice();
+      for (const [orig, pieces] of er.cuts) {
+        const i = this.strokes.findIndex((x) => x.id === orig);
+        if (i >= 0) this.strokes.splice(i, 1, ...pieces);
+      }
+    }
     if (!this.drawing && !this.erasing) this.clearLive(true);
     this.setBackground(background);
     this.render();
@@ -223,6 +246,12 @@ export class InkSurface {
 
   setWidth(w: WidthName): void {
     this.widthMm = WIDTH_MM[w];
+  }
+
+  /** Größe und Art des Radierers. Ein Radiervorgang, der gerade läuft, behält seine Art. */
+  setEraser(size: EraserSize, mode: EraserMode): void {
+    this.eraserPx = ERASER_PX[size];
+    this.eraserMode = mode;
   }
 
   /**
@@ -390,7 +419,8 @@ export class InkSurface {
     const er = this.erasing;
     if (!er) return;
     this.erasing = null;
-    restore(this.strokes, er.removed);
+    if (er.mode === 'stueck') this.strokes.splice(0, this.strokes.length, ...er.before);
+    else restore(this.strokes, er.removed);
     this.clearLive(true);
     this.render();
   }
@@ -705,7 +735,7 @@ export class InkSurface {
   private beginDraw(e: PointerEvent): void {
     const pos = this.local(e);
     if (this.tool === 'eraser') {
-      this.erasing = { id: e.pointerId, removed: [], last: pos };
+      this.erasing = { id: e.pointerId, mode: this.eraserMode, removed: [], before: this.strokes.slice(), cuts: new Map(), origin: new Map(), last: pos };
       this.eraseAt(pos);
       this.eraserCursor(pos);
       return;
@@ -806,20 +836,36 @@ export class InkSurface {
 
   // ---------- Radierer (ganze Striche) ----------
 
-  /** Radiert an einem Ort (Bildschirmpunkte) alle Striche im Umkreis von 10 Bildschirmpunkten. */
+  /** Radiert an einem Ort (Bildschirmpunkte) im Umkreis des Radierers: ganze Striche oder nur das Stück unter dem Kreis. */
   private eraseAt(at: Pt2): void {
     const er = this.erasing;
     if (!er) return;
     const p = this.toPage(at.x, at.y);
-    const hits = hitIndexes(this.strokes, p, ERASER_RADIUS_PX / this.view.s, this.pixel());
+    const r = this.eraserPx / this.view.s;
+    const hits = hitIndexes(this.strokes, p, r, this.pixel());
     if (!hits.length) return;
-    er.removed.push(...takeOut(this.strokes, hits));
+    if (er.mode === 'strich') er.removed.push(...takeOut(this.strokes, hits));
+    else {
+      // Die höchsten zuerst: So bleiben die Stellen der übrigen gültig, auch wenn ein Strich in mehrere Stücke zerfällt.
+      const minW = this.pixel();
+      for (const i of hits) {
+        const s = this.strokes[i];
+        // Mindestens einen Bildpunkt breit gezeichnet, also trifft der Kreis ihn auch so breit (wie beim ganzen Strich).
+        const pieces = cutStroke(s, p, r + Math.max(0, minW - s.w) / 2, () => newStrokeId(s.t));
+        if (!pieces) continue;
+        const orig = er.origin.get(s.id) ?? s.id;
+        for (const piece of pieces) er.origin.set(piece.id, orig);
+        const kept = (er.cuts.get(orig) ?? [s]).flatMap((x) => (x.id === s.id ? pieces : [x]));
+        er.cuts.set(orig, kept);
+        this.strokes.splice(i, 1, ...pieces);
+      }
+    }
     this.scheduleRender();
   }
 
   /** Radiert entlang einer Strecke in kleinen Schritten, damit kein Strich zwischen zwei Messpunkten durchrutscht. */
   private erasePath(from: Pt2, to: Pt2): void {
-    for (const at of pointsAlong(from, to)) this.eraseAt(at);
+    for (const at of pointsAlong(from, to, Math.min(ERASER_STEP_PX, this.eraserPx / 2))) this.eraseAt(at);
   }
 
   private eraserCursor(p: Pt2): void {
@@ -827,21 +873,28 @@ export class InkSurface {
     const ctx = this.lctx;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.beginPath();
-    ctx.arc(p.x, p.y, ERASER_RADIUS_PX, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, this.eraserPx, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(44, 90, 138, 0.12)';
     ctx.fill();
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = 'rgba(44, 90, 138, 0.9)';
     ctx.stroke();
-    this.liveArea = [p.x - 12, p.y - 12, p.x + 12, p.y + 12];
+    const m = this.eraserPx + 2;
+    this.liveArea = [p.x - m, p.y - m, p.x + m, p.y + m];
   }
 
   private finishErase(): void {
     const er = this.erasing;
     this.erasing = null;
     this.clearLive(true);
-    if (!er?.removed.length) return;
-    this.history.push({ type: 'erase', removed: er.removed });
+    if (!er) return;
+    if (er.mode === 'stueck') {
+      if (!er.cuts.size) return;
+      this.history.push({ type: 'swap', before: er.before, after: this.strokes.slice() });
+    } else {
+      if (!er.removed.length) return;
+      this.history.push({ type: 'erase', removed: er.removed });
+    }
     this.changed();
   }
 

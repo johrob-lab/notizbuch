@@ -17,6 +17,11 @@ function randomSuffix(): string {
     .padStart(4, '0');
 }
 
+/** Neue, über alle Geräte eindeutige `id` eines Strichs, der zur Zeit `t` (Millisekunden) entstand. */
+export function newStrokeId(t: number): string {
+  return `s${t}${randomSuffix()}`;
+}
+
 /**
  * Baut einen Strich aus den Stiftpunkten auf. Die Rechnung stammt aus `pushPoint` und `smoothTail` im Stift-Test
  * (`docs/reference/stift-test.html`) und ist dort mit dem Apple Pencil geprüft: Mindestabstand zum letzten Rohpunkt,
@@ -44,7 +49,7 @@ export class StrokeBuilder {
    */
   constructor(o: { color: InkColor; widthMm: number; sigma: number; t: number; minDist: number }) {
     this.opts = { ...o };
-    this.id = `s${o.t}${randomSuffix()}`;
+    this.id = newStrokeId(o.t);
     this.nomW = o.widthMm * MM;
     const sig = o.sigma;
     this.K = sig > 0 ? Math.ceil(2.5 * sig) : 0;

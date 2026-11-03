@@ -6,7 +6,12 @@ import type { Stroke } from './types';
 /** Ein Strich, der radiert wurde, und die Stelle, an der er in der Liste stand (nachdem seine Vorgänger schon draußen waren). */
 export type Removed = { stroke: Stroke; index: number };
 /** Was ein Schritt getan hat: einen Strich dazugetan oder Striche radiert (in der Reihenfolge, in der sie herauskamen). */
-export type Action = { type: 'add'; stroke: Stroke } | { type: 'erase'; removed: Removed[] };
+/**
+ * Was ein Schritt getan hat: einen Strich dazugetan, Striche radiert (in der Reihenfolge, in der sie herauskamen), oder die
+ * ganze Liste ersetzt (Teil-Radieren und Kritzeln: Striche wurden zerschnitten oder entfernt, `before` und `after` sind die
+ * Listen davor und danach).
+ */
+export type Action = { type: 'add'; stroke: Stroke } | { type: 'erase'; removed: Removed[] } | { type: 'swap'; before: Stroke[]; after: Stroke[] };
 
 /** So viele Schritte lassen sich zurücknehmen. */
 export const MAX_HISTORY = 300;
@@ -55,6 +60,8 @@ export class History {
     if (a.type === 'add') {
       const i = strokes.lastIndexOf(a.stroke);
       if (i >= 0) strokes.splice(i, 1);
+    } else if (a.type === 'swap') {
+      strokes.splice(0, strokes.length, ...a.before);
     } else {
       restore(strokes, a.removed);
     }
@@ -67,6 +74,7 @@ export class History {
     const a = this.#redo.pop();
     if (!a) return false;
     if (a.type === 'add') strokes.push(a.stroke);
+    else if (a.type === 'swap') strokes.splice(0, strokes.length, ...a.after);
     else for (const r of a.removed) strokes.splice(r.index, 1);
     this.#undo.push(a);
     return true;

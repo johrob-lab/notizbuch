@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { boundsOf, emptyBox, growBox, lineWidth } from '../../src/ink/bounds';
-import { hitIndexes, pointsAlong, takeOut, takeOutIds } from '../../src/ink/erase';
+import { cutStroke, densify, ERASER_PX, hitIndexes, pointsAlong, takeOut, takeOutIds } from '../../src/ink/erase';
 import { History } from '../../src/ink/history';
 import { MM, type Stroke } from '../../src/ink/types';
 
@@ -173,4 +173,51 @@ test('ids that are not on the page take nothing out', () => {
   expect(takeOutIds(strokes, new Set(['x']))).toEqual([]);
   expect(takeOutIds(strokes, new Set())).toEqual([]);
   expect(ids(strokes)).toEqual(['a']);
+});
+
+// ---------- Teil-Radieren ----------
+
+const straight = (id = 'a'): Stroke => line(id, [0, 0], [100, 0]);
+let next = 0;
+const freshId = () => `n${++next}`;
+
+test('cut through the middle gives two pieces', () => {
+  const parts = cutStroke(straight(), { x: 50, y: 0 }, 5, freshId)!;
+  expect(parts).toHaveLength(2);
+  expect(Math.max(...parts[0].pts.map((p) => p.x))).toBeLessThan(45);
+  expect(Math.min(...parts[1].pts.map((p) => p.x))).toBeGreaterThan(55);
+  expect(parts.every((p) => p.id !== 'a' && p.color === 'schwarz' && p.w === 1.2 && p.t === 1 && p.widthMm === 0.2)).toBe(true);
+  expect(new Set(parts.map((p) => p.id)).size).toBe(2);
+});
+
+test('miss returns null, end cut gives one piece, dot disappears', () => {
+  expect(cutStroke(straight(), { x: 50, y: 30 }, 5, freshId)).toBeNull();
+  expect(cutStroke(straight(), { x: 100, y: 0 }, 5, freshId)).toHaveLength(1);
+  expect(cutStroke({ ...straight(), pts: [{ x: 10, y: 10, w: 1.2 }] }, { x: 10, y: 10 }, 5, freshId)).toEqual([]);
+});
+
+test('densify', () => {
+  expect(densify([{ x: 0, y: 0, w: 1 }, { x: 10, y: 0, w: 3 }], 2.5).map((p) => [p.x, p.w])).toEqual([
+    [0, 1],
+    [2.5, 1.5],
+    [5, 2],
+    [7.5, 2.5],
+    [10, 3],
+  ]);
+});
+
+test('eraser sizes', () => {
+  expect(ERASER_PX).toEqual({ klein: 5, mittel: 10, gross: 22 });
+});
+
+test('undo after partial erase restores the original', () => {
+  const strokes = [straight('a'), straight('b')];
+  const h = new History();
+  const before = strokes.slice();
+  strokes.splice(0, 1, ...cutStroke(strokes[0], { x: 50, y: 0 }, 5, freshId)!);
+  h.push({ type: 'swap', before, after: strokes.slice() });
+  h.undo(strokes);
+  expect(strokes.map((s) => s.id)).toEqual(['a', 'b']);
+  h.redo(strokes);
+  expect(strokes).toHaveLength(3);
 });
