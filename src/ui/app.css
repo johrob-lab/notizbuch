@@ -181,7 +181,8 @@ body {
 }
 
 .tb svg,
-.schnellwechsel svg {
+.schnellwechsel svg,
+.ring-knopf svg {
   width: 24px;
   height: 24px;
   fill: none;
@@ -826,6 +827,77 @@ body {
 
 .schnellwechsel[data-tool='eraser'] {
   background: #7a3b36;
+}
+
+/*
+ * Das Rad im Vollbild: Der Schnellwechsel öffnet einen Ring aus Knöpfen. Die Hülle `.rad` hat keine eigene Box, Rad und Ring liegen
+ * direkt auf der Bühne. Das Schutzfeld deckt die ganze Bühne ab (Fläche, Karten, Rad, Hinweise) und fängt jeden Zeiger daneben,
+ * die Knöpfe liegen darauf.
+ */
+.rad {
+  display: contents;
+}
+
+.ring-schutz {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: rgb(0 0 0 / 0.08);
+  touch-action: none;
+}
+
+.ring-knopf {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 0;
+  border: 1px solid var(--linie);
+  border-radius: 50%;
+  background: var(--leiste);
+  color: #2e3630;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  touch-action: none;
+  cursor: pointer;
+}
+
+.ring-knopf[aria-pressed='true'] {
+  border-color: var(--gruen);
+  box-shadow: inset 0 0 0 2px var(--gruen), 0 2px 8px rgb(0 0 0 / 0.25);
+}
+
+.ring-knopf:disabled {
+  color: rgb(46 54 48 / 0.35);
+  cursor: default;
+}
+
+.ring-knopf:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+.ring-knopf .farbe {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.2);
+}
+
+.ring-knopf .rand {
+  display: block;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+.ring-knopf .zeichen {
+  font-size: 26px;
+  font-weight: 400;
+  line-height: 1;
 }
 
 /*

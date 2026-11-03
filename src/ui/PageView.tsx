@@ -7,15 +7,18 @@ import { inkPrefs, setInkPrefs } from './inkPrefs';
 import { InkSurface } from '../ink/surface';
 import type { FieldBox, InkColor, Page, WidthName } from '../ink/types';
 import { todayVienna } from '../lib/dates';
+import type { EraserMode, EraserSize, VollbildWerkzeuge } from '../lib/settings';
 import { tapTargetAt, tapTargets, todayMarks, type Layout } from '../pages/layouts';
 import type { SyncEngine } from '../sync/engine';
 import { watchCards } from './cardGestures';
 import { PageSession, type Phase } from './pageSession';
 import { QuickSwitch } from './QuickSwitch';
 import { retryCues } from './retryCues';
-import { routeHash } from './router';
-import { Icon, Toolbar, type Tool } from './Toolbar';
-import type { VollbildWerkzeuge } from '../lib/settings';
+import { routeHash, type Route } from './router';
+import { Icon, Toolbar } from './Toolbar';
+import { toolActions, type ToolAction } from './toolActions';
+import type { Tool } from './toolChoices';
+import { ToolWheel } from './ToolWheel';
 
 // Eine Seite zum Schreiben, ganz gleich ob Tag, Woche oder Monat: Das Layout sagt, welche Felder und welchen Hintergrund
 // sie hat. Lesen, Speichern und fremde Änderungen übernimmt `PageSession`, diese Datei verbindet sie mit der Schreibfläche
@@ -36,6 +39,10 @@ export type PageProps = {
   onQuickSwitchMove(pos: [number, number]): void;
   /** Im Vollbild: womit man die Werkzeuge erreicht. Dann zeigt die Seite weder Werkzeugleiste noch Kopfdaten noch den Ersatzknopf „Ganze Seite“. Sonst `null`. */
   vollbild?: VollbildWerkzeuge | null;
+  /** Wohin ‹ und › im Vollbild führen, mit ihrer Beschriftung, und ob es dorthin einen Schritt gibt: dieselben Ziele wie in der Leiste oben. */
+  nav?: { back: Route; forward: Route; labels: [string, string]; canBack: boolean; canForward: boolean };
+  /** Schaltet das Vollbild aus (der Knopf „Vollbild aus“ im Rad). */
+  onVollbildAus?(): void;
 };
 
 /** Was das Formular über einer Seite mit Kopfdaten von der Seite bekommt. */
@@ -229,14 +236,62 @@ export function PageView(p: Props) {
   }, [hasCards, palm]);
 
   const chooseTool = (t: Tool) => setInkPrefs({ tool: t });
-  // Wer Farbe oder Breite wählt, will schreiben: Der Kugelschreiber ist dann wieder das Werkzeug.
+  // Wer Farbe oder Breite wählt, will schreiben: Der Kugelschreiber ist dann wieder das Werkzeug. Ebenso Größe oder Art: der Radierer.
   const chooseColor = (c: InkColor) => setInkPrefs({ color: c, tool: 'pen' });
   const chooseWidth = (w: WidthName) => {
     setInkPrefs({ width: w, tool: 'pen' });
   };
+  const chooseEraserSize = (size: EraserSize) => setInkPrefs({ eraserSize: size, tool: 'eraser' });
+  const chooseEraserMode = (mode: EraserMode) => setInkPrefs({ eraserMode: mode, tool: 'eraser' });
 
   const full = p.vollbild != null;
   const canWrite = !readOnly && phase !== 'unlesbar' && phase !== 'gesperrt' && phase !== 'nichtGeladen';
+
+  /** Ein Knopf des Rads: dieselben Wege wie Werkzeugleiste, Leiste oben und Ersatzknopf. */
+  const runAction = (a: ToolAction): void => {
+    switch (a.kind) {
+      case 'tool':
+        return chooseTool(a.tool);
+      case 'color':
+        return chooseColor(a.color);
+      case 'width':
+        return chooseWidth(a.width);
+      case 'eraserSize':
+        return chooseEraserSize(a.size);
+      case 'eraserMode':
+        return chooseEraserMode(a.mode);
+      case 'undo':
+        return surface.current?.undo();
+      case 'redo':
+        return surface.current?.redo();
+      case 'back':
+      case 'forward': {
+        const to = p.nav?.[a.kind];
+        if (to) window.location.hash = routeHash(to);
+        return;
+      }
+      case 'today':
+        // Wer die App über Nacht offen lässt, soll im neuen Tag landen: Der Tag wird beim Tippen berechnet.
+        window.location.hash = routeHash({ view: 'tag', key: todayVienna() });
+        return;
+      case 'fit':
+        return surface.current?.zoomToFit();
+      case 'exit':
+        return p.onVollbildAus?.();
+    }
+  };
+  const wheel = p.vollbild === 'kreis';
+  const actions =
+    wheel &&
+    toolActions({
+      ink: inkPrefs.value,
+      canWrite,
+      canUndo: history.canUndo,
+      canRedo: history.canRedo,
+      canBack: p.nav?.canBack ?? false,
+      canForward: p.nav?.canForward ?? false,
+      stepLabels: p.nav?.labels ?? ['Zurück', 'Weiter'],
+    });
 
   // Eine Änderung am Kopf ändert die Kopfdaten der Fläche an Ort und Stelle (dieselbe Seite, dieselben Striche) und geht
   // dann wie ein Strich durch die Sitzung: mit allen Strichen, die die Fläche jetzt hat, und den neuen Kopfdaten.
@@ -272,8 +327,8 @@ export function PageView(p: Props) {
               eraserSize={eraserSize}
               eraserMode={eraserMode}
               onTool={chooseTool}
-              onEraserSize={(size) => setInkPrefs({ eraserSize: size, tool: 'eraser' })}
-              onEraserMode={(mode) => setInkPrefs({ eraserMode: mode, tool: 'eraser' })}
+              onEraserSize={chooseEraserSize}
+              onEraserMode={chooseEraserMode}
               onColor={chooseColor}
               onWidth={chooseWidth}
               onUndo={() => surface.current?.undo()}
@@ -337,15 +392,30 @@ export function PageView(p: Props) {
             <Icon name="fit" />
           </button>
         )}
-        {canWrite && (
-          <QuickSwitch
+        {/* Im Vollbild mit Kreis steht das Rad da, auch ohne Schreiben: Es bietet dann Blättern, Ganze Seite und den Weg aus dem Vollbild. */}
+        {actions ? (
+          <ToolWheel
             tool={tool}
             partial={eraserMode === 'stueck'}
             pos={p.quickSwitchPos}
             filter={palm}
+            canWrite={canWrite}
+            actions={actions}
             onToggle={() => chooseTool(tool === 'pen' ? 'eraser' : 'pen')}
             onMove={p.onQuickSwitchMove}
+            onAction={runAction}
           />
+        ) : (
+          canWrite && (
+            <QuickSwitch
+              tool={tool}
+              partial={eraserMode === 'stueck'}
+              pos={p.quickSwitchPos}
+              filter={palm}
+              onToggle={() => chooseTool(tool === 'pen' ? 'eraser' : 'pen')}
+              onMove={p.onQuickSwitchMove}
+            />
+          )
         )}
       </div>
     </div>

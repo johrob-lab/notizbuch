@@ -1,8 +1,8 @@
 import { expect, test as base, type Page } from '@playwright/test';
 import { serializePage } from '../../src/ink/svg';
 import { besprechungLayout } from '../../src/pages/layouts';
-import { openSeeded, savedSettings } from './helpers/app';
-import { pen, viewOf } from './helpers/pointer';
+import { openSeeded, savedSettings, shareRepos } from './helpers/app';
+import { centerOf, palm, pen, touch, viewOf } from './helpers/pointer';
 
 // Das Vollbild: Ein Knopf blendet alle Leisten aus, die Seite füllt den Bildschirm. GitHub antwortet aus einem Repo im
 // Speicher (tests/e2e/helpers/app.ts). Alles hier ist erfunden. Heute ist in allen Tests der 29.10.2026 (Wiener Zeit).
@@ -43,6 +43,98 @@ const MEETING = `07 Anhänge/Notizbuch/2026/${BASE} S1.svg`;
 
 const knopf = (page: Page) => page.getByRole('button', { name: 'Vollbild', exact: true });
 const status = (page: Page) => page.getByTestId('status');
+
+const TAG = '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg';
+const BROKEN = '<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="1"';
+const UNREADABLE = 'Diese Seite lässt sich nicht lesen und wird nicht verändert.';
+const OTHER_WINDOW = 'Das Notizbuch ist schon in einem anderen Fenster offen.';
+/** Das Rad: der Schnellwechsel im Vollbild. */
+const QUICK = '[data-testid="quick-switch"]';
+const SCHUTZ = '.ring-schutz';
+/** So lange liegt der Stift auf dem Rad, bis der Ring aufgeht (`HOLD_MS` in src/ui/QuickSwitch.tsx). */
+const HOLD_MS = 400;
+/** Ohne Schreiben (Firmen-PC, Seite nicht lesbar, Fenster liest nur) bietet der Ring nur das. */
+const ONLY_VIEW = ['Voriger Tag', 'Heute', 'Nächster Tag', 'Ganze Seite', 'Vollbild aus'];
+
+/** Ein Knopf im Ring, als Selektor für die Zeigerereignisse. */
+const im = (label: string) => `.ring-knopf[aria-label="${label}"]`;
+const ring = (page: Page) => page.locator('.ring-knopf');
+const ringLabels = (page: Page) => ring(page).evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
+const strokeCount = (page: Page) => page.evaluate(() => window.__notizbuch.currentPage().strokes.length);
+const pageKey = (page: Page) => page.evaluate(() => window.__notizbuch.currentPage().key);
+const waitForPageOf = (page: Page, key: string) => page.waitForFunction((day) => window.__notizbuch?.currentPage?.().key === day, key);
+/** Stift und Handballen: Finger gelten erst 250 ms nach dem Abheben des Stifts wieder (siehe `GestureFilter`). */
+const afterPalmWindow = (page: Page) => page.waitForTimeout(300);
+
+type Kind = 'pen' | 'touch' | 'mouse';
+type At = { x: number; y: number };
+type Ev = At & { type: 'pointerdown' | 'pointermove' | 'pointerup' };
+
+/**
+ * Zeigerereignisse wie auf dem Bildschirm: Jedes geht an das Element, das an seinem Ort zuoberst liegt (Ring, Schutzfeld, Rad oder
+ * Fläche), nicht an ein ausgesuchtes. So zeigt sich, ob etwas über der Seite liegt. Orte in Bildschirmkoordinaten, Kennungen wie in
+ * helpers/pointer.ts.
+ */
+async function onScreen(page: Page, kind: Kind, events: Ev[]): Promise<void> {
+  await page.evaluate(
+    ({ pointerType, pointerId, list }) => {
+      for (const ev of list) {
+        const el = document.elementFromPoint(ev.x, ev.y);
+        if (!el) throw new Error(`Nichts bei ${ev.x}, ${ev.y}.`);
+        el.dispatchEvent(
+          new PointerEvent(ev.type, {
+            pointerId,
+            pointerType,
+            isPrimary: true,
+            pressure: 0.5,
+            width: 1,
+            height: 1,
+            clientX: ev.x,
+            clientY: ev.y,
+            button: ev.type === 'pointermove' ? -1 : 0,
+            buttons: ev.type === 'pointerup' ? 0 : 1,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+          }),
+        );
+      }
+    },
+    { pointerType: kind, pointerId: { mouse: 1, pen: 11, touch: 21 }[kind], list: events },
+  );
+}
+
+/** Die Klasse des Elements, das an diesem Ort zuoberst liegt. */
+const topmost = (page: Page, at: At) => page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute('class') ?? null, at);
+
+/** Ein Tipp in die Mitte eines Elements, auf das, was dort zuoberst liegt. Liegt etwas anderes darüber, scheitert der Test. */
+async function tapTop(page: Page, kind: Kind, selector: string): Promise<void> {
+  const c = await centerOf(page, selector);
+  const onTop = await page.evaluate(({ sel, x, y }) => document.querySelector(sel)!.contains(document.elementFromPoint(x, y)), { sel: selector, ...c });
+  expect(onTop, `${selector} liegt zuoberst`).toBe(true);
+  await onScreen(page, kind, [
+    { type: 'pointerdown', ...c },
+    { type: 'pointerup', ...c },
+  ]);
+}
+
+/** Ein Strich an Orten der Seite (Seiteneinheiten), auf das, was dort zuoberst liegt: aufsetzen, zu jedem Punkt, am letzten abheben. */
+async function strokeTop(page: Page, kind: Kind, points: [number, number][]): Promise<void> {
+  const at = await page.evaluate((list) => list.map(([x, y]) => window.__notizbuch.toClient(x, y)), points);
+  await onScreen(page, kind, [
+    { type: 'pointerdown', ...at[0] },
+    ...at.slice(1).map((p): Ev => ({ type: 'pointermove', ...p })),
+    { type: 'pointerup', ...at[at.length - 1] },
+  ]);
+}
+
+/** Der Stift liegt auf dem Rad, bis der Ring offen ist, und hebt dann ab. */
+async function holdWheel(page: Page): Promise<void> {
+  const c = await centerOf(page, QUICK);
+  await pen(page).downOn(QUICK, c.x, c.y);
+  await expect(ring(page).first()).toBeVisible();
+  await pen(page).upOn(QUICK, c.x, c.y);
+}
 
 test('the Vollbild button hides the bars and the page fills the width', async ({ page }) => {
   await openSeeded(page, DAY);
@@ -126,4 +218,254 @@ test('the tools for fullscreen can be chosen in the settings', async ({ page }) 
   await page.getByRole('link', { name: 'Einstellungen' }).click();
   await page.getByRole('group', { name: 'Werkzeuge im Vollbild' }).getByRole('radio', { name: 'Tab', exact: true }).check();
   await expect.poll(async () => (await savedSettings(page))?.vollbild).toEqual({ an: false, werkzeuge: 'tab' });
+});
+
+// ---------- Das Werkzeugrad ----------
+
+test('a pen tap on the wheel switches pen and eraser', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  const wheel = page.getByTestId('quick-switch');
+  await expect(wheel).toHaveAttribute('data-tool', 'pen');
+  await pen(page).tapOn(QUICK);
+  await expect(wheel).toHaveAttribute('data-tool', 'eraser');
+  await pen(page).tapOn(QUICK);
+  await expect(wheel).toHaveAttribute('data-tool', 'pen');
+  await expect(ring(page)).toHaveCount(0);
+});
+
+test('holding the pen on the wheel opens the ring and switches nothing', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  const wheel = page.getByTestId('quick-switch');
+  const c = await centerOf(page, QUICK);
+  const stylus = pen(page);
+  await stylus.downOn(QUICK, c.x, c.y);
+  await stylus.moveOn(QUICK, c.x + 3, c.y - 2); // ein wenig Zittern zählt nicht
+  await expect(ring(page).first()).toBeVisible();
+  await stylus.upOn(QUICK, c.x + 3, c.y - 2);
+  await expect(wheel).toHaveAttribute('data-tool', 'pen');
+  await expect(page.locator(im('Kugelschreiber'))).toHaveAttribute('aria-pressed', 'true');
+  await expect(ring(page)).toHaveCount(16); // der Ring bleibt offen: innen 4 Farben und 3 Breiten, außen 9 Knöpfe
+});
+
+test('a finger tap on the wheel opens the ring, a colour applies and closes it', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  const wheel = page.getByTestId('quick-switch');
+  const rest = (await wheel.boundingBox())!;
+  await touch(page).tapOn(QUICK);
+  await expect(ring(page).first()).toBeVisible();
+  expect(await wheel.boundingBox()).toEqual(rest); // der Tipp verschiebt das Rad nicht
+
+  await tapTop(page, 'touch', im('Rot (offen)'));
+  await expect(ring(page)).toHaveCount(0);
+  await expect(page.locator(SCHUTZ)).toHaveCount(0);
+  await expect.poll(async () => ((await savedSettings(page))?.ink as { color?: string } | undefined)?.color).toBe('rot');
+  expect((await savedSettings(page))?.quickSwitchPos).toBeUndefined();
+  await strokeTop(page, 'pen', LINE);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  expect((await page.evaluate(() => window.__notizbuch.currentPage().strokes))[0]).toMatchObject({ color: 'rot' });
+});
+
+test('undo keeps the ring open', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  await pen(page).stroke(LINE);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  await holdWheel(page);
+  await expect(page.locator(im('Wiederholen'))).toBeDisabled();
+
+  await tapTop(page, 'pen', im('Rückgängig'));
+  expect(await strokeCount(page)).toBe(0);
+  await expect(page.locator(im('Rückgängig'))).toBeDisabled();
+  await expect(page.locator(im('Wiederholen'))).toBeEnabled();
+  await tapTop(page, 'pen', im('Wiederholen'));
+  expect(await strokeCount(page)).toBe(1);
+  await expect(ring(page)).toHaveCount(16);
+});
+
+test('a tap next to the ring closes it and draws nothing', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  await touch(page).tapOn(QUICK);
+  await expect(ring(page).first()).toBeVisible();
+
+  // Das Papier neben dem Ring liegt unter dem Schutzfeld: Der Stift trifft das Schutzfeld, nicht die Fläche.
+  const paper = await page.evaluate(() => window.__notizbuch.toClient(200, 1000));
+  expect(await topmost(page, paper)).toBe('ring-schutz');
+  await onScreen(page, 'pen', [
+    { type: 'pointerdown', ...paper },
+    { type: 'pointerup', ...paper },
+  ]);
+  await expect(ring(page)).toHaveCount(0);
+  await expect(page.locator(SCHUTZ)).toHaveCount(0);
+  expect(await strokeCount(page)).toBe(0);
+
+  // Jetzt liegt dort wieder das Papier, und der Stift schreibt.
+  expect(await topmost(page, paper)).not.toBe('ring-schutz');
+  await strokeTop(page, 'pen', LINE);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+});
+
+test('the ring stays on the screen when the wheel sits in a corner', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: { ...ON, quickSwitchPos: [0, 0] } });
+  await touch(page).tapOn(QUICK);
+  await expect(ring(page).first()).toBeVisible();
+  const boxes = await ring(page).evaluateAll((els) => els.map((el) => el.getBoundingClientRect().toJSON() as DOMRect));
+  expect(boxes).toHaveLength(16);
+  const { width, height } = page.viewportSize()!;
+  for (const b of boxes) {
+    expect(b.left).toBeGreaterThanOrEqual(0);
+    expect(b.top).toBeGreaterThanOrEqual(0);
+    expect(b.right).toBeLessThanOrEqual(width);
+    expect(b.bottom).toBeLessThanOrEqual(height);
+    expect(b.width).toBeGreaterThanOrEqual(44);
+    expect(b.height).toBeGreaterThanOrEqual(44);
+  }
+});
+
+test('next and today in the ring change the page', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  await touch(page).tapOn(QUICK);
+  await tapTop(page, 'touch', im('Nächster Tag'));
+  await waitForPageOf(page, '2026-10-30');
+  await expect(page).toHaveURL(/#\/tag\/2026-10-30$/);
+  await expect(ring(page)).toHaveCount(0);
+
+  await touch(page).tapOn(QUICK);
+  await tapTop(page, 'touch', im('Heute'));
+  await waitForPageOf(page, '2026-10-29');
+  await expect(page).toHaveURL(/#\/tag\/2026-10-29$/);
+
+  await touch(page).tapOn(QUICK);
+  await tapTop(page, 'touch', im('Voriger Tag'));
+  await waitForPageOf(page, '2026-10-28');
+});
+
+test('Vollbild aus in the ring brings the bars back', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  await expect(page.locator('.ansichten')).toBeHidden();
+  await touch(page).tapOn(QUICK);
+  await tapTop(page, 'touch', im('Vollbild aus'));
+  await expect(page.locator('.ansichten')).toBeVisible();
+  await expect(page.locator('.werkzeuge')).toBeVisible();
+  await expect(page.locator('main#app')).not.toHaveClass(/vollbild/);
+  await expect(page.locator(SCHUTZ)).toHaveCount(0);
+  await expect.poll(async () => (await savedSettings(page))?.vollbild).toEqual({ an: false, werkzeuge: 'kreis' });
+
+  // Ohne Vollbild ist das Rad wieder der Schnellwechsel von vorher: Ein Fingertipp öffnet nichts.
+  await touch(page).tapOn(QUICK);
+  await expect(ring(page)).toHaveCount(0);
+});
+
+test('on the office PC the ring only has paging and Vollbild aus', async ({ page }) => {
+  await openSeeded(page, DAY, { device: 'Firmen-PC', settings: ON });
+  await page.getByTestId('quick-switch').click();
+  await expect(ring(page).first()).toBeVisible();
+  expect(await ringLabels(page)).toEqual(ONLY_VIEW);
+  await expect(page.locator(im('Kugelschreiber'))).toHaveCount(0);
+
+  await page.locator(im('Vollbild aus')).click();
+  await expect(page.locator('.ansichten')).toBeVisible();
+  await expect(page.locator(SCHUTZ)).toHaveCount(0);
+  await expect.poll(async () => (await savedSettings(page))?.vollbild).toEqual({ an: false, werkzeuge: 'kreis' });
+});
+
+test('a palm on the wheel while the pen is down opens nothing', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  const c = await centerOf(page, QUICK);
+  const hand = touch(page);
+  const writer = pen(page);
+  await hand.downOn(QUICK, c.x, c.y); // die Hand liegt schon auf dem Rad, dann setzt der Stift auf der Seite auf
+  await writer.down(200, 1000);
+  await writer.move(260, 1020);
+  await hand.upOn(QUICK, c.x, c.y);
+  await touch(page, 1).tapOn(QUICK); // noch eine Berührung, während der Stift schreibt
+  await writer.up(260, 1020);
+  await expect(ring(page)).toHaveCount(0);
+  await expect.poll(() => strokeCount(page)).toBe(1); // geschrieben ist trotzdem
+
+  await afterPalmWindow(page);
+  await palm(page).tapOn(QUICK); // eine große Auflagefläche ist ein Handballen, auch nach der Pause
+  await expect(ring(page)).toHaveCount(0);
+  await touch(page).tapOn(QUICK);
+  await expect(ring(page).first()).toBeVisible();
+});
+
+// ---------- Was beim Ring nie schiefgehen darf ----------
+
+test('the ring closes when the screen size changes', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  await touch(page).tapOn(QUICK);
+  await expect(ring(page).first()).toBeVisible();
+  await page.setViewportSize({ width: 1700, height: 1200 }); // das iPad dreht sich
+  await expect(page.locator(SCHUTZ)).toHaveCount(0);
+  await expect(ring(page)).toHaveCount(0);
+  await strokeTop(page, 'pen', LINE);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+});
+
+test('after paging in the ring the next page takes the pen', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  await holdWheel(page);
+  await tapTop(page, 'pen', im('Nächster Tag'));
+  await waitForPageOf(page, '2026-10-30');
+  await expect(page.locator(SCHUTZ)).toHaveCount(0);
+  const paper = await page.evaluate(() => window.__notizbuch.toClient(200, 1000));
+  expect(await topmost(page, paper)).not.toBe('ring-schutz');
+  await strokeTop(page, 'pen', LINE);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  expect(await pageKey(page)).toBe('2026-10-30');
+});
+
+test('a stroke that ends on the wheel opens nothing', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  const wheel = page.getByTestId('quick-switch');
+  const c = await centerOf(page, QUICK);
+  const writer = pen(page);
+  await writer.down(200, 1000);
+  await writer.move(260, 1020);
+  // Der Strich endet über dem Rad. Ohne Zeigerfang landen seine letzten Ereignisse dort, und der Stift ruht dort länger als
+  // HOLD_MS. Dass dabei nichts aufgeht, lässt sich nur nach dieser Zeit sagen.
+  await writer.moveOn(QUICK, c.x, c.y);
+  await page.waitForTimeout(HOLD_MS + 200);
+  await writer.moveOn(QUICK, c.x + 2, c.y);
+  await writer.upOn(QUICK, c.x + 2, c.y);
+  await expect(ring(page)).toHaveCount(0);
+  await expect(page.locator(SCHUTZ)).toHaveCount(0);
+  await expect(wheel).toHaveAttribute('data-tool', 'pen');
+});
+
+test('an unreadable page still lets you leave fullscreen', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON, files: { [TAG]: BROKEN } });
+  await expect(page.getByText(UNREADABLE)).toBeVisible();
+  await pen(page).tapOn(QUICK); // ohne Schreiben öffnet auch der Stifttipp den Ring
+  await expect(ring(page).first()).toBeVisible();
+  expect(await ringLabels(page)).toEqual(ONLY_VIEW);
+  await tapTop(page, 'pen', im('Vollbild aus'));
+  await expect(page.locator('.ansichten')).toBeVisible();
+  await expect.poll(async () => (await savedSettings(page))?.vollbild).toEqual({ an: false, werkzeuge: 'kreis' });
+});
+
+test('a window that only reads can leave fullscreen without saving', async ({ context, page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  const second = await context.newPage();
+  const errors: string[] = [];
+  second.on('pageerror', (error) => errors.push(error.message));
+  await shareRepos(page, second);
+  await second.goto(`/notizbuch/${DAY}`);
+  await second.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await expect(second.locator('main#app')).toHaveClass(/vollbild/);
+  await expect(second.getByText(OTHER_WINDOW, { exact: true })).toBeVisible();
+  await expect(second.locator('.ansichten')).toBeHidden();
+
+  await pen(second).tapOn(QUICK); // das Fenster schreibt nicht: Der Stifttipp öffnet den Ring
+  await expect(ring(second).first()).toBeVisible();
+  expect(await ringLabels(second)).toEqual(ONLY_VIEW);
+  await tapTop(second, 'pen', im('Vollbild aus'));
+  await expect(second.locator('.ansichten')).toBeVisible();
+  await expect(second.locator('main#app')).not.toHaveClass(/vollbild/);
+
+  // Gespeichert hat das zweite Fenster nichts. Was das erste danach speichert (der Radierer), ist da, das Vollbild bleibt an.
+  await pen(page).tapOn(QUICK);
+  await expect.poll(async () => ((await savedSettings(page))?.ink as { tool?: string } | undefined)?.tool).toBe('eraser');
+  expect((await savedSettings(page))?.vollbild).toEqual({ an: true, werkzeuge: 'kreis' });
+  await expect(page.locator('main#app')).toHaveClass(/vollbild/);
+  expect(errors, 'unbehandelte Fehler im zweiten Fenster').toEqual([]);
 });

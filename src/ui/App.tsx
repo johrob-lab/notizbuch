@@ -14,7 +14,7 @@ import { BesprechungPage } from './BesprechungPage';
 import { MonatPage } from './MonatPage';
 import { MonthTabs } from './MonthTabs';
 import type { PageProps } from './PageView';
-import { parseRoute, routeHash, shownMonth, type Route, type Steps } from './router';
+import { parseRoute, routeHash, shownMonth, STEP_LABELS, stepTargets, type Route, type Steps } from './router';
 import { SettingsPage } from './Settings';
 import { Setup } from './Setup';
 import { TagPage } from './TagPage';
@@ -390,6 +390,11 @@ export function App() {
   const vollbild = boot.phase === 'bereit' ? vollbildOf(boot.settings) : null;
   const fullscreen = vollbild !== null && vollbild.an && route.view !== 'einstellungen';
 
+  // Wohin ‹ und › führen, in der Leiste oben wie im Rad: Die Schritte einer Besprechung gelten nur für die Seite, die sie gemeldet hat.
+  const steps = pageSteps?.hash === here ? pageSteps.steps : undefined;
+  const { back, forward } = stepTargets(route, steps);
+  const nav = { back, forward, labels: STEP_LABELS[route.view], canBack: routeHash(back) !== here, canForward: routeHash(forward) !== here };
+
   // Die Reiter gehören zum Jahr und Monat der Seite, bei einer Woche zu denen ihres Donnerstags. Die Einstellungen sind keine
   // Seite des Kalenders und haben keine.
   const shown = shownMonth(route);
@@ -405,7 +410,7 @@ export function App() {
           <TopBar
             route={route}
             engine={boot.engine}
-            steps={pageSteps?.hash === here ? pageSteps.steps : undefined}
+            steps={steps}
             startNotice={startNotice}
             passive={!boot.window.active}
             blocked={switching}
@@ -442,6 +447,8 @@ export function App() {
                 quickSwitchPos={boot.settings.quickSwitchPos}
                 onQuickSwitchMove={moveQuickSwitch}
                 vollbild={fullscreen ? vollbildOf(boot.settings).werkzeuge : null}
+                nav={nav}
+                onVollbildAus={() => setVollbild({ an: false })}
               />
             )}
             {route.view !== 'einstellungen' && !fullscreen && <MonthTabs year={Number(shown.slice(0, 4))} current={shown} />}
