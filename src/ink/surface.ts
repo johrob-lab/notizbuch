@@ -128,9 +128,9 @@ function grainTile(): HTMLCanvasElement {
   return grainCanvas;
 }
 
-// Formen (Füllfeder und Bleistift), während sie entstehen: je Punkt ein Kreis mit seiner halben Breite und vom vorigen Punkt
-// her ein Viereck. Alle Teile laufen im selben Sinn herum wie `arc(…, false)`: In einem Pfad mit einem `fill` (Regel nonzero)
-// füllt sich ihre Vereinigung ohne Löcher, und keine Stelle wird darin doppelt gemalt.
+// Formen (Füllfeder und Bleistift), während sie entstehen: je Punkt ein Kreis mit seiner halben Breite (nie dünner als ein
+// Bildpunkt) und vom vorigen Punkt her ein Viereck. Alle Teile laufen im selben Sinn herum wie `arc(…, false)`: In einem Pfad
+// mit einem `fill` (Regel nonzero) füllt sich ihre Vereinigung ohne Löcher, und keine Stelle wird darin doppelt gemalt.
 
 /** Hängt das Viereck von `a` nach `b` an den Pfad, die Ecken je Punkt um seinen Radius senkrecht zum Stück. */
 function addQuad(ctx: CanvasRenderingContext2D, a: Pt2, ra: number, b: Pt2, rb: number): void {
@@ -154,12 +154,14 @@ function addCircle(ctx: CanvasRenderingContext2D, c: Pt2, r: number): void {
 
 /**
  * Hängt die Punkte `from` bis `to - 1` einer Form an den Pfad: je Punkt das Viereck vom vorigen Punkt her (Punkt 0 hat
- * keins) und den Kreis um ihn. Gibt zurück, wie viele Punkte dafür gebraucht wurden.
+ * keins) und den Kreis um ihn, jeder Punkt mindestens `minW` breit (ein Bildpunkt). Gibt zurück, wie viele Punkte dafür
+ * gebraucht wurden.
  */
-function addShape(ctx: CanvasRenderingContext2D, p: readonly Pt[], from: number, to: number): number {
+function addShape(ctx: CanvasRenderingContext2D, p: readonly Pt[], from: number, to: number, minW: number): number {
+  const r = (i: number) => Math.max(p[i].w, minW) / 2;
   for (let i = from; i < to; i++) {
-    if (i > 0) addQuad(ctx, p[i - 1], p[i - 1].w / 2, p[i], p[i].w / 2);
-    addCircle(ctx, p[i], p[i].w / 2);
+    if (i > 0) addQuad(ctx, p[i - 1], r(i - 1), p[i], r(i));
+    addCircle(ctx, p[i], r(i));
   }
   return to > from ? to - Math.max(0, from - 1) : 0;
 }
@@ -588,9 +590,9 @@ export class InkSurface {
 
   /**
    * Füllfeder und Bleistift: alle Vielecke des Umrisses (`outlineOf`) in einem Pfad mit einem `fill` (Regel nonzero), so hat
-   * die Form kein Loch. Ist sie überall dünner als ein Bildpunkt, verschwände sie: Dann wird die Mittellinie einen Bildpunkt
-   * breit gezogen. Der Bleistift malt mit seiner Deckkraft in einem Zug, darum wird er dort, wo er sich selbst überlappt,
-   * nicht dunkler. Mit Körnung nur, wo er auf dem Bildschirm mindestens `GRAIN_MIN_PX` Bildpunkte breit ist.
+   * die Form kein Loch. Keine Stelle ist dünner als ein Bildpunkt, sonst verschwände sie (die Datei behält die echten
+   * Breiten). Der Bleistift malt mit seiner Deckkraft in einem Zug, darum wird er dort, wo er sich selbst überlappt, nicht
+   * dunkler. Mit Körnung nur, wo er auf dem Bildschirm mindestens `GRAIN_MIN_PX` Bildpunkte breit ist.
    */
   private drawShape(ctx: CanvasRenderingContext2D, s: Stroke): void {
     if (!s.pts.length) return;
@@ -598,17 +600,13 @@ export class InkSurface {
     ctx.save();
     if (pencil) ctx.globalAlpha = BLEISTIFT_OPACITY;
     this.shapePaint(ctx, s.color, pencil && boundsOf(s).maxW * this.view.s * this.dpr >= GRAIN_MIN_PX);
-    const px = this.pixel();
-    if (boundsOf(s).maxW < px) this.drawLine(ctx, s.pts, px);
-    else {
-      ctx.beginPath();
-      for (const poly of outlineOf(s)) {
-        ctx.moveTo(poly[0].x, poly[0].y);
-        for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
-        ctx.closePath();
-      }
-      ctx.fill('nonzero');
+    ctx.beginPath();
+    for (const poly of outlineOf(s, this.pixel())) {
+      ctx.moveTo(poly[0].x, poly[0].y);
+      for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+      ctx.closePath();
     }
+    ctx.fill('nonzero');
     ctx.restore();
   }
 
@@ -810,7 +808,7 @@ export class InkSurface {
       this.setView(ctx);
       this.shapePaint(ctx, d.color, d.grain);
       ctx.beginPath();
-      count = addShape(ctx, p, d.drawn, settled);
+      count = addShape(ctx, p, d.drawn, settled, this.pixel());
       ctx.fill('nonzero');
       d.drawn = settled;
     }
@@ -853,13 +851,14 @@ export class InkSurface {
     d.tailArea = null;
     if (n <= d.drawn) return 0;
     const ctx = this.pctx;
+    const px = this.pixel();
     this.setView(ctx);
     this.shapePaint(ctx, d.color, d.grain);
     ctx.beginPath();
-    const count = addShape(ctx, p, d.drawn, n);
+    const count = addShape(ctx, p, d.drawn, n, px);
     ctx.fill('nonzero');
     const box = emptyBox();
-    let r = 0;
+    let r = px / 2;
     for (let i = Math.max(0, d.drawn - 1); i < n; i++) {
       growBox(box, p[i]);
       r = Math.max(r, p[i].w / 2);
@@ -931,7 +930,7 @@ export class InkSurface {
     let pad: number;
     if (isShape(d.pen)) {
       // Eine Form: Viereck vom letzten Punkt zum vorhergesagten in der Breite des letzten Punkts, ein Kreis am Ende.
-      const r = last.w / 2;
+      const r = Math.max(last.w, this.pixel()) / 2;
       this.shapePaint(pctx, d.color, d.grain);
       pctx.beginPath();
       addQuad(pctx, last, r, t, r);

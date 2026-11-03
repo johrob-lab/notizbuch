@@ -210,11 +210,36 @@ export function outlineD(pts: readonly Pt[]): string {
     .join(' ');
 }
 
-// Ein fertiger Strich ändert sich nie, sein Umriss wird darum nur einmal berechnet.
+// Ein fertiger Strich ändert sich nie, sein Umriss und seine kleinste Breite werden darum nur einmal berechnet. Ist er
+// irgendwo dünner als eine verlangte Mindestbreite, wird dazu der Umriss für die zuletzt verlangte gemerkt.
 const known = new WeakMap<Stroke, Pt2[][]>();
+const thinnest = new WeakMap<Stroke, number>();
+const widened = new WeakMap<Stroke, { minW: number; polys: Pt2[][] }>();
 
-/** Der Umriss eines fertigen Strichs, je Strich nur einmal berechnet. */
-export function outlineOf(s: Stroke): Pt2[][] {
+/** Die kleinste Breite eines Punkts, je Strich nur einmal berechnet. */
+function thinnestOf(s: Stroke): number {
+  let w = thinnest.get(s);
+  if (w === undefined) {
+    w = Infinity;
+    for (const p of s.pts) if (p.w < w) w = p.w;
+    thinnest.set(s, w);
+  }
+  return w;
+}
+
+/**
+ * Der Umriss eines fertigen Strichs, je Strich nur einmal berechnet. Mit `minW` (auf dem Bildschirm ein Bildpunkt) ist
+ * kein Punkt dünner als `minW`. Ist der Strich überall mindestens so breit, ist das derselbe Umriss wie ohne. Sonst wird
+ * der Umriss mit `minW` gemerkt und erst wieder berechnet, wenn eine andere Mindestbreite kommt (nach dem Zoomen).
+ */
+export function outlineOf(s: Stroke, minW = 0): Pt2[][] {
+  if (minW > thinnestOf(s)) {
+    const last = widened.get(s);
+    if (last?.minW === minW) return last.polys;
+    const polys = outlinePolygons(s.pts, minW);
+    widened.set(s, { minW, polys });
+    return polys;
+  }
   let polys = known.get(s);
   if (!polys) {
     polys = outlinePolygons(s.pts);

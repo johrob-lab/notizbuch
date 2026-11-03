@@ -169,6 +169,65 @@ test('a tap with the fountain pen leaves a dot', async ({ page }) => {
   expect(await inkNear(page, [400, 1053])).toBeGreaterThan(0);
 });
 
+/**
+ * Wie viele Bildpunkte rund um einen Ort der Seite auf der Live-Ebene mehr als halb decken. Dort steht beim Schreiben, was
+ * schon fest ist. `radius` in Bildschirmpunkten.
+ */
+function liveInkNear(page: Page, at: [number, number], radius: number): Promise<number> {
+  return page.evaluate(
+    ({ at: [x, y], radius: r, selector }) => {
+      const canvas = document.querySelector<HTMLCanvasElement>(selector)!;
+      const box = canvas.getBoundingClientRect();
+      const c = window.__notizbuch.toClient(x, y);
+      const k = canvas.width / box.width;
+      const left = Math.max(0, Math.round((c.x - box.left - r) * k));
+      const top = Math.max(0, Math.round((c.y - box.top - r) * k));
+      const size = Math.max(1, Math.round(2 * r * k));
+      const data = canvas.getContext('2d')!.getImageData(left, top, size, size).data;
+      let covered = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i] > 128) covered++;
+      return covered;
+    },
+    { at, radius, selector: LIVE },
+  );
+}
+
+test.describe('in portrait on the iPad', () => {
+  // So groß wie das iPad im Hochformat, zwei Bildpunkte je Punkt: Bei ganzer Seite ist ein Bildpunkt etwa 0,74 Seiteneinheiten.
+  test.use({ viewport: { width: 834, height: 1194 }, deviceScaleFactor: 2 });
+
+  test('a thin fountain pen line stays visible at full page', async ({ page }) => {
+    await openSeeded(page, DAY, { offline: true });
+    await choosePen(page, 'fueller', 'fein');
+    // Ein fester Abstrich entlang der Feder, breiter als ein Bildpunkt, und gleich danach ein leichter Aufstrich quer zur Feder.
+    const down = line([200, 820], [300, 920], 40);
+    const up = line([300, 920], [400, 820], 40).slice(1);
+    // Proben auf dem Aufstrich, wo er schon ganz fein ist, weit weg vom Abstrich und vom Ende.
+    const probes = [0.5, 0.6, 0.7, 0.8].map((f) => up[Math.round(f * (up.length - 1))]);
+    /** Die Proben, an denen `count` keinen Bildpunkt mit Tinte findet. */
+    const blank = async (count: (at: [number, number]) => Promise<number>) => {
+      const out: [number, number][] = [];
+      for (const at of probes) if ((await count(at)) === 0) out.push(at);
+      return out;
+    };
+    expect(await blank((at) => inkNear(page, at, 3)), 'vorher ohne Tinte').toEqual(probes);
+    const firm = pen(page, { pressure: 0.9 });
+    const light = pen(page, { pressure: 0.05 });
+    await firm.down(...down[0]);
+    for (const q of down.slice(1)) await firm.move(...q);
+    for (const q of up) await light.move(...q);
+    const whileWriting = await blank((at) => liveInkNear(page, at, 3));
+    await light.up(...up[up.length - 1]);
+    await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(1);
+    const finished = await blank((at) => inkNear(page, at, 3));
+    expect({ whileWriting, finished }, 'Proben ohne Tinte').toEqual({ whileWriting: [], finished: [] });
+    // In der Datei stehen die echten Breiten: Der Aufstrich ist dort ein Fünftel Bildpunkt breit, der Abstrich mehr als einer.
+    const widths = centreLine(strokePaths(await savedPage(page))[0]).map((p) => p.w);
+    expect(Math.min(...widths)).toBeLessThanOrEqual(0.2);
+    expect(Math.max(...widths)).toBeGreaterThan(0.74);
+  });
+});
+
 test('a pencil stroke is grey and see through', async ({ page }) => {
   await openSeeded(page, DAY);
   await choosePen(page, 'bleistift');

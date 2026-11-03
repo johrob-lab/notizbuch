@@ -238,3 +238,51 @@ test('the outline of a stroke is worked out once and follows its points', () => 
   expect(outlineOf(s)).toBe(outlineOf(s));
   expect(outlineOf(s)).toEqual(outlinePolygons(s.pts));
 });
+
+/** Wie bei der Füllfeder: ein breiter Abstrich (3) nach rechts unten, dann ein haarfeiner Aufstrich (0,15) nach rechts oben. */
+const downUp = (): { s: Stroke; up: Pt[] } => {
+  const down = sample(
+    [
+      { x: 10, y: 10 },
+      { x: 40, y: 40 },
+    ],
+    fixed(3),
+  );
+  const up = sample(
+    [
+      { x: 40, y: 40 },
+      { x: 70, y: 10 },
+    ],
+    fixed(0.15),
+  ).slice(1);
+  return { s: { id: 'f2', tool: 'fueller', color: 'schwarz', widthMm: 0.1, t: 1, w: 1, pts: [...down, ...up] }, up };
+};
+
+/** Ein Bildpunkt bei ganzer Seite im Hochformat am iPad, in Seiteneinheiten. */
+const PX = 0.74;
+
+test('with a minimum width no part of the outline is thinner, and it has no hole', () => {
+  const { s, up } = downUp();
+  const polys = outlineOf(s, PX);
+  // Quer zum Aufstrich reicht die Form überall fast einen halben Bildpunkt weit, ohne Mindestbreite nur 0,075.
+  const n = { x: Math.SQRT1_2, y: Math.SQRT1_2 }; // senkrecht zum Aufstrich
+  const reach = 0.9 * (PX / 2);
+  const missing = up
+    .slice(5, -5)
+    .flatMap((p) => [1, -1].map((side) => ({ x: p.x + side * reach * n.x, y: p.y + side * reach * n.y })))
+    .filter((q) => !inside(polys, q));
+  expect(missing).toEqual([]);
+  expect(s.pts.filter((p) => !inside(polys, p))).toEqual([]);
+});
+
+test('the outline with a minimum width is worked out again only when the minimum changes', () => {
+  const { s } = downUp();
+  const polys = outlineOf(s, PX);
+  expect(polys).toEqual(outlinePolygons(s.pts, PX));
+  expect(outlineOf(s, PX)).toBe(polys); // dieselbe Mindestbreite: nichts neu gerechnet
+  expect(outlineOf(s, 1.5)).toEqual(outlinePolygons(s.pts, 1.5)); // nach dem Zoomen ein anderer Bildpunkt
+  expect(outlineOf(s)).toEqual(outlinePolygons(s.pts)); // ohne Mindestbreite die echten Breiten
+  // Ein Strich, der nirgends dünner als die Mindestbreite ist, behält seinen einen Umriss.
+  const wide: Stroke = { ...s, id: 'f3', pts: s.pts.map((p) => ({ ...p, w: 3 })) };
+  expect(outlineOf(wide, PX)).toBe(outlineOf(wide));
+});
