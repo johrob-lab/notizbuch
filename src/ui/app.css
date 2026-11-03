@@ -415,6 +415,10 @@ body {
   pointer-events: none;
 }
 
+.hinweis .pill {
+  pointer-events: auto;
+}
+
 .hinweis.fehler {
   top: 56px;
   border-color: #f0b4ad;

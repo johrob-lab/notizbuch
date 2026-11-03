@@ -19,6 +19,8 @@ export type UpdateEnv = {
   /** Hier kommen die Eingaben an (Zeiger und Tasten). */
   target: { addEventListener(type: string, fn: (e: Event) => void, o?: AddEventListenerOptions): void };
   doc: { readonly visibilityState: string; addEventListener(type: 'visibilitychange', fn: () => void): void };
+  /** Ein Textfeld hat den Fokus: Ein Entwurf darin lässt sich nicht speichern, also lädt die App nicht von selbst neu. */
+  editing(): boolean;
   reload(): void;
   /** Speichert, was noch aussteht, bevor die Seite neu lädt. */
   beforeReload(): Promise<void>;
@@ -40,6 +42,7 @@ let current: AppUpdate | undefined;
 export function startAppUpdate(env: UpdateEnv, swUrl: string, scope: string): AppUpdate {
   let ready = false;
   let reloading = false;
+  let stopped = false;
   let registration: { update(): Promise<unknown> } | undefined;
   const down = new Set<number>();
   let lastInput = env.now();
@@ -47,6 +50,7 @@ export function startAppUpdate(env: UpdateEnv, swUrl: string, scope: string): Ap
   const timers: ReturnType<typeof setInterval>[] = [];
 
   const check = async (): Promise<void> => {
+    if (stopped) return;
     try {
       await registration?.update();
     } catch {
@@ -66,7 +70,7 @@ export function startAppUpdate(env: UpdateEnv, swUrl: string, scope: string): Ap
   };
 
   const quiet = (): boolean => {
-    if (!ready || reloading || env.doc.visibilityState !== 'visible' || down.size > 0) return false;
+    if (stopped || !ready || reloading || env.editing() || env.doc.visibilityState !== 'visible' || down.size > 0) return false;
     return justShown || env.now() - lastInput >= QUIET_MS;
   };
   const maybeReload = (): void => {
@@ -77,7 +81,7 @@ export function startAppUpdate(env: UpdateEnv, swUrl: string, scope: string): Ap
   if (sw) {
     const hadController = sw.controller != null;
     sw.addEventListener('controllerchange', () => {
-      if (!hadController) return; // erstes Einrichten: nichts Neues zu laden
+      if (stopped || !hadController) return; // erstes Einrichten: nichts Neues zu laden
       ready = true;
       maybeReload();
     });
@@ -89,11 +93,13 @@ export function startAppUpdate(env: UpdateEnv, swUrl: string, scope: string): Ap
     );
 
     const touch = (): void => {
+      if (stopped) return;
       lastInput = env.now();
     };
     env.target.addEventListener(
       'pointerdown',
       (e) => {
+        if (stopped) return;
         down.add((e as PointerEvent).pointerId ?? 0);
         touch();
       },
@@ -103,6 +109,7 @@ export function startAppUpdate(env: UpdateEnv, swUrl: string, scope: string): Ap
       env.target.addEventListener(
         type,
         (e) => {
+          if (stopped) return;
           down.delete((e as PointerEvent).pointerId ?? 0);
           touch();
         },
@@ -110,10 +117,13 @@ export function startAppUpdate(env: UpdateEnv, swUrl: string, scope: string): Ap
       );
     }
     env.target.addEventListener('keydown', touch, { capture: true });
+    env.target.addEventListener('wheel', touch, { capture: true });
 
     env.doc.addEventListener('visibilitychange', () => {
+      if (stopped) return;
       if (env.doc.visibilityState !== 'visible') {
         justShown = false;
+        down.clear(); // ein verlorenes pointerup darf das Neuladen nicht für immer sperren
         return;
       }
       justShown = true;
@@ -136,6 +146,7 @@ export function startAppUpdate(env: UpdateEnv, swUrl: string, scope: string): Ap
       return ready;
     },
     stop() {
+      stopped = true;
       for (const t of timers) clearInterval(t);
       if (current === instance) current = undefined;
     },

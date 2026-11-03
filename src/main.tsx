@@ -10,6 +10,10 @@ if (import.meta.env.PROD) {
       sw: navigator.serviceWorker,
       target: window,
       doc: document,
+      editing: () => {
+        const el = document.activeElement as HTMLElement | null;
+        return !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
+      },
       reload: () => location.reload(),
       beforeReload: flushInkPrefs,
       now: () => Date.now(),

@@ -8,7 +8,7 @@ function setup(o: { controller?: boolean; noSw?: boolean } = {}) {
   const input = new EventTarget();
   const visibility = new EventTarget();
   const worker = new EventTarget();
-  const state = { visible: 'visible', updates: 0, failBefore: false, controller: o.controller === false ? null : {} };
+  const state = { editing: false, visible: 'visible', updates: 0, failBefore: false, controller: o.controller === false ? null : {} };
   const env: UpdateEnv = {
     sw: o.noSw
       ? undefined
@@ -30,6 +30,7 @@ function setup(o: { controller?: boolean; noSw?: boolean } = {}) {
       },
       addEventListener: (_type, fn) => visibility.addEventListener('visibilitychange', fn),
     },
+    editing: () => state.editing,
     reload: () => void log.push('reload'),
     beforeReload: async () => {
       log.push('before');
@@ -147,4 +148,65 @@ test('without a service worker nothing happens and nothing throws', async () => 
   expect(t.update.ready).toBe(false);
   expect(t.log).toEqual([]);
   t.update.stop();
+});
+
+test('it never reloads while a text field has focus', async () => {
+  const t = setup();
+  await tick(0);
+  t.state.editing = true;
+  t.changeController();
+  await tick(QUIET_MS * 3);
+  expect(t.log).toEqual([]);
+  t.state.editing = false;
+  await tick(QUIET_POLL_MS);
+  expect(t.log).toEqual(['before', 'reload']);
+  t.update.stop();
+
+  // Der Knopf Neu laden darf trotzdem.
+  const b = setup();
+  b.state.editing = true;
+  await tick(0);
+  await b.update.reloadNow();
+  expect(b.log).toEqual(['before', 'reload']);
+  b.update.stop();
+});
+
+test('scrolling with the wheel counts as input', async () => {
+  const t = setup();
+  await tick(0);
+  t.changeController();
+  await tick(QUIET_MS - QUIET_POLL_MS);
+  t.send('wheel');
+  await tick(QUIET_MS - QUIET_POLL_MS);
+  expect(t.log).toEqual([]);
+  await tick(QUIET_POLL_MS * 2);
+  expect(t.log).toEqual(['before', 'reload']);
+  t.update.stop();
+});
+
+test('a pointer lost while hidden does not block the reload', async () => {
+  const t = setup();
+  await tick(0);
+  t.send('pointerdown');
+  t.hide();
+  t.changeController();
+  t.show();
+  await tick(0);
+  expect(t.log).toEqual(['before', 'reload']);
+  t.update.stop();
+});
+
+test('a stopped instance no longer reacts', async () => {
+  const t = setup();
+  await tick(0);
+  const start = t.state.updates;
+  t.update.stop();
+  t.changeController();
+  expect(t.update.ready).toBe(false);
+  t.show();
+  await tick(CHECK_EVERY_MS * 2);
+  expect(t.log).toEqual([]);
+  expect(t.state.updates).toBe(start);
+  await t.update.check();
+  expect(t.state.updates).toBe(start);
 });

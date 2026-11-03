@@ -401,6 +401,10 @@ test('a page from a newer version shows the note with a reload button and is nev
   const newer = `<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="3" data-seite="tag" data-key="2026-10-29"></svg>`;
   const repo = await openSeeded(page, DAY, { files: { [TAG]: newer } });
   await expect(page.getByText('Diese Seite stammt aus einer neueren Version der App. Bitte neu laden.')).toBeVisible();
+  // Der Knopf liegt in einem Hinweis ohne Zeigerereignisse: Er muss trotzdem klickbar sein und die App neu laden.
+  const reloaded = page.waitForEvent('load');
+  await page.getByRole('button', { name: 'Neu laden' }).click({ timeout: 3000 });
+  await reloaded;
   await expect(page.getByRole('button', { name: 'Neu laden' })).toBeVisible();
   await pen(page).stroke(line([200, 760], [400, 780], 12));
   await page.waitForTimeout(500);
