@@ -307,7 +307,7 @@ test('a palm does not open a day, a finger drag only moves the page', async ({ p
     [x - 60, y - 40],
   ]);
   expect(await hash(page)).toBe(MONTH);
-  expect((await viewOf(page)).x).not.toBeCloseTo(before.x, 0);
+  expect((await viewOf(page)).y).not.toBeCloseTo(before.y, 0);
 
   await touch(page).tap(x, y);
   await waitForPageOf(page, 'tag', '2026-10-29');

@@ -1,6 +1,6 @@
 import { boundsOf, emptyBox, growBox, lineWidth, type Box } from './bounds';
 import { hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
-import { clampView, GestureFilter, gestureView, isFingerTap, isTwoFingerTap, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
+import { clampView, GestureFilter, gestureView, isFingerTap, isTwoFingerTap, SIDE_MARGIN_PX, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
 import { History, restore, type Removed } from './history';
 import { extrapolate } from './predict';
 import { StrokeBuilder } from './stroke';
@@ -334,7 +334,7 @@ export class InkSurface {
       c.height = Math.round(this.vh * this.dpr);
     }
     this.refreshRect();
-    this.fit = Math.max(0.2, Math.min((this.vw - 32) / PAGE_W, 1.6));
+    this.fit = Math.max(0.2, Math.min((this.vw - 2 * SIDE_MARGIN_PX) / PAGE_W, 1.6));
     if (!had) {
       this.hasView = true;
       this.view = { s: this.fit, x: (this.vw - PAGE_W * this.fit) / 2, y: 16 };

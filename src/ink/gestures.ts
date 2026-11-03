@@ -14,8 +14,10 @@ const TAP_DURATION_MS = 300;
 const FINGER_TAP_MS = 500;
 /** Wer sich so weit oder weiter bewegt, tippt nicht mehr, sondern schiebt. Auch Verschieben und Zoomen beginnen erst dann. */
 export const TAP_SLOP_PX = 10;
-/** So viel von der Seite bleibt beim Verschieben mindestens auf dem Bildschirm. */
+/** So viel von der Seite bleibt beim Verschieben auf und ab mindestens auf dem Bildschirm. */
 const KEEP_VISIBLE_PX = 60;
+/** Rand links und rechts neben der Seite bei normaler Größe; hineingezoomt wird neben dem Seitenrand höchstens so viel frei. */
+export const SIDE_MARGIN_PX = 16;
 
 /**
  * Entscheidet, welche Berührungen Finger sind. Solange der Stift aufliegt und kurz danach liegt die Hand auf dem
@@ -102,13 +104,16 @@ export type ZoomLimits = { min: number; max: number };
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
-/** Schiebt die Seite zurück, wenn weniger als 60 px von ihr auf dem Bildschirm (`size`) übrig wären. */
+/**
+ * Begrenzt, wohin die Seite auf dem Bildschirm (`size`) geschoben werden kann. Waagrecht: Ist die Seite samt Rand von
+ * `SIDE_MARGIN_PX` links und rechts nicht breiter als der Bildschirm (normale Größe oder kleiner), steht sie in der Mitte und
+ * bewegt sich nur auf und ab. Erst hineingezoomt geht sie seitwärts, und nur so weit, dass neben ihrem Rand höchstens dieser
+ * Rand frei wird. Senkrecht bleiben mindestens 60 px von ihr auf dem Bildschirm.
+ */
 export function clampView(v: View, size: { w: number; h: number }, page: { w: number; h: number }): View {
-  return {
-    s: v.s,
-    x: clamp(v.x, KEEP_VISIBLE_PX - page.w * v.s, size.w - KEEP_VISIBLE_PX),
-    y: clamp(v.y, KEEP_VISIBLE_PX - page.h * v.s, size.h - KEEP_VISIBLE_PX),
-  };
+  const width = page.w * v.s;
+  const x = width + 2 * SIDE_MARGIN_PX <= size.w ? (size.w - width) / 2 : clamp(v.x, size.w - width - SIDE_MARGIN_PX, SIDE_MARGIN_PX);
+  return { s: v.s, x, y: clamp(v.y, KEEP_VISIBLE_PX - page.h * v.s, size.h - KEEP_VISIBLE_PX) };
 }
 
 /** Zoomt um den Bildschirmpunkt `at`: Die Stelle der Seite darunter bleibt dort. Der Maßstab bleibt in den Grenzen. */

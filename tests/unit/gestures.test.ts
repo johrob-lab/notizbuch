@@ -202,10 +202,27 @@ test('zoomAround keeps the page point under the cursor', () => {
   expect(zoomAround(V, at(300, 200), 1000, LIMITS).s).toBe(10);
 });
 
-test('clampView keeps 60 px of the page on the screen', () => {
-  const size = { w: 1000, h: 800 };
-  const page = { w: 1192, h: 1590 };
-  expect(clampView({ s: 1, x: -5000, y: -5000 }, size, page)).toEqual({ s: 1, x: 60 - 1192, y: 60 - 1590 });
-  expect(clampView({ s: 1, x: 5000, y: 5000 }, size, page)).toEqual({ s: 1, x: 940, y: 740 });
-  expect(clampView({ s: 0.5, x: 10, y: 20 }, size, page)).toEqual({ s: 0.5, x: 10, y: 20 });
+const SIZE = { w: 1000, h: 800 };
+const PAGE = { w: 1192, h: 1590 };
+/** Der Maßstab, bei dem die Seite mit 16 px Rand links und rechts genau die Breite füllt (wie `fit` der Fläche). */
+const FIT = (SIZE.w - 32) / PAGE.w;
+
+test('clampView keeps the page centred sideways while it is not wider than the screen', () => {
+  // Normale Größe: Wohin der Finger auch zieht, die Seite bleibt waagrecht mit 16 px Rand stehen.
+  for (const x of [-5000, -100, 0, 16, 300, 5000]) expect(clampView({ s: FIT, x, y: 20 }, SIZE, PAGE).x).toBeCloseTo(16, 6);
+  // Kleiner gezoomt: in der Mitte.
+  for (const x of [-5000, 10, 5000]) expect(clampView({ s: 0.5, x, y: 20 }, SIZE, PAGE).x).toBeCloseTo((1000 - 596) / 2, 6);
+});
+
+test('clampView lets a zoomed-in page move sideways only up to its edges', () => {
+  // Bei Maßstab 1 ist die Seite 1192 px breit: Ihr linker Rand geht höchstens 16 px nach rechts, ihr rechter höchstens 16 px nach links.
+  expect(clampView({ s: 1, x: 5000, y: 20 }, SIZE, PAGE).x).toBe(16);
+  expect(clampView({ s: 1, x: -5000, y: 20 }, SIZE, PAGE).x).toBe(1000 - 1192 - 16);
+  expect(clampView({ s: 1, x: -100, y: 20 }, SIZE, PAGE).x).toBe(-100);
+});
+
+test('clampView keeps 60 px of the page on the screen up and down', () => {
+  expect(clampView({ s: 1, x: 0, y: -5000 }, SIZE, PAGE).y).toBe(60 - 1590);
+  expect(clampView({ s: 1, x: 0, y: 5000 }, SIZE, PAGE).y).toBe(740);
+  expect(clampView({ s: 0.5, x: 0, y: 20 }, SIZE, PAGE)).toEqual({ s: 0.5, x: 202, y: 20 });
 });

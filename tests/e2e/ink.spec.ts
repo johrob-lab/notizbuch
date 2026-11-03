@@ -33,6 +33,12 @@ const LINE: [number, number][] = [
   [260, 1020],
   [320, 1000],
 ];
+/** Wie `LINE`, endet aber tiefer: Ein Finger verschiebt die Seite damit sichtbar (bei normaler Größe nur auf und ab). */
+const DOWNHILL: [number, number][] = [
+  [200, 1000],
+  [260, 1040],
+  [320, 1080],
+];
 const BROKEN = '<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="1"';
 /** So beginnt jeder Strich in einer Datei. Der Hintergrund der Seite hat auch <path>-Elemente (die Linien), aber keine mit `data-id`. */
 const STROKE = '<path data-id=';
@@ -96,29 +102,29 @@ test('toolbar sets color and width', async ({ page }) => {
 test('touch does not draw', async ({ page }) => {
   await openSeeded(page, DAY);
   const before = await viewOf(page);
-  await touch(page).stroke(LINE);
+  await touch(page).stroke(DOWNHILL);
   expect(await strokeCount(page)).toBe(0);
   // Der Finger war nicht wirkungslos, er hat die Seite verschoben.
-  expect((await viewOf(page)).x).not.toBeCloseTo(before.x, 0);
+  expect((await viewOf(page)).y).not.toBeCloseTo(before.y, 0);
   expect(await queued(page)).toEqual({});
 });
 
 test('mouse does not draw on the iPad either', async ({ page }) => {
   await openSeeded(page, DAY);
   const before = await viewOf(page);
-  await mouse(page).stroke(LINE);
+  await mouse(page).stroke(DOWNHILL);
   expect(await strokeCount(page)).toBe(0);
-  expect((await viewOf(page)).x).not.toBeCloseTo(before.x, 0);
+  expect((await viewOf(page)).y).not.toBeCloseTo(before.y, 0);
 });
 
 test('readOnly mouse never draws', async ({ page }) => {
   const repo = await openSeeded(page, DAY, { device: 'Firmen-PC' });
   const before = await viewOf(page);
-  await mouse(page).stroke(LINE);
+  await mouse(page).stroke(DOWNHILL);
   await pen(page).stroke(LINE);
   expect(await strokeCount(page)).toBe(0);
   // Ansehen geht: Die Maus verschiebt die Seite. Werkzeuge gibt es nicht.
-  expect((await viewOf(page)).x).not.toBeCloseTo(before.x, 0);
+  expect((await viewOf(page)).y).not.toBeCloseTo(before.y, 0);
   await expect(button(page, 'Radierer')).toHaveCount(0);
   await expect(page.getByTestId('quick-switch')).toHaveCount(0);
   // Ein Strich wird schon im Ereignis des Stifts gespeichert: Was die Warteschlange jetzt nicht hat, kommt auch nicht mehr.
@@ -145,7 +151,7 @@ test('touch is ignored while the pen is down', async ({ page }) => {
 
 // ---------- Finger und Maus: Ansicht ----------
 
-test('finger drag pans, two fingers zoom', async ({ page }) => {
+test('at normal size a finger drag moves the page only up and down, two fingers zoom', async ({ page }) => {
   await openSeeded(page, DAY);
   const start = await viewOf(page);
 
@@ -154,7 +160,7 @@ test('finger drag pans, two fingers zoom', async ({ page }) => {
     [500, 700],
   ]);
   const panned = await viewOf(page);
-  expect(panned.x - start.x).toBeCloseTo(-100 * start.scale, 0);
+  expect(panned.x).toBeCloseTo(start.x, 0); // waagrecht bleibt die Seite stehen
   expect(panned.y - start.y).toBeCloseTo(-100 * start.scale, 0);
   expect(panned.scale).toBeCloseTo(start.scale, 5);
 
@@ -179,6 +185,44 @@ test('finger drag pans, two fingers zoom', async ({ page }) => {
   expect(await strokeCount(page)).toBe(0);
 });
 
+test('zoomed in, a finger drag also moves the page sideways, but only up to its edge', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const surface = (await page.locator('canvas[data-layer="live"]').boundingBox())!;
+  await pinch(
+    page,
+    [
+      [500, 800],
+      [700, 800],
+    ],
+    [
+      [400, 800],
+      [800, 800],
+    ],
+  );
+  const zoomed = await viewOf(page);
+  await touch(page).stroke([
+    [600, 800],
+    [500, 700],
+  ]);
+  const panned = await viewOf(page);
+  expect(panned.x - zoomed.x).toBeCloseTo(-100 * zoomed.scale, 0);
+  expect(panned.y - zoomed.y).toBeCloseTo(-100 * zoomed.scale, 0);
+
+  // Weit nach rechts gezogen: Der linke Seitenrand bleibt 16 Punkte vom Rand der Fläche entfernt.
+  await touch(page).stroke([
+    [300, 800],
+    [1100, 800],
+  ]);
+  expect((await viewOf(page)).x).toBeCloseTo(surface.x + 16, 0);
+  // Weit nach links gezogen: ebenso der rechte Seitenrand.
+  await touch(page).stroke([
+    [1100, 800],
+    [100, 800],
+  ]);
+  const right = await page.evaluate(() => window.__notizbuch.toClient(1192, 0));
+  expect(right.x).toBeCloseTo(surface.x + surface.width - 16, 0);
+});
+
 test('a wide contact does not move the page, a finger does', async ({ page }) => {
   await openSeeded(page, DAY);
   const start = await viewOf(page);
@@ -191,7 +235,7 @@ test('a wide contact does not move the page, a finger does', async ({ page }) =>
     [600, 800],
     [500, 700],
   ]);
-  expect((await viewOf(page)).x).not.toBeCloseTo(start.x, 0);
+  expect((await viewOf(page)).y).not.toBeCloseTo(start.y, 0);
 });
 
 test('mouse drag pans, wheel scrolls, ctrl wheel zooms', async ({ page }) => {
@@ -203,7 +247,7 @@ test('mouse drag pans, wheel scrolls, ctrl wheel zooms', async ({ page }) => {
     [550, 750],
   ]);
   const dragged = await viewOf(page);
-  expect(dragged.x - start.x).toBeCloseTo(-50 * start.scale, 0);
+  expect(dragged.x).toBeCloseTo(start.x, 0); // bei normaler Größe nur auf und ab
   expect(dragged.y - start.y).toBeCloseTo(-50 * start.scale, 0);
 
   await wheel(page, [600, 800], { dy: 120 });
@@ -473,7 +517,7 @@ test('the pen on the quick switch holds off fingers on the page for the moment',
     [600, 800],
     [500, 700],
   ]);
-  expect((await viewOf(page)).x).not.toBeCloseTo(before.x, 0);
+  expect((await viewOf(page)).y).not.toBeCloseTo(before.y, 0);
 });
 
 // ---------- Speichern ----------
@@ -626,7 +670,7 @@ test('fingers work again on the next page when the pen was still down as the pag
     [600, 800],
     [500, 700],
   ]);
-  expect((await viewOf(page)).x).not.toBeCloseTo(before.x, 0);
+  expect((await viewOf(page)).y).not.toBeCloseTo(before.y, 0);
 });
 
 test('a stroke in progress is dropped when the page gets locked', async ({ page }) => {

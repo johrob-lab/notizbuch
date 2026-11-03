@@ -267,7 +267,7 @@ Diese Punkte lassen sich nur mit dem echten iPad und dem echten Apple Pencil pr�
 
 ### 3.3 Gesten auf den Karten und der Knopf „Ganze Seite“
 
-1. Lege einen Finger auf die Karte **Morgenbriefing** und ziehe nach links oder rechts. Erwartet: Die ganze Seite wandert mit.
+1. Schiebe die Seite bei normaler Größe mit einem Finger schräg. Erwartet: Sie geht nur auf und ab, nicht zur Seite. Zoome dann mit zwei Fingern etwas hinein, lege einen Finger auf die Karte **Morgenbriefing** und ziehe nach links oder rechts. Erwartet: Die ganze Seite wandert mit, aber nur bis zu ihrem Rand.
 2. Zoome mit zwei Fingern, von denen einer auf einer Karte beginnt. Erwartet: Die Seite zoomt.
 3. Ziehe mit einem Finger senkrecht in einer Karte, deren Inhalt länger ist als die Karte. Ist die Karte noch kurz, ergänze im Feld **Ergänzen** mehrere Einträge, bis sie überläuft. Erwartet: Die Liste in der Karte scrollt, nicht die Seite.
 4. Tippe auf den Knopf **Ganze Seite** (vier Ecken, die nach außen zeigen) am rechten Ende der Werkzeugleiste. Erwartet: Die Seite ist wieder ganz im Bild.

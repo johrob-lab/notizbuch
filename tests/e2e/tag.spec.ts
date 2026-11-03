@@ -1547,14 +1547,29 @@ test.describe('with a touch screen', () => {
     expect(after.scale).toBeCloseTo(before.scale, 9);
   });
 
-  test('a finger dragged sideways on a card moves the page', async ({ page }) => {
+  test('at normal size a finger dragged sideways on a card leaves the page in place', async ({ page }) => {
     await opened(page);
     const before = await viewOf(page);
     const [x, y] = await spot(page, 'Morgenbriefing');
-    await (await touchscreen(page)).swipe([x, y], [x + 120, y + 6]);
-    await expect.poll(async () => (await viewOf(page)).x - before.x).toBeGreaterThan(110);
+    // Schräg, aber mehr seitwärts: Die Geste geht an die Seite. Sie folgt dem Finger nur nach unten, waagrecht bleibt sie stehen.
+    await (await touchscreen(page)).swipe([x, y], [x + 120, y + 40]);
+    await expect.poll(async () => (await viewOf(page)).y - before.y).toBeGreaterThan(30);
     const after = await viewOf(page);
-    expect(after.x - before.x).toBeLessThan(130);
+    expect(after.y - before.y).toBeLessThan(50);
+    expect(after.x).toBeCloseTo(before.x, 0);
+    expect(after.scale).toBeCloseTo(before.scale, 9);
+  });
+
+  test('zoomed in, a finger dragged sideways on a card moves the page', async ({ page }) => {
+    await opened(page);
+    // Doppelt so groß, gezoomt am linken Rand der Seite: Dann ist nach links viel Platz zum Verschieben.
+    await wheel(page, [100, 400], { dy: -280, ctrl: true });
+    const before = await viewOf(page);
+    const [x, y] = await spot(page, 'Morgenbriefing', 0.5, 0.3);
+    await (await touchscreen(page)).swipe([x, y], [x - 120, y + 6]);
+    await expect.poll(async () => before.x - (await viewOf(page)).x).toBeGreaterThan(110);
+    const after = await viewOf(page);
+    expect(before.x - after.x).toBeLessThan(130);
     expect(after.scale).toBeCloseTo(before.scale, 9);
   });
 
