@@ -754,3 +754,46 @@ test('a page that could not be loaded is loaded again when the app comes back to
   await expect.poll(() => strokeIds(page)).toEqual(['a']);
   await expect(page.getByText(NOT_LOADED)).toHaveCount(0);
 });
+
+test('live work per event does not grow with stroke length', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const pts = Array.from({ length: 600 }, (_, i) => [100 + i * 1.5, 900 + Math.sin(i / 8) * 20] as [number, number]);
+  await pen(page).stroke(pts);
+  const s = await page.evaluate(() => window.__notizbuch.liveStats());
+  expect(s.events).toBeGreaterThan(500);
+  expect(s.ptsMax).toBeLessThanOrEqual(10);
+});
+
+/**
+ * Wie viel Tinte auf den Ebenen liegt, als Summe der Deckung je Bildpunkt (1 heißt: ganz bedeckt). Auf durchsichtigen
+ * Ebenen ist das die Deckkraft, auf der Grundebene wie dunkel der Punkt zwischen Papier (#fffefa) und Tinte (#1c1f26) ist.
+ */
+const inkCover = (page: Page, layers: string[]) =>
+  page.evaluate((names) => {
+    let n = 0;
+    for (const name of names) {
+      const c = document.querySelector<HTMLCanvasElement>(`canvas[data-layer="${name}"]`)!;
+      const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+      for (let i = 0; i < d.length; i += 4) {
+        if (name === 'grund') n += Math.max(0, Math.min(1, (764 - (d[i] + d[i + 1] + d[i + 2])) / (764 - 97)));
+        else n += d[i + 3] / 255;
+      }
+    }
+    return n;
+  }, layers);
+
+test('live stroke looks like the committed stroke', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const before = await inkCover(page, ['grund']);
+  const pts = Array.from({ length: 120 }, (_, i) => [150 + i * 3, 1100 + Math.sin(i / 6) * 25] as [number, number]);
+  const p = pen(page);
+  await p.down(...pts[0]);
+  for (const q of pts.slice(1)) await p.move(...q);
+  await page.waitForTimeout(60); // Vorhersage ist nach 40 ms wieder weg
+  const live = await inkCover(page, ['live', 'vorhersage']);
+  await p.up(...pts[pts.length - 1]);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  const committed = (await inkCover(page, ['grund'])) - before;
+  expect(live).toBeGreaterThan(0);
+  expect(Math.abs(live - committed) / committed).toBeLessThanOrEqual(0.15);
+});

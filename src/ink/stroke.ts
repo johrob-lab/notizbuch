@@ -91,6 +91,26 @@ export class StrokeBuilder {
   }
 
   /**
+   * Wie viele Punkte am Anfang fest sind: Weitere Stiftpunkte ändern sie nicht mehr (die Glättung reicht nur K Punkte
+   * zurück). Ohne Glättung sind alle Punkte fest.
+   */
+  settled(): number {
+    const n = this.raw.length;
+    return this.K ? Math.max(0, n - 1 - this.K) : n;
+  }
+
+  /** Die geglätteten Punkte, ohne Kopie. Nur lesen: Die Liste wächst mit jedem Punkt weiter. */
+  points(): readonly Pt[] {
+    return this.out;
+  }
+
+  /** Mittlere Breite, wie sie `stroke().w` hätte, ohne den Strich zu kopieren. */
+  meanW(): number {
+    const n = this.raw.length;
+    return n ? this.sumW / n : this.nomW;
+  }
+
+  /**
    * Das Fenster wird zu den Enden hin kleiner: Anfang, Ende und Stiftspitze bleiben genau dort, wo der Stift war.
    * Ein neuer Punkt ändert nur die letzten K + 1 Punkte, weiter vorn reicht das Fenster nicht bis zu ihm.
    */

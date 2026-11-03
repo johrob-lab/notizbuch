@@ -1,6 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { GestureFilter, type View } from '../ink/gestures';
+import { meterLabel } from '../ink/meter';
 import { InkSurface } from '../ink/surface';
 import type { FieldBox, InkColor, Page, WidthName } from '../ink/types';
 import { todayVienna } from '../lib/dates';
@@ -25,6 +26,8 @@ export type PageProps = {
   /** Glättung des Stifts (σ) und Vorhersage aus den Einstellungen. */
   sigma: number;
   prediction: boolean;
+  /** Zeile mit der Messung der Schreibverzögerung über der Seite, siehe `Settings.messung`. */
+  messung?: boolean;
   /** Ort des Schnellwechsels, siehe `Settings.quickSwitchPos`. */
   quickSwitchPos?: [number, number];
   onQuickSwitchMove(pos: [number, number]): void;
@@ -82,7 +85,7 @@ const BLOCKED = 'Die App öffnet diese Seite nicht, denn Wörter wie Passwort si
 const NOT_LOADED = 'Diese Seite konnte nicht geladen werden. Neuer Versuch, sobald das Netz da ist.';
 
 /** Testzugang: nur lesen, enthält keine Geheimnisse. Er steht da, sobald die Seite gelesen ist. */
-type TestAccess = { currentPage(): Page; toClient(x: number, y: number): { x: number; y: number } };
+type TestAccess = { currentPage(): Page; toClient(x: number, y: number): { x: number; y: number }; liveStats(): { events: number; ptsMax: number } };
 const testAccessHolder = (): { __notizbuch?: TestAccess } => window as unknown as { __notizbuch?: TestAccess };
 
 /**
@@ -119,6 +122,7 @@ export function PageView(p: Props) {
   const [width, setWidth] = useState<WidthName>('mittel');
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const [saveFailed, setSaveFailed] = useState(false);
+  const [meterText, setMeterText] = useState('');
   const [kopfMeta, setKopfMeta] = useState<Record<string, string>>(() => kopf?.complete({ kind: layout.kind, key: layout.key, meta: {}, strokes: [] }).meta ?? {});
 
   useEffect(() => {
@@ -142,6 +146,7 @@ export function PageView(p: Props) {
       filter: palm,
       onChange: (page) => {
         setHistory({ canUndo: view.canUndo, canRedo: view.canRedo });
+        setMeterText(meterLabel(view.meter.summary()));
         session.changed(page);
       },
       // Ein Finger oder die Maus auf einer Tageszahl öffnet den Tag. Der Stift tippt nie, er schreibt.
@@ -160,7 +165,7 @@ export function PageView(p: Props) {
     view.setWidth(width);
     surface.current = view;
 
-    const access: TestAccess = { currentPage: () => view.getPage(), toClient: (x, y) => view.toClient(x, y) };
+    const access: TestAccess = { currentPage: () => view.getPage(), toClient: (x, y) => view.toClient(x, y), liveStats: () => view.liveStats() };
     const session = new PageSession({
       engine,
       path,
@@ -306,6 +311,11 @@ export function PageView(p: Props) {
         {phase === 'nichtGeladen' && (
           <p class="hinweis" role="status">
             {NOT_LOADED}
+          </p>
+        )}
+        {p.messung && meterText && (
+          <p class="messung" aria-live="off">
+            {meterText}
           </p>
         )}
         {saveFailed && (

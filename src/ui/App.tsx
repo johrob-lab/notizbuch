@@ -275,7 +275,7 @@ export function App() {
   // ---------- Einstellungen ----------
 
   /** Eine Wahl der Einstellungen gilt sofort und wird gespeichert, ausgehend vom Stand im Speicher: Nichts anderes geht dabei verloren. */
-  const choose = async (patch: Partial<Pick<Settings, 'smoothing' | 'prediction' | 'device'>>): Promise<void> => {
+  const choose = async (patch: Partial<Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung'>>): Promise<void> => {
     const now = bootNow.current;
     if (now.phase !== 'bereit' || !now.window.active) return;
     const before = Object.fromEntries(Object.keys(patch).map((key) => [key, now.settings[key as keyof Settings]])) as Partial<Settings>;
@@ -419,6 +419,7 @@ export function App() {
                 readOnly={boot.settings.device === 'Firmen-PC'}
                 sigma={SMOOTHING[boot.settings.smoothing] ?? SMOOTHING.mittel}
                 prediction={boot.settings.prediction}
+                messung={boot.settings.messung ?? false}
                 quickSwitchPos={boot.settings.quickSwitchPos}
                 onQuickSwitchMove={moveQuickSwitch}
               />

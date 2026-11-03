@@ -13,6 +13,8 @@ export type Settings = {
   quickSwitchPos?: [number, number];
   /** Ablaufdatum des Tokens. Der Browser kann es nicht aus der Antwort von GitHub lesen, darum fragt die Einrichtung danach. */
   tokenExpiry?: Day;
+  /** Zeigt über der Seite, wie lange die App je Stiftbewegung braucht (Vergleich mit dem Stift-Test). Ohne Angabe aus. */
+  messung?: boolean;
 };
 
 /** Unter diesem Schlüssel liegen die Einstellungen im Bereich `settings` der IndexedDB. */

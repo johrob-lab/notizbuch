@@ -8,7 +8,7 @@ import { FAILED } from './texts';
 // (der nächste Strich schreibt damit) und wird gespeichert. Der Token steht hier nie: nur, dass er gespeichert ist und bis
 // wann er gilt. „Zugang ändern“ öffnet dasselbe Formular wie die Einrichtung, immer leer.
 
-type Choices = Pick<Settings, 'smoothing' | 'prediction' | 'device'>;
+type Choices = Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung'>;
 
 type Props = {
   settings: Settings;
@@ -79,6 +79,13 @@ export function SettingsPage({ settings, warning, passive, onChange, onAccess }:
           onPick={(next) => pick({ prediction: next === 'an' })}
         />
         <Choice title="Gerät" name="geraet" value={settings.device} options={DEVICES} onPick={(device) => pick({ device })} />
+        <Choice
+          title="Messung anzeigen"
+          name="messung"
+          value={settings.messung ? 'an' : 'aus'}
+          options={ON_OFF}
+          onPick={(next) => pick({ messung: next === 'an' })}
+        />
         <p class="einstellungen-fehler" role="alert">
           {problem}
         </p>
