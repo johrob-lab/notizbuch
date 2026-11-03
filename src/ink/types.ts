@@ -1,4 +1,5 @@
 import type { Day } from '../lib/dates';
+import type { PenKind } from './pens';
 
 /** Seiteneinheiten je Millimeter. */
 export const MM = 6;
@@ -10,12 +11,19 @@ export const PAPER = '#fffefa';
 
 export type InkColor = 'schwarz' | 'blau' | 'rot' | 'gruen';
 
+/** Die Farben, die man wählen kann. */
+export const PALETTE: readonly InkColor[] = ['schwarz', 'blau', 'rot', 'gruen'];
+
+/** Die Farbe eines Strichs: eine der gewählten Farben, oder `grau` beim Bleistift (nicht in der Farbwahl). */
+export type StrokeColor = InkColor | 'grau';
+
 /** Farbwerte der Tinte. Rot heißt „offen“, grün „erledigt“. */
-export const INK: Record<InkColor, string> = {
+export const INK: Record<StrokeColor, string> = {
   schwarz: '#1c1f26',
   blau: '#1f4fa3',
   rot: '#c62828',
   gruen: '#2e7d32',
+  grau: '#4a4e55',
 };
 
 export type WidthName = 'fein' | 'mittel' | 'breit';
@@ -32,8 +40,8 @@ export type Pt = { x: number; y: number; w: number };
 export type Stroke = {
   /** Eindeutig über alle Geräte, beim Zusammenführen zweier Fassungen einer Seite zählt allein die `id`. */
   id: string;
-  tool: 'kugel';
-  color: InkColor;
+  tool: PenKind;
+  color: StrokeColor;
   /** Nennbreite in Millimetern. */
   widthMm: number;
   /** Beginn des Strichs in Millisekunden seit 1970. */

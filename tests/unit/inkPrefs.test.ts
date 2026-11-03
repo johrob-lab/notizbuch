@@ -37,3 +37,17 @@ test('setInkPrefs saves once after 500 ms', async () => {
   await vi.waitFor(async () => expect((await loadSettings(store))!.ink).toMatchObject({ color: 'rot', width: 'breit' }));
   expect((await loadSettings(store))!.token).toBe(settings.token);
 });
+
+test('grey is not a colour you can choose', () => {
+  initInkPrefs({ ...settings, ink: { color: 'grau' } as never });
+  expect(inkPrefs.value.color).toBe('schwarz');
+});
+
+test('a saved choice without a pen or with an unknown pen is the ballpoint', () => {
+  initInkPrefs({ ...settings, ink: { color: 'rot' } as never });
+  expect(inkPrefs.value.pen).toBe('kugel');
+  initInkPrefs({ ...settings, ink: { pen: 'pinsel' } as never });
+  expect(inkPrefs.value.pen).toBe('kugel');
+  initInkPrefs({ ...settings, ink: { pen: 'fueller' } as never });
+  expect(inkPrefs.value.pen).toBe('fueller');
+});

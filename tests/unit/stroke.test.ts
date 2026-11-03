@@ -348,3 +348,77 @@ test('settled', () => {
   b0.add(5, 0, 0.5);
   expect(b0.settled()).toBe(2);
 });
+
+// ---------- Stifte (Paket 3) ----------
+
+/** 40 Punkte alle 2 Einheiten auf einer Geraden mit der Richtung (dx, dy), ohne Glättung. */
+function penLine(pen: 'kugel' | 'fineliner' | 'fueller' | 'bleistift', dir: [number, number], pressure: number | ((i: number) => number), tilt: [number, number] = [40, 40], color: InkColor = 'schwarz') {
+  const b = new StrokeBuilder({ pen, color, widthMm: 0.2, sigma: 0, t: 1, minDist: 0.5 });
+  const len = Math.hypot(dir[0], dir[1]);
+  for (let i = 0; i < 40; i++) {
+    const p = typeof pressure === 'function' ? pressure(i) : pressure;
+    b.add((dir[0] / len) * 2 * i, (dir[1] / len) * 2 * i, p, tilt[0], tilt[1]);
+  }
+  return b.stroke();
+}
+
+test('a builder without a pen is a ballpoint and draws as before', () => {
+  const b = builder();
+  b.add(0, 0, 0.5);
+  b.add(10, 0, 0.5);
+  expect(b.stroke().tool).toBe('kugel');
+  expect(b.stroke().w).toBeCloseTo(0.2 * 6 * 1.0, 5);
+});
+
+test('the fineliner draws 1.25 times the nominal width whatever the pressure', () => {
+  const s = penLine('fineliner', [1, 0], (i) => (i % 2 ? 0.9 : 0.1));
+  expect(s.tool).toBe('fineliner');
+  for (const p of s.pts) expect(p.w).toBeCloseTo(1.5, 9);
+});
+
+test('a fountain pen stroke along the pen is wider than one across it', () => {
+  const along = penLine('fueller', [1, 1], 0.45).pts;
+  const across = penLine('fueller', [1, -1], 0.45).pts;
+  expect(Math.abs(along[along.length - 1].w / (1.2 * 1.25 * 1.5) - 1)).toBeLessThan(0.05);
+  expect(Math.abs(across[across.length - 1].w / (1.2 * 1.25 * 0.5) - 1)).toBeLessThan(0.05);
+});
+
+test('the fountain pen width follows the pressure', () => {
+  const lo = penLine('fueller', [1, 1], 0.1).pts;
+  const hi = penLine('fueller', [1, 1], 0.8).pts;
+  const ratio = hi[hi.length - 1].w / lo[lo.length - 1].w;
+  expect(Math.abs(ratio / 4 - 1)).toBeLessThan(0.05);
+});
+
+test('without tilt the fountain pen uses the right hand hold', () => {
+  const a = penLine('fueller', [1, 0.3], 0.5, [0, 0]).pts;
+  const b = penLine('fueller', [1, 0.3], 0.5, [40, 40]).pts;
+  expect(a.map((p) => p.w)).toEqual(b.map((p) => p.w));
+});
+
+test('the fountain pen never gets thinner than a quarter of the nominal width', () => {
+  const s = penLine('fueller', [1, -1], 0.05);
+  for (const p of s.pts) expect(p.w).toBeGreaterThanOrEqual(0.3 - 1e-9);
+});
+
+test('a pencil stroke is grey and between 0.6 and 1.4 times the nominal width', () => {
+  const lo = penLine('bleistift', [1, 0], 0.1, [0, 0], 'blau');
+  const hi = penLine('bleistift', [1, 0], 0.8, [0, 0], 'blau');
+  expect(lo.color).toBe('grau');
+  expect(lo.tool).toBe('bleistift');
+  expect(lo.pts[lo.pts.length - 1].w).toBeCloseTo(0.72, 9);
+  expect(hi.pts[hi.pts.length - 1].w).toBeCloseTo(1.68, 9);
+});
+
+test('odd input never gives NaN widths', () => {
+  const b = new StrokeBuilder({ pen: 'fueller', color: 'schwarz', widthMm: 0.2, sigma: 0, t: 1, minDist: 0.5 });
+  b.add(0, 0, 0, NaN, NaN);
+  b.add(0, 0, 0, NaN, NaN);
+  b.add(5, 0, NaN, NaN, 3);
+  b.add(5, 0, 0, 0, 0);
+  b.add(9, 4, 0, 0, 0);
+  for (const p of b.stroke().pts) {
+    expect(Number.isFinite(p.w)).toBe(true);
+    expect(p.w).toBeGreaterThan(0);
+  }
+});
