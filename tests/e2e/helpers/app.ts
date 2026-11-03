@@ -15,6 +15,8 @@ declare global {
       currentPage(): InkPage;
       /** Seiteneinheiten in Bildschirmkoordinaten (clientX, clientY), wie sie ein Zeigerereignis braucht. */
       toClient(x: number, y: number): { x: number; y: number };
+      /** Zählt die Stiftbewegungen und die meisten Punkte, die eine Bewegung neu gezeichnet hat (seit dem Öffnen der Seite). */
+      liveStats(): { events: number; ptsMax: number };
     };
   }
 }

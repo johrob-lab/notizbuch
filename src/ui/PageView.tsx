@@ -1,6 +1,9 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { GestureFilter, type View } from '../ink/gestures';
+import { meterLabel } from '../ink/meter';
+import { effect } from '@preact/signals';
+import { inkPrefs, setInkPrefs } from './inkPrefs';
 import { InkSurface } from '../ink/surface';
 import type { FieldBox, InkColor, Page, WidthName } from '../ink/types';
 import { todayVienna } from '../lib/dates';
@@ -25,6 +28,8 @@ export type PageProps = {
   /** Glättung des Stifts (σ) und Vorhersage aus den Einstellungen. */
   sigma: number;
   prediction: boolean;
+  /** Zeile mit der Messung der Schreibverzögerung über der Seite, siehe `Settings.messung`. */
+  messung?: boolean;
   /** Ort des Schnellwechsels, siehe `Settings.quickSwitchPos`. */
   quickSwitchPos?: [number, number];
   onQuickSwitchMove(pos: [number, number]): void;
@@ -82,7 +87,7 @@ const BLOCKED = 'Die App öffnet diese Seite nicht, denn Wörter wie Passwort si
 const NOT_LOADED = 'Diese Seite konnte nicht geladen werden. Neuer Versuch, sobald das Netz da ist.';
 
 /** Testzugang: nur lesen, enthält keine Geheimnisse. Er steht da, sobald die Seite gelesen ist. */
-type TestAccess = { currentPage(): Page; toClient(x: number, y: number): { x: number; y: number } };
+type TestAccess = { currentPage(): Page; toClient(x: number, y: number): { x: number; y: number }; liveStats(): { events: number; ptsMax: number } };
 const testAccessHolder = (): { __notizbuch?: TestAccess } => window as unknown as { __notizbuch?: TestAccess };
 
 /**
@@ -114,11 +119,11 @@ export function PageView(p: Props) {
   const [today] = useState(() => todayVienna());
   const days = useMemo(() => tapTargets(layout), [layout]);
   const [phase, setPhase] = useState<Phase>('laden');
-  const [tool, setTool] = useState<Tool>('pen');
-  const [color, setColor] = useState<InkColor>('schwarz');
-  const [width, setWidth] = useState<WidthName>('mittel');
+  // Die Werkzeugwahl gilt für alle Seiten (siehe `inkPrefs`): Wer radiert und weiterblättert, radiert weiter.
+  const { tool, color, width, eraserSize, eraserMode } = inkPrefs.value;
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const [saveFailed, setSaveFailed] = useState(false);
+  const [meterText, setMeterText] = useState('');
   const [kopfMeta, setKopfMeta] = useState<Record<string, string>>(() => kopf?.complete({ kind: layout.kind, key: layout.key, meta: {}, strokes: [] }).meta ?? {});
 
   useEffect(() => {
@@ -142,6 +147,7 @@ export function PageView(p: Props) {
       filter: palm,
       onChange: (page) => {
         setHistory({ canUndo: view.canUndo, canRedo: view.canRedo });
+        setMeterText(meterLabel(view.meter.summary()));
         session.changed(page);
       },
       // Ein Finger oder die Maus auf einer Tageszahl öffnet den Tag. Der Stift tippt nie, er schreibt.
@@ -155,12 +161,19 @@ export function PageView(p: Props) {
     });
     const first = emptyPage();
     view.setPage(first, layout.fields, shownFor(first.meta));
-    view.setTool(tool);
-    view.setColor(color);
-    view.setWidth(width);
+    // Was gewählt ist, gilt sofort auch für die Fläche, gleich wo es gewählt wurde (Leiste, Schnellwechsel). Ein Signal-Effekt
+    // läuft gleich bei der Änderung, nicht erst nach dem nächsten Bild: Der Stift, der danach aufsetzt, hat schon das neue Werkzeug.
+    const stopPrefs = effect(() => {
+      const chosen = inkPrefs.value;
+      view.setTool(chosen.tool);
+      view.setColor(chosen.color);
+      view.setWidth(chosen.width);
+      view.setEraser(chosen.eraserSize, chosen.eraserMode);
+      view.setScribble(chosen.scribble);
+    });
     surface.current = view;
 
-    const access: TestAccess = { currentPage: () => view.getPage(), toClient: (x, y) => view.toClient(x, y) };
+    const access: TestAccess = { currentPage: () => view.getPage(), toClient: (x, y) => view.toClient(x, y), liveStats: () => view.liveStats() };
     const session = new PageSession({
       engine,
       path,
@@ -191,6 +204,7 @@ export function PageView(p: Props) {
     void session.reload();
 
     return () => {
+      stopPrefs();
       if (testAccessHolder().__notizbuch === access) delete testAccessHolder().__notizbuch;
       surface.current = null;
       sessionRef.current = null;
@@ -211,20 +225,11 @@ export function PageView(p: Props) {
     return watchCards({ stage: inStage, host: surfaceHost, frame: around, surface: () => surface.current, filter: palm });
   }, [hasCards, palm]);
 
-  const chooseTool = (t: Tool) => {
-    setTool(t);
-    surface.current?.setTool(t);
-  };
+  const chooseTool = (t: Tool) => setInkPrefs({ tool: t });
   // Wer Farbe oder Breite wählt, will schreiben: Der Kugelschreiber ist dann wieder das Werkzeug.
-  const chooseColor = (c: InkColor) => {
-    setColor(c);
-    surface.current?.setColor(c);
-    chooseTool('pen');
-  };
+  const chooseColor = (c: InkColor) => setInkPrefs({ color: c, tool: 'pen' });
   const chooseWidth = (w: WidthName) => {
-    setWidth(w);
-    surface.current?.setWidth(w);
-    chooseTool('pen');
+    setInkPrefs({ width: w, tool: 'pen' });
   };
 
   const canWrite = !readOnly && phase !== 'unlesbar' && phase !== 'gesperrt' && phase !== 'nichtGeladen';
@@ -260,7 +265,11 @@ export function PageView(p: Props) {
               width={width}
               canUndo={history.canUndo}
               canRedo={history.canRedo}
+              eraserSize={eraserSize}
+              eraserMode={eraserMode}
               onTool={chooseTool}
+              onEraserSize={(size) => setInkPrefs({ eraserSize: size, tool: 'eraser' })}
+              onEraserMode={(mode) => setInkPrefs({ eraserMode: mode, tool: 'eraser' })}
               onColor={chooseColor}
               onWidth={chooseWidth}
               onUndo={() => surface.current?.undo()}
@@ -308,6 +317,11 @@ export function PageView(p: Props) {
             {NOT_LOADED}
           </p>
         )}
+        {p.messung && meterText && (
+          <p class="messung" aria-live="off">
+            {meterText}
+          </p>
+        )}
         {saveFailed && (
           <p class="hinweis fehler" role="alert">
             Die letzte Änderung konnte nicht auf diesem Gerät gespeichert werden.
@@ -322,6 +336,7 @@ export function PageView(p: Props) {
         {canWrite && (
           <QuickSwitch
             tool={tool}
+            partial={eraserMode === 'stueck'}
             pos={p.quickSwitchPos}
             filter={palm}
             onToggle={() => chooseTool(tool === 'pen' ? 'eraser' : 'pen')}

@@ -334,3 +334,17 @@ test('hit test follows the bends of a stroke', () => {
   expect(hitStroke(s, 100, 50, 3)).toBe(true); // auf dem zweiten Stück
   expect(hitStroke(s, 50, 50, 3)).toBe(false); // in der Mitte der Ecke, weit weg
 });
+
+test('settled', () => {
+  const b = new StrokeBuilder({ color: 'schwarz', widthMm: 0.2, sigma: 1.6, t: 1, minDist: 0.6 }); // K = 4
+  for (let i = 0; i < 10; i++) b.add(i * 3, 0, 0.5);
+  expect(b.settled()).toBe(5);
+  const before = b.points().slice(0, b.settled()).map((p) => ({ ...p }));
+  for (let i = 10; i < 20; i++) b.add(i * 3, i % 2, 0.5);
+  expect(b.points().slice(0, before.length)).toEqual(before);
+  expect(b.meanW()).toBeCloseTo(b.stroke().w, 9);
+  const b0 = new StrokeBuilder({ color: 'schwarz', widthMm: 0.2, sigma: 0, t: 1, minDist: 0.6 });
+  b0.add(0, 0, 0.5);
+  b0.add(5, 0, 0.5);
+  expect(b0.settled()).toBe(2);
+});

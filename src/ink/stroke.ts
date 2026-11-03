@@ -17,6 +17,11 @@ function randomSuffix(): string {
     .padStart(4, '0');
 }
 
+/** Neue, über alle Geräte eindeutige `id` eines Strichs, der zur Zeit `t` (Millisekunden) entstand. */
+export function newStrokeId(t: number): string {
+  return `s${t}${randomSuffix()}`;
+}
+
 /**
  * Baut einen Strich aus den Stiftpunkten auf. Die Rechnung stammt aus `pushPoint` und `smoothTail` im Stift-Test
  * (`docs/reference/stift-test.html`) und ist dort mit dem Apple Pencil geprüft: Mindestabstand zum letzten Rohpunkt,
@@ -44,7 +49,7 @@ export class StrokeBuilder {
    */
   constructor(o: { color: InkColor; widthMm: number; sigma: number; t: number; minDist: number }) {
     this.opts = { ...o };
-    this.id = `s${o.t}${randomSuffix()}`;
+    this.id = newStrokeId(o.t);
     this.nomW = o.widthMm * MM;
     const sig = o.sigma;
     this.K = sig > 0 ? Math.ceil(2.5 * sig) : 0;
@@ -88,6 +93,26 @@ export class StrokeBuilder {
       w: n ? this.sumW / n : this.nomW,
       pts: this.out.slice(),
     };
+  }
+
+  /**
+   * Wie viele Punkte am Anfang fest sind: Weitere Stiftpunkte ändern sie nicht mehr (die Glättung reicht nur K Punkte
+   * zurück). Ohne Glättung sind alle Punkte fest.
+   */
+  settled(): number {
+    const n = this.raw.length;
+    return this.K ? Math.max(0, n - 1 - this.K) : n;
+  }
+
+  /** Die geglätteten Punkte, ohne Kopie. Nur lesen: Die Liste wächst mit jedem Punkt weiter. */
+  points(): readonly Pt[] {
+    return this.out;
+  }
+
+  /** Mittlere Breite, wie sie `stroke().w` hätte, ohne den Strich zu kopieren. */
+  meanW(): number {
+    const n = this.raw.length;
+    return n ? this.sumW / n : this.nomW;
   }
 
   /**

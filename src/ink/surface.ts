@@ -1,10 +1,14 @@
 import { boundsOf, emptyBox, growBox, lineWidth, type Box } from './bounds';
-import { hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
+import { cutStroke, ERASER_PX, ERASER_STEP_PX, hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
 import { clampView, GestureFilter, gestureView, isFingerTap, isTwoFingerTap, SIDE_MARGIN_PX, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
 import { History, restore, type Removed } from './history';
+import { fixedSegments, tailStart } from './live';
+import { InkMeter } from './meter';
 import { extrapolate } from './predict';
-import { StrokeBuilder } from './stroke';
-import { INK, PAGE_H, PAGE_W, PAPER, WIDTH_MM, type FieldBox, type InkColor, type Page, type Stroke, type WidthName } from './types';
+import { isScribble, scribbleTargets } from './scribble';
+import { newStrokeId, StrokeBuilder } from './stroke';
+import type { EraserMode, EraserSize } from '../lib/settings';
+import { INK, MM, PAGE_H, PAGE_W, PAPER, WIDTH_MM, type FieldBox, type InkColor, type Page, type Pt, type Stroke, type WidthName } from './types';
 
 // Die Schreibfläche: drei Canvas-Ebenen übereinander (Grund mit Papier und fertigen Strichen, Live mit dem Strich, der
 // gerade entsteht, Vorhersage mit dem Stück voraus). Die Zeigerlogik stammt aus dem Stift-Test
@@ -43,11 +47,26 @@ export type SurfaceOptions = {
   noInk?: readonly (readonly [x: number, y: number, w: number, h: number])[];
 };
 
-type Drawing = { id: number; builder: StrokeBuilder; box: Box; current: Stroke; hist: { x: number; y: number; t: number }[] };
-type Erasing = { id: number; removed: Removed[]; last: Pt2 };
+/**
+ * Ein Strich, der entsteht. `drawn` ist das erste Segment, das noch nicht fest auf der Live-Ebene steht (siehe `live.ts`),
+ * `tailArea` der Bereich des Endstücks auf der Vorhersage-Ebene.
+ */
+type Drawing = { id: number; builder: StrokeBuilder; color: InkColor; box: Box; drawn: number; tailArea: Box | null; hist: { x: number; y: number; t: number }[] };
+/**
+ * Ein Radiervorgang. Ganze Striche: `removed` sind die herausgenommenen. Nur das Stück: `before` ist die Liste vom Beginn
+ * (für Rückgängig), `cuts` ordnet jedem zerschnittenen Original seine Reststücke zu, `origin` jedem Stück sein Original.
+ */
+type Erasing = {
+  id: number;
+  mode: EraserMode;
+  removed: Removed[];
+  before: Stroke[];
+  cuts: Map<string, Stroke[]>;
+  origin: Map<string, string>;
+  last: Pt2;
+};
 type Gesture = { revert: View; ref: View; from: Pt2[]; moved: boolean; snapView: View | null };
 
-const ERASER_RADIUS_PX = 10;
 /** Ab so vielen Punkten auf der Seite zoomt eine Geste nur das Bild und zeichnet erst am Ende neu. */
 const HEAVY_POINTS = 8000;
 /** Zoom als Vielfaches der normalen Größe (`fit`, die Seite füllt die Breite): kleiner als normal wird die Seite nie. */
@@ -98,6 +117,11 @@ export class InkSurface {
   private tool: 'pen' | 'eraser' = 'pen';
   private color: InkColor = 'schwarz';
   private widthMm = WIDTH_MM.mittel;
+  private eraserPx = ERASER_PX.mittel;
+  private eraserMode: EraserMode = 'strich';
+  private scribble = true;
+  private flashTimer = 0;
+  private flashEl: HTMLElement | null = null;
 
   // Ansicht: `view` rechnet Seiteneinheiten in Bildschirmpunkte um (x * s + x), `fit` ist der Maßstab für die Seitenbreite.
   private dpr = 1;
@@ -125,6 +149,11 @@ export class InkSurface {
   private liveArea: Box | null = null;
   private predArea: Box | null = null;
   private predTimer = 0;
+  /** Messung der Schreibverzögerung, siehe `meter.ts`. */
+  readonly meter = new InkMeter();
+  private liveEvents = 0;
+  private livePtsMax = 0;
+  private meterRaf = 0;
   private raf = 0;
   private destroyed = false;
 
@@ -178,11 +207,20 @@ export class InkSurface {
   setPage(p: Page, _fields: FieldBox[], background: string): void {
     // Was gerade entsteht, bleibt: Ein Strich kommt am Ende zur neuen Seite dazu. Radiert der Stift gerade, bleiben die
     // Striche weg, die er schon erfasst hat, und er radiert weiter (auch aus der neuen Seite).
-    const erased = this.erasing ? new Set(this.erasing.removed.map((r) => r.stroke.id)) : null;
+    const er = this.erasing;
+    const erased = er ? new Set(er.removed.map((r) => r.stroke.id)) : null;
     this.head = { kind: p.kind, key: p.key, meta: { ...p.meta } };
     this.strokes = p.strokes.slice();
     this.history.clear();
-    if (this.erasing && erased) this.erasing.removed = takeOutIds(this.strokes, erased);
+    if (er && erased) er.removed = takeOutIds(this.strokes, erased);
+    if (er?.mode === 'stueck') {
+      // Was schon zerschnitten ist, bleibt zerschnitten: Jedes Original weicht seinen Stücken.
+      er.before = this.strokes.slice();
+      for (const [orig, pieces] of er.cuts) {
+        const i = this.strokes.findIndex((x) => x.id === orig);
+        if (i >= 0) this.strokes.splice(i, 1, ...pieces);
+      }
+    }
     if (!this.drawing && !this.erasing) this.clearLive(true);
     this.setBackground(background);
     this.render();
@@ -213,6 +251,17 @@ export class InkSurface {
 
   setWidth(w: WidthName): void {
     this.widthMm = WIDTH_MM[w];
+  }
+
+  /** Kritzeln über Geschriebenem löscht es (an) oder bleibt ein Strich (aus). */
+  setScribble(on: boolean): void {
+    this.scribble = on;
+  }
+
+  /** Größe und Art des Radierers. Ein Radiervorgang, der gerade läuft, behält seine Art. */
+  setEraser(size: EraserSize, mode: EraserMode): void {
+    this.eraserPx = ERASER_PX[size];
+    this.eraserMode = mode;
   }
 
   /**
@@ -293,7 +342,10 @@ export class InkSurface {
     for (const stop of this.cleanups) stop();
     this.observer.disconnect();
     cancelAnimationFrame(this.raf);
+    this.stopMeter();
     clearTimeout(this.predTimer);
+    clearTimeout(this.flashTimer);
+    this.flashEl?.remove();
     for (const c of [this.base, this.live, this.pred, this.snap]) {
       c.remove();
       // Safari gibt den Speicher einer Zeichenfläche erst frei, wenn sie nichts mehr zu halten hat, und deckelt alle zusammen.
@@ -379,7 +431,8 @@ export class InkSurface {
     const er = this.erasing;
     if (!er) return;
     this.erasing = null;
-    restore(this.strokes, er.removed);
+    if (er.mode === 'stueck') this.strokes.splice(0, this.strokes.length, ...er.before);
+    else restore(this.strokes, er.removed);
     this.clearLive(true);
     this.render();
   }
@@ -528,21 +581,124 @@ export class InkSurface {
     this.liveArea = null;
   }
 
-  private liveUpdate(): void {
-    const d = this.drawing;
-    if (!d) return;
-    const s = d.builder.stroke();
-    d.current = s;
-    if (!s.pts.length) return;
-    this.clearLive(false);
-    this.setView(this.lctx);
-    this.drawStroke(this.lctx, s);
-    this.liveArea = this.screenBox(d.box, this.lineW(s) + 3 / this.view.s);
+  /** Breite des entstehenden Strichs auf dem Bildschirm. */
+  private liveW(d: Drawing): number {
+    return Math.max(d.builder.meanW() || this.widthMm * MM, this.pixel());
   }
 
+  /** Zeichnet Punkte `from` bis zum Ende von Segment `to - 1` (oder bis zum letzten Punkt, wenn `toEnd`) als einen Pfad. */
+  private tracePath(ctx: CanvasRenderingContext2D, p: readonly Pt[], first: number, to: number, toEnd: boolean): number {
+    const n = p.length;
+    // Stücke stoßen stumpf aneinander: Runde Kappen an jeder Naht legten die Kanten doppelt übereinander, die Linie sähe
+    // live dicker aus als nach dem Abheben. Rund bleiben nur Anfang und Ende des ganzen Strichs.
+    ctx.lineCap = 'butt';
+    if (first <= 1) this.roundCap(ctx, p[0]);
+    if (toEnd) this.roundCap(ctx, p[n - 1]);
+    const start = first <= 1 ? p[0] : { x: (p[first - 1].x + p[first].x) / 2, y: (p[first - 1].y + p[first].y) / 2 };
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    const last = toEnd ? n - 1 : to;
+    for (let i = Math.max(1, first); i < last && i < n - 1; i++) ctx.quadraticCurveTo(p[i].x, p[i].y, (p[i].x + p[i + 1].x) / 2, (p[i].y + p[i + 1].y) / 2);
+    if (toEnd) ctx.lineTo(p[n - 1].x, p[n - 1].y);
+    ctx.stroke();
+    return last - Math.max(0, first - 1) + 1;
+  }
+
+  /** Kreis in Linienbreite: die runde Kappe an einem Ende des Strichs. */
+  private roundCap(ctx: CanvasRenderingContext2D, at: Pt): void {
+    ctx.beginPath();
+    ctx.arc(at.x, at.y, ctx.lineWidth / 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private inkStyle(ctx: CanvasRenderingContext2D, w: number): void {
+    ctx.strokeStyle = INK[this.drawingColor()];
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = w;
+  }
+
+  private drawingColor(): InkColor {
+    return this.drawing?.color ?? this.color;
+  }
+
+  /**
+   * Zeichnet den entstehenden Strich weiter: Was fest geworden ist, kommt einmal auf die Live-Ebene, das Endstück (höchstens
+   * K + 3 Punkte) wird auf der Vorhersage-Ebene neu gezeichnet. So kostet jede Bewegung gleich viel, egal wie lang der Strich ist.
+   */
+  private liveUpdate(): number {
+    const d = this.drawing;
+    if (!d) return 0;
+    const b = d.builder;
+    const p = b.points();
+    const n = p.length;
+    if (!n) return 0;
+    const settled = b.settled();
+    const w = this.liveW(d);
+    let drawnPts = 0;
+    const seg = fixedSegments(n, settled, d.drawn);
+    if (seg.to > seg.from) {
+      this.setView(this.lctx);
+      this.inkStyle(this.lctx, w);
+      drawnPts += this.tracePath(this.lctx, p, seg.from, seg.to, false);
+      d.drawn = seg.to;
+    }
+    drawnPts += this.paintTail(d);
+    return drawnPts;
+  }
+
+  /** Das Endstück auf der Vorhersage-Ebene: alten Bereich löschen, neu zeichnen. Gibt die Zahl der Punkte zurück. */
+  private paintTail(d: Drawing): number {
+    const p = d.builder.points();
+    const n = p.length;
+    this.clearArea(this.pctx, d.tailArea);
+    d.tailArea = null;
+    if (!n) return 0;
+    const w = this.liveW(d);
+    const first = Math.min(d.drawn, tailStart(n, d.builder.settled()) + 1);
+    this.setView(this.pctx);
+    this.inkStyle(this.pctx, w);
+    let count: number;
+    if (n === 1) {
+      this.pctx.beginPath();
+      this.pctx.arc(p[0].x, p[0].y, w / 2, 0, Math.PI * 2);
+      this.pctx.fill();
+      count = 1;
+    } else count = this.tracePath(this.pctx, p, first, n - 1, true);
+    const box = emptyBox();
+    for (let i = Math.max(0, first - 1); i < n; i++) growBox(box, p[i]);
+    d.tailArea = this.screenBox(box, w + 3 / this.view.s);
+    return count;
+  }
+
+  /** Löscht einen Bereich (Bildschirmpunkte) einer Ebene. */
+  private clearArea(ctx: CanvasRenderingContext2D, a: Box | null): void {
+    if (!a) return;
+    const { dpr } = this;
+    const [x0, y0, x1, y1] = a;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(Math.floor(x0 * dpr) - 2, Math.floor(y0 * dpr) - 2, Math.ceil((x1 - x0) * dpr) + 4, Math.ceil((y1 - y0) * dpr) + 4);
+  }
+
+  /** Den entstehenden Strich ganz neu zeichnen (nach Zoom oder Verschieben). */
   private redrawLive(): void {
     this.clearLive(true);
+    const d = this.drawing;
+    if (d) {
+      this.clearPredLayer();
+      d.drawn = 1;
+      d.tailArea = null;
+    }
     this.liveUpdate();
+  }
+
+  /** Die ganze Vorhersage-Ebene leeren (Endstück und Vorhersage). */
+  private clearPredLayer(): void {
+    clearTimeout(this.predTimer);
+    this.pctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.pctx.clearRect(0, 0, this.pred.width, this.pred.height);
+    this.predArea = null;
   }
 
   private clearPred(): void {
@@ -553,13 +709,15 @@ export class InkSurface {
     pctx.setTransform(1, 0, 0, 1, 0, 0);
     pctx.clearRect(Math.floor(x0 * dpr) - 2, Math.floor(y0 * dpr) - 2, Math.ceil((x1 - x0) * dpr) + 4, Math.ceil((y1 - y0) * dpr) + 4);
     this.predArea = null;
+    // Vorhersage und Endstück teilen sich die Ebene: was die Vorhersage überdeckt hat, wieder zeichnen.
+    if (this.drawing) this.paintTail(this.drawing);
   }
 
   /** Zeichnet die Linie ein Stück vor den Stift, damit sie nicht hinterherhinkt. */
   private predict(e: PointerEvent): void {
     this.clearPred();
     const d = this.drawing;
-    if (!this.opts.prediction || !d || !d.current.pts.length) return;
+    if (!this.opts.prediction || !d || !d.builder.points().length) return;
     let target: Pt2 | null = null;
     try {
       const list = e.getPredictedEvents(); // Safari liefert eigene Vorhersagen, wenn es sie kann
@@ -569,13 +727,13 @@ export class InkSurface {
     }
     target ??= extrapolate(d.hist); // sonst aus der Geschwindigkeit der letzten Punkte vorausrechnen
     if (!target) return;
-    const pts = d.current.pts;
+    const pts = d.builder.points();
     const last = pts[pts.length - 1];
     const t = this.toPage(target.x, target.y);
-    const w = this.lineW(d.current);
+    const w = this.liveW(d);
     const { pctx } = this;
     this.setView(pctx);
-    pctx.strokeStyle = INK[d.current.color];
+    pctx.strokeStyle = INK[d.color];
     pctx.lineCap = 'round';
     pctx.lineWidth = w;
     pctx.beginPath();
@@ -589,15 +747,16 @@ export class InkSurface {
   private beginDraw(e: PointerEvent): void {
     const pos = this.local(e);
     if (this.tool === 'eraser') {
-      this.erasing = { id: e.pointerId, removed: [], last: pos };
+      this.erasing = { id: e.pointerId, mode: this.eraserMode, removed: [], before: this.strokes.slice(), cuts: new Map(), origin: new Map(), last: pos };
       this.eraseAt(pos);
       this.eraserCursor(pos);
       return;
     }
     const builder = this.newBuilder();
-    this.drawing = { id: e.pointerId, builder, box: emptyBox(), current: builder.stroke(), hist: [] };
+    this.drawing = { id: e.pointerId, builder, color: this.color, box: emptyBox(), drawn: 1, tailArea: null, hist: [] };
     this.addSample(e);
     this.liveUpdate();
+    this.startMeter();
   }
 
   private newBuilder(): StrokeBuilder {
@@ -634,21 +793,22 @@ export class InkSurface {
    */
   private cutStroke(): void {
     const d = this.drawing;
-    if (!d || !d.builder.stroke().pts.length) return;
+    if (!d || !d.builder.points().length) return;
     this.commitStroke(d);
-    const builder = this.newBuilder();
-    d.builder = builder;
+    d.builder = this.newBuilder();
     d.box = emptyBox();
-    d.current = builder.stroke();
+    d.drawn = 1;
+    d.tailArea = null;
     d.hist = [];
     this.clearLive(true);
-    this.clearPred();
+    this.clearPredLayer();
   }
 
-  /** Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. */
+  /** Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. Ein Gekritzel über Geschriebenem löscht es stattdessen. */
   private commitStroke(d: Drawing): void {
     const s = d.builder.stroke();
     if (!s.pts.length) return;
+    if (this.scribble && this.eraseByScribble(s)) return;
     this.strokes.push(s);
     this.setView(this.bctx);
     this.drawStroke(this.bctx, s);
@@ -656,31 +816,116 @@ export class InkSurface {
     this.changed();
   }
 
+  /**
+   * Ist `s` ein Gekritzel über Strichen, verschwinden sie, und das Gekritzel kommt nicht auf die Seite. Rückgängig holt sie
+   * in einem Schritt zurück. Wahr, wenn gelöscht wurde. Ein Gekritzel über leerem Papier bleibt ein Strich.
+   */
+  private eraseByScribble(s: Stroke): boolean {
+    if (!isScribble(s.pts, Date.now() - s.t)) return false;
+    const targets = scribbleTargets(s, this.strokes);
+    if (!targets.length) return false;
+    const before = this.strokes.slice();
+    takeOutIds(this.strokes, new Set(targets));
+    this.history.push({ type: 'swap', before, after: this.strokes.slice() });
+    this.render();
+    this.flash(boundsOf(s).box);
+    this.changed();
+    return true;
+  }
+
+  /**
+   * Ein heller Kreis für 300 ms dort, wo das Gekritzel gelöscht hat: So sieht man, dass es kein Strich war. Er ist ein eigenes
+   * Element über der Fläche, nicht auf einer Zeichenebene: So löscht sein Verschwinden nichts, was inzwischen dort gezeichnet wurde.
+   */
+  private flash(b: Box): void {
+    clearTimeout(this.flashTimer);
+    this.flashEl?.remove();
+    const [x0, y0, x1, y1] = this.screenBox(b, 4 / this.view.s);
+    const d = Math.max(x1 - x0, y1 - y0);
+    const el = document.createElement('div');
+    el.className = 'kritzel-hinweis';
+    el.setAttribute('aria-hidden', 'true');
+    Object.assign(el.style, {
+      position: 'absolute',
+      left: `${(x0 + x1 - d) / 2}px`,
+      top: `${(y0 + y1 - d) / 2}px`,
+      width: `${d}px`,
+      height: `${d}px`,
+      borderRadius: '50%',
+      background: 'rgba(44, 90, 138, 0.15)',
+      pointerEvents: 'none',
+    });
+    this.el.append(el);
+    this.flashEl = el;
+    this.flashTimer = window.setTimeout(() => {
+      el.remove();
+      if (this.flashEl === el) this.flashEl = null;
+    }, 300);
+  }
+
   /** Der Stift hebt ab. */
   private finishDraw(commit: boolean): void {
     const d = this.drawing;
     this.drawing = null;
+    this.stopMeter();
     this.clearLive(true);
-    this.clearPred();
+    this.clearPredLayer();
     if (d && commit) this.commitStroke(d);
+  }
+
+  /** Zählt Bilder, solange der Stift schreibt. */
+  private startMeter(): void {
+    cancelAnimationFrame(this.meterRaf);
+    this.meter.pause();
+    const tick = (now: number) => {
+      this.meter.frame(now);
+      this.meterRaf = requestAnimationFrame(tick);
+    };
+    this.meterRaf = requestAnimationFrame(tick);
+  }
+
+  private stopMeter(): void {
+    cancelAnimationFrame(this.meterRaf);
+    this.meterRaf = 0;
+  }
+
+  /** Für Tests: Stiftbewegungen und die meisten Punkte, die eine Bewegung gezeichnet hat. */
+  liveStats(): { events: number; ptsMax: number } {
+    return { events: this.liveEvents, ptsMax: this.livePtsMax };
   }
 
   // ---------- Radierer (ganze Striche) ----------
 
-  /** Radiert an einem Ort (Bildschirmpunkte) alle Striche im Umkreis von 10 Bildschirmpunkten. */
+  /** Radiert an einem Ort (Bildschirmpunkte) im Umkreis des Radierers: ganze Striche oder nur das Stück unter dem Kreis. */
   private eraseAt(at: Pt2): void {
     const er = this.erasing;
     if (!er) return;
     const p = this.toPage(at.x, at.y);
-    const hits = hitIndexes(this.strokes, p, ERASER_RADIUS_PX / this.view.s, this.pixel());
+    const r = this.eraserPx / this.view.s;
+    const hits = hitIndexes(this.strokes, p, r, this.pixel());
     if (!hits.length) return;
-    er.removed.push(...takeOut(this.strokes, hits));
+    if (er.mode === 'strich') er.removed.push(...takeOut(this.strokes, hits));
+    else {
+      // Die höchsten zuerst: So bleiben die Stellen der übrigen gültig, auch wenn ein Strich in mehrere Stücke zerfällt.
+      const minW = this.pixel();
+      for (const i of hits) {
+        const s = this.strokes[i];
+        // Mindestens einen Bildpunkt breit gezeichnet, also trifft der Kreis ihn auch so breit (wie beim ganzen Strich).
+        const pieces = cutStroke(s, p, r + Math.max(0, minW - s.w) / 2, () => newStrokeId(s.t));
+        if (!pieces) continue;
+        const orig = er.origin.get(s.id) ?? s.id;
+        for (const piece of pieces) er.origin.set(piece.id, orig);
+        const kept = (er.cuts.get(orig) ?? [s]).flatMap((x) => (x.id === s.id ? pieces : [x]));
+        er.cuts.set(orig, kept);
+        this.strokes.splice(i, 1, ...pieces);
+      }
+    }
     this.scheduleRender();
   }
 
   /** Radiert entlang einer Strecke in kleinen Schritten, damit kein Strich zwischen zwei Messpunkten durchrutscht. */
   private erasePath(from: Pt2, to: Pt2): void {
-    for (const at of pointsAlong(from, to)) this.eraseAt(at);
+    for (const at of pointsAlong(from, to, Math.min(ERASER_STEP_PX, this.eraserPx / 2))) this.eraseAt(at);
   }
 
   private eraserCursor(p: Pt2): void {
@@ -688,21 +933,28 @@ export class InkSurface {
     const ctx = this.lctx;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.beginPath();
-    ctx.arc(p.x, p.y, ERASER_RADIUS_PX, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, this.eraserPx, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(44, 90, 138, 0.12)';
     ctx.fill();
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = 'rgba(44, 90, 138, 0.9)';
     ctx.stroke();
-    this.liveArea = [p.x - 12, p.y - 12, p.x + 12, p.y + 12];
+    const m = this.eraserPx + 2;
+    this.liveArea = [p.x - m, p.y - m, p.x + m, p.y + m];
   }
 
   private finishErase(): void {
     const er = this.erasing;
     this.erasing = null;
     this.clearLive(true);
-    if (!er?.removed.length) return;
-    this.history.push({ type: 'erase', removed: er.removed });
+    if (!er) return;
+    if (er.mode === 'stueck') {
+      if (!er.cuts.size) return;
+      this.history.push({ type: 'swap', before: er.before, after: this.strokes.slice() });
+    } else {
+      if (!er.removed.length) return;
+      this.history.push({ type: 'erase', removed: er.removed });
+    }
     this.changed();
   }
 
@@ -810,9 +1062,14 @@ export class InkSurface {
     const { drawing: d, erasing: er } = this;
     if (d && e.pointerId === d.id) {
       e.preventDefault();
+      const t0 = performance.now();
       for (const ev of samples(e)) this.addSample(ev);
-      this.liveUpdate();
+      const pts = this.liveUpdate();
       this.predict(e);
+      this.liveEvents++;
+      this.livePtsMax = Math.max(this.livePtsMax, pts);
+      this.meter.points(pts);
+      this.meter.event(performance.now() - t0, t0);
     } else if (er && e.pointerId === er.id) {
       e.preventDefault();
       for (const ev of samples(e)) {
