@@ -15,8 +15,12 @@ type Props = {
   onAction(a: ToolAction): void;
 };
 
-/** Von oben nach unten: das Werkzeug, die Wahl dazu, Verlauf, Blättern, Ansicht. */
-const ORDER: ActionGroup[] = ['werkzeug', 'farbe', 'breite', 'radiergroesse', 'radierart', 'verlauf', 'blaettern', 'ansicht'];
+/**
+ * Von oben nach unten: das Werkzeug, die Wahl dazu, Verlauf, Blättern, Ansicht. Jede Gruppe muss hier stehen: Fehlt eine, meldet
+ * TypeScript einen Fehler, statt dass ihre Knöpfe stumm aus der Leiste fallen.
+ */
+const ORDER: Record<ActionGroup, number> = { werkzeug: 0, farbe: 1, breite: 2, radiergroesse: 3, radierart: 4, verlauf: 5, blaettern: 6, ansicht: 7 };
+const GROUPS = (Object.keys(ORDER) as ActionGroup[]).sort((a, b) => ORDER[a] - ORDER[b]);
 
 /**
  * Ob die Leiste offen ist, gehört nicht zur Seite: Jede Seite wird neu aufgebaut, und wer mit › durch die Seiten blättert, soll die
@@ -33,7 +37,7 @@ export function ToolTab({ actions, filter, onAction }: Props) {
   });
 
   const all = [...actions.inner, ...actions.outer];
-  const groups = ORDER.map((g) => ({ g, buttons: all.filter((b) => b.group === g) })).filter((x) => x.buttons.length > 0);
+  const groups = GROUPS.map((g) => ({ g, buttons: all.filter((b) => b.group === g) })).filter((x) => x.buttons.length > 0);
 
   return (
     <>

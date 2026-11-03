@@ -170,7 +170,7 @@ Wo: Testkopie, dann echtes Vault, Firmen-PC. Dauer: etwa 15 Minuten. Am PC kanns
 7. Hole am iPad die App in den Vordergrund. Innerhalb von Sekunden, spätestens nach 3 Minuten, steht der Haken auch dort.
 8. Probiere am PC noch: **Strg** halten und das Mausrad drehen zoomt die Seite, das Mausrad allein verschiebt sie, der Knopf **Ganze Seite** unten links auf der Seite bringt sie zurück.
 
-9. Tippe oben auf **Vollbild** und klicke mit der Maus auf den runden Knopf unten rechts (er zeigt drei Punkte). Erwartet: Ein Ring geht auf mit **‹**, **Heute**, **›**, den vier Ecken nach außen (**Ganze Seite**) und den vier Ecken nach innen (**Vollbild aus**), sonst nichts. Klicke auf **Vollbild aus**. Erwartet: Die Leisten sind wieder da.
+9. Klicke oben auf **Vollbild** und klicke mit der Maus auf den runden Knopf unten rechts (er zeigt drei Punkte). Erwartet: Ein Ring geht auf mit **‹**, **Heute**, **›**, den vier Ecken nach außen (**Ganze Seite**) und den vier Ecken nach innen (**Vollbild aus**), sonst nichts. Klicke auf **Vollbild aus**. Erwartet: Die Leisten sind wieder da.
 
 Erwartet: Abhaken und Tippen klappen am PC, und die Änderungen sind am iPad zu sehen.
 
@@ -340,7 +340,7 @@ Vollbild blendet die Leisten aus, die Seite füllt den Bildschirm. Die Werkzeuge
 
 Der Ring um den runden Knopf:
 
-1. Öffne den 29.10.2026 und tippe oben auf **Vollbild**. Erwartet: Die Leisten sind weg. Unten rechts steht der runde Knopf mit dem Kugelschreiber. Er kann an einem anderen Ort stehen, wenn du ihn verschoben hast. Der Stand des Abgleichs oben kann bleiben.
+1. Öffne den 29.10.2026 und tippe oben auf **Vollbild**. Erwartet: Die Leisten sind weg. Unten rechts steht der runde Knopf mit dem Kugelschreiber. Zeigt er den Radierer, tippe einmal mit dem Stift darauf. Er kann an einem anderen Ort stehen, wenn du ihn verschoben hast. Der Stand des Abgleichs oben kann bleiben.
 2. Tippe kurz mit dem Stift auf den runden Knopf. Erwartet: Er zeigt jetzt den Radierer, es geht nichts auf. Halte dann den Stift etwa eine halbe Sekunde auf dem Knopf. Erwartet: Der Ring geht auf, der Knopf wechselt nichts.
 3. Schließe den Ring, indem du mit dem Stift auf die Seite neben den Ring tippst. Tippe dann mit dem Stift auf den runden Knopf, bis wieder der Kugelschreiber zu sehen ist. Erwartet: Der Ring ist zu, auf dem Papier ist kein Strich.
 4. Tippe mit dem Finger auf den runden Knopf. Erwartet: Der Ring geht auf. Tippe auf eine Farbe, zum Beispiel die rote. Erwartet: Der Ring schließt sich, und der nächste Strich ist rot.

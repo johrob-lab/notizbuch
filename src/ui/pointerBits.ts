@@ -24,12 +24,13 @@ export function inside(e: PointerEvent, target: Element | Box): boolean {
 export type Pressable = { key: string; disabled?: boolean };
 
 /**
- * Wer einen Knopf auslöst, in Ring und Lasche gleich: Stift und Maus beim Abheben, ein Finger nur, wenn das Tor gegen Handballen ihn
- * beim Aufsetzen und beim Abheben annimmt, die Tastatur mit einem Klick ohne Zeigerereignisse (`detail` ist dann 0). Der Stift meldet
- * dem Tor sein Aufsetzen und Abheben. Gibt für jeden Knopf die Ereignisse zurück, die man ihm gibt.
+ * Wer einen Knopf auslöst, in Ring und Lasche gleich: Stift und Maus beim Abheben, die Tastatur mit einem Klick ohne Zeigerereignisse
+ * (`detail` ist dann 0). Ein Finger nur, wenn das Tor gegen Handballen ihn beim Aufsetzen und beim Abheben annimmt (`acceptTouch`) und
+ * er dann noch tippt (`stillTap`): Setzte inzwischen der Stift auf, war der Finger die Hand, und lag er länger als ein Tipp, hielt er
+ * nur. Der Stift meldet dem Tor sein Aufsetzen und Abheben. Gibt für jeden Knopf die Ereignisse zurück, die man ihm gibt.
  */
 export function useActivation<B extends Pressable>(filter: GestureFilter, act: (b: B) => void) {
-  /** Welcher Zeiger auf welchem Knopf liegt (sein `key`). */
+  /** Welcher Zeiger auf welchem Knopf liegt (sein `key`) und der Stand des Tors, als er aufsetzte (`mark`, für `stillTap`). */
   const pressed = useRef(new Map<number, { key: string; mark: TouchMark }>());
 
   function press(e: PointerEvent, b: B) {

@@ -446,7 +446,7 @@ export function App() {
                 messung={boot.settings.messung ?? false}
                 quickSwitchPos={boot.settings.quickSwitchPos}
                 onQuickSwitchMove={moveQuickSwitch}
-                vollbild={fullscreen ? vollbildOf(boot.settings).werkzeuge : null}
+                vollbild={fullscreen ? vollbild.werkzeuge : null}
                 nav={nav}
                 onVollbildAus={() => setVollbild({ an: false })}
               />
