@@ -1,14 +1,17 @@
 import { boundsOf, emptyBox, growBox, lineWidth, type Box } from './bounds';
 import { cutStroke, ERASER_PX, ERASER_STEP_PX, hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
 import { clampView, GestureFilter, gestureView, isFingerTap, isTwoFingerTap, SIDE_MARGIN_PX, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
+import { GRAIN, grainMask } from './grain';
 import { History, restore, type Removed } from './history';
 import { fixedSegments, tailStart } from './live';
 import { InkMeter } from './meter';
+import { outlineOf } from './outline';
+import { BLEISTIFT_OPACITY, isShape, type PenKind } from './pens';
 import { extrapolate } from './predict';
 import { isScribble, scribbleTargets } from './scribble';
 import { newStrokeId, StrokeBuilder } from './stroke';
 import type { EraserMode, EraserSize } from '../lib/settings';
-import { INK, MM, PAGE_H, PAGE_W, PAPER, WIDTH_MM, type FieldBox, type InkColor, type Page, type Pt, type Stroke, type WidthName } from './types';
+import { INK, MM, PAGE_H, PAGE_W, PAPER, WIDTH_MM, type FieldBox, type InkColor, type Page, type Pt, type Stroke, type StrokeColor, type WidthName } from './types';
 
 // Die Schreibfläche: drei Canvas-Ebenen übereinander (Grund mit Papier und fertigen Strichen, Live mit dem Strich, der
 // gerade entsteht, Vorhersage mit dem Stück voraus). Die Zeigerlogik stammt aus dem Stift-Test
@@ -48,10 +51,20 @@ export type SurfaceOptions = {
 };
 
 /**
- * Ein Strich, der entsteht. `drawn` ist das erste Segment, das noch nicht fest auf der Live-Ebene steht (siehe `live.ts`),
- * `tailArea` der Bereich des Endstücks auf der Vorhersage-Ebene.
+ * Ein Strich, der entsteht, mit Stift und Farbe des Strichs (beim Bleistift `grau`). `drawn` sagt, was schon fest auf der
+ * Live-Ebene steht: bei Linien das erste Segment, das noch fehlt (siehe `live.ts`), bei Formen die Zahl der Punkte, deren
+ * Viereck vom vorigen Punkt und deren Kreis dort stehen. `tailArea` ist der Bereich des Endstücks auf der Vorhersage-Ebene.
  */
-type Drawing = { id: number; builder: StrokeBuilder; color: InkColor; box: Box; drawn: number; tailArea: Box | null; hist: { x: number; y: number; t: number }[] };
+type Drawing = {
+  id: number;
+  builder: StrokeBuilder;
+  pen: PenKind;
+  color: StrokeColor;
+  box: Box;
+  drawn: number;
+  tailArea: Box | null;
+  hist: { x: number; y: number; t: number }[];
+};
 /**
  * Ein Radiervorgang. Ganze Striche: `removed` sind die herausgenommenen. Nur das Stück: `before` ist die Liste vom Beginn
  * (für Rückgängig), `cuts` ordnet jedem zerschnittenen Original seine Reststücke zu, `origin` jedem Stück sein Original.
@@ -92,6 +105,63 @@ function context(canvas: HTMLCanvasElement, settings?: CanvasRenderingContext2DS
   return ctx;
 }
 
+/** Was von einem neuen Strich auf der Live-Ebene steht, bevor etwas gezeichnet ist (siehe `Drawing.drawn`). */
+const nothingDrawn = (pen: PenKind): number => (isShape(pen) ? 0 : 1);
+
+let grainCanvas: HTMLCanvasElement | null = null;
+
+/** Die Kachel der Körnung in Graphitgrau, je Feld ein Bildpunkt, ganz deckend oder ganz durchsichtig. Einmal gebaut, für alle Flächen. */
+function grainTile(): HTMLCanvasElement {
+  if (!grainCanvas) {
+    const { tile, cover, seed } = GRAIN;
+    const mask = grainMask(tile, cover, seed);
+    const c = document.createElement('canvas');
+    c.width = tile;
+    c.height = tile;
+    const ctx = context(c);
+    ctx.fillStyle = INK.grau;
+    for (let i = 0; i < mask.length; i++) if (mask[i]) ctx.fillRect(i % tile, Math.floor(i / tile), 1, 1);
+    grainCanvas = c;
+  }
+  return grainCanvas;
+}
+
+// Formen (Füllfeder und Bleistift), während sie entstehen: je Punkt ein Kreis mit seiner halben Breite und vom vorigen Punkt
+// her ein Viereck. Alle Teile laufen im selben Sinn herum wie `arc(…, false)`: In einem Pfad mit einem `fill` (Regel nonzero)
+// füllt sich ihre Vereinigung ohne Löcher, und keine Stelle wird darin doppelt gemalt.
+
+/** Hängt das Viereck von `a` nach `b` an den Pfad, die Ecken je Punkt um seinen Radius senkrecht zum Stück. */
+function addQuad(ctx: CanvasRenderingContext2D, a: Pt2, ra: number, b: Pt2, rb: number): void {
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  if (!(len > 0)) return; // zwei gleiche Punkte: Ihre Kreise decken das Stück
+  const nx = (a.y - b.y) / len;
+  const ny = (b.x - a.x) / len;
+  ctx.moveTo(a.x + nx * ra, a.y + ny * ra);
+  ctx.lineTo(a.x - nx * ra, a.y - ny * ra);
+  ctx.lineTo(b.x - nx * rb, b.y - ny * rb);
+  ctx.lineTo(b.x + nx * rb, b.y + ny * rb);
+  ctx.closePath();
+}
+
+/** Hängt den Kreis um `c` als eigenes Teilstück an den Pfad. */
+function addCircle(ctx: CanvasRenderingContext2D, c: Pt2, r: number): void {
+  ctx.moveTo(c.x + r, c.y);
+  ctx.arc(c.x, c.y, r, 0, Math.PI * 2, false);
+  ctx.closePath();
+}
+
+/**
+ * Hängt die Punkte `from` bis `to - 1` einer Form an den Pfad: je Punkt das Viereck vom vorigen Punkt her (Punkt 0 hat
+ * keins) und den Kreis um ihn. Gibt zurück, wie viele Punkte dafür gebraucht wurden.
+ */
+function addShape(ctx: CanvasRenderingContext2D, p: readonly Pt[], from: number, to: number): number {
+  for (let i = from; i < to; i++) {
+    if (i > 0) addQuad(ctx, p[i - 1], p[i - 1].w / 2, p[i], p[i].w / 2);
+    addCircle(ctx, p[i], p[i].w / 2);
+  }
+  return to > from ? to - Math.max(0, from - 1) : 0;
+}
+
 export class InkSurface {
   private readonly el: HTMLElement;
   private readonly opts: SurfaceOptions;
@@ -103,6 +173,8 @@ export class InkSurface {
   private readonly bctx: CanvasRenderingContext2D;
   private readonly lctx: CanvasRenderingContext2D;
   private readonly pctx: CanvasRenderingContext2D;
+  /** Das Kornmuster des Bleistifts je Ebene, beim ersten Gebrauch gebaut. `null`: Der Browser hat keins geliefert. */
+  private readonly grains = new Map<CanvasRenderingContext2D, CanvasPattern | null>();
   private readonly observer: ResizeObserver;
   private readonly cleanups: (() => void)[] = [];
 
@@ -115,6 +187,7 @@ export class InkSurface {
   // Werkzeug
   private readOnly: boolean;
   private tool: 'pen' | 'eraser' = 'pen';
+  private pen: PenKind = 'kugel';
   private color: InkColor = 'schwarz';
   private widthMm = WIDTH_MM.mittel;
   private eraserPx = ERASER_PX.mittel;
@@ -243,6 +316,11 @@ export class InkSurface {
 
   setTool(t: 'pen' | 'eraser'): void {
     this.tool = t;
+  }
+
+  /** Der Stift für die nächsten Striche. Ein Strich, der gerade entsteht, bleibt bei seinem. */
+  setPen(pen: PenKind): void {
+    this.pen = pen;
   }
 
   setColor(c: InkColor): void {
@@ -464,17 +542,24 @@ export class InkSurface {
     return lineWidth(s, this.pixel());
   }
 
-  /**
-   * Ein Strich ist ein einziger glatter Pfad in einer Breite, derselbe wie in der SVG-Datei (`pathD`): zu jedem
-   * Punkt eine Kurve bis zur Mitte zum nächsten, zuletzt eine Linie zum Endpunkt. Ein einzelner Punkt ist ein Kreis.
-   */
+  /** Ein fertiger Strich: Kugelschreiber und Fineliner als Linie in einer Breite, Füllfeder und Bleistift als Form. */
   private drawStroke(ctx: CanvasRenderingContext2D, s: Stroke): void {
-    const p = s.pts;
-    const n = p.length;
-    if (!n) return;
-    const w = this.lineW(s);
+    if (isShape(s.tool)) {
+      this.drawShape(ctx, s);
+      return;
+    }
     ctx.strokeStyle = INK[s.color];
     ctx.fillStyle = INK[s.color];
+    this.drawLine(ctx, s.pts, this.lineW(s));
+  }
+
+  /**
+   * Ein einziger glatter Pfad in der Breite `w`, derselbe wie in der SVG-Datei (`pathD`): zu jedem Punkt eine Kurve bis zur
+   * Mitte zum nächsten, zuletzt eine Linie zum Endpunkt. Ein einzelner Punkt ist ein Kreis. Die Farbe setzt, wer ruft.
+   */
+  private drawLine(ctx: CanvasRenderingContext2D, p: readonly Pt[], w: number): void {
+    const n = p.length;
+    if (!n) return;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.beginPath();
@@ -488,6 +573,56 @@ export class InkSurface {
     ctx.lineTo(p[n - 1].x, p[n - 1].y);
     ctx.lineWidth = w;
     ctx.stroke();
+  }
+
+  /**
+   * Füllfeder und Bleistift: alle Vielecke des Umrisses (`outlineOf`) in einem Pfad mit einem `fill` (Regel nonzero), so hat
+   * die Form kein Loch. Ist sie überall dünner als ein Bildpunkt, verschwände sie: Dann wird die Mittellinie einen Bildpunkt
+   * breit gezogen. Der Bleistift malt mit dem Kornmuster und seiner Deckkraft in einem Zug, darum wird er dort, wo er sich
+   * selbst überlappt, nicht dunkler.
+   */
+  private drawShape(ctx: CanvasRenderingContext2D, s: Stroke): void {
+    if (!s.pts.length) return;
+    ctx.save();
+    if (s.tool === 'bleistift') ctx.globalAlpha = BLEISTIFT_OPACITY;
+    this.shapePaint(ctx, s.tool, s.color);
+    const px = this.pixel();
+    if (boundsOf(s).maxW < px) this.drawLine(ctx, s.pts, px);
+    else {
+      ctx.beginPath();
+      for (const poly of outlineOf(s)) {
+        ctx.moveTo(poly[0].x, poly[0].y);
+        for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+        ctx.closePath();
+      }
+      ctx.fill('nonzero');
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Womit eine Form gemalt wird: in der Farbe der Tinte, beim Bleistift mit dem Kornmuster, voll deckend (seine Deckkraft
+   * setzt, wer zeichnet). Das Muster wird nicht geglättet: So deckt jeder Bildpunkt ganz oder gar nicht, auch vergrößert,
+   * und wo sich Stücke auf einer Ebene überlappen, wird es nicht dunkler.
+   */
+  private shapePaint(ctx: CanvasRenderingContext2D, pen: PenKind, color: StrokeColor): void {
+    const grain = pen === 'bleistift' ? this.grain(ctx) : null;
+    ctx.fillStyle = grain ?? INK[color];
+    ctx.strokeStyle = grain ?? INK[color];
+    ctx.imageSmoothingEnabled = !grain;
+  }
+
+  /**
+   * Das Kornmuster einer Ebene: die Kachel wiederholt, ein Feld `GRAIN.cell` Seiteneinheiten groß. Jede Ebene zeichnet in
+   * Seitenkoordinaten, darum liegt die Körnung fest auf der Seite und ist auf allen Ebenen dieselbe.
+   */
+  private grain(ctx: CanvasRenderingContext2D): CanvasPattern | null {
+    if (!this.grains.has(ctx)) {
+      const pattern = ctx.createPattern(grainTile(), 'repeat');
+      pattern?.setTransform(new DOMMatrix().scale(GRAIN.cell, GRAIN.cell));
+      this.grains.set(ctx, pattern);
+    }
+    return this.grains.get(ctx) ?? null;
   }
 
   /**
@@ -619,7 +754,7 @@ export class InkSurface {
     ctx.lineWidth = w;
   }
 
-  private drawingColor(): InkColor {
+  private drawingColor(): StrokeColor {
     return this.drawing?.color ?? this.color;
   }
 
@@ -630,6 +765,7 @@ export class InkSurface {
   private liveUpdate(): number {
     const d = this.drawing;
     if (!d) return 0;
+    if (isShape(d.pen)) return this.liveShape(d);
     const b = d.builder;
     const p = b.points();
     const n = p.length;
@@ -648,8 +784,30 @@ export class InkSurface {
     return drawnPts;
   }
 
+  /**
+   * `liveUpdate` für Formen, Punkt für Punkt: Solange `d.drawn` kleiner ist als die Zahl der festen Punkte, kommen das
+   * Viereck von Punkt `d.drawn - 1` her und der Kreis um Punkt `d.drawn` auf die Live-Ebene (der Kreis um Punkt 0 mit dem
+   * ersten festen Punkt). Alles, was ein Aufruf dorthin zeichnet, ist ein Pfad mit einem `fill`.
+   */
+  private liveShape(d: Drawing): number {
+    const p = d.builder.points();
+    const settled = d.builder.settled();
+    let count = 0;
+    if (d.drawn < settled) {
+      const ctx = this.lctx;
+      this.setView(ctx);
+      this.shapePaint(ctx, d.pen, d.color);
+      ctx.beginPath();
+      count = addShape(ctx, p, d.drawn, settled);
+      ctx.fill('nonzero');
+      d.drawn = settled;
+    }
+    return count + this.paintTail(d);
+  }
+
   /** Das Endstück auf der Vorhersage-Ebene: alten Bereich löschen, neu zeichnen. Gibt die Zahl der Punkte zurück. */
   private paintTail(d: Drawing): number {
+    if (isShape(d.pen)) return this.paintShapeTail(d);
     const p = d.builder.points();
     const n = p.length;
     this.clearArea(this.pctx, d.tailArea);
@@ -672,6 +830,32 @@ export class InkSurface {
     return count;
   }
 
+  /**
+   * Das Endstück einer Form: Vierecke und Kreise ab Punkt `d.drawn - 1` bis zum Ende, ohne den Kreis um Punkt `d.drawn - 1`
+   * (den hat die Live-Ebene), in einem Pfad mit einem `fill`.
+   */
+  private paintShapeTail(d: Drawing): number {
+    const p = d.builder.points();
+    const n = p.length;
+    this.clearArea(this.pctx, d.tailArea);
+    d.tailArea = null;
+    if (n <= d.drawn) return 0;
+    const ctx = this.pctx;
+    this.setView(ctx);
+    this.shapePaint(ctx, d.pen, d.color);
+    ctx.beginPath();
+    const count = addShape(ctx, p, d.drawn, n);
+    ctx.fill('nonzero');
+    const box = emptyBox();
+    let r = 0;
+    for (let i = Math.max(0, d.drawn - 1); i < n; i++) {
+      growBox(box, p[i]);
+      r = Math.max(r, p[i].w / 2);
+    }
+    d.tailArea = this.screenBox(box, r + 3 / this.view.s);
+    return count;
+  }
+
   /** Löscht einen Bereich (Bildschirmpunkte) einer Ebene. */
   private clearArea(ctx: CanvasRenderingContext2D, a: Box | null): void {
     if (!a) return;
@@ -687,7 +871,7 @@ export class InkSurface {
     const d = this.drawing;
     if (d) {
       this.clearPredLayer();
-      d.drawn = 1;
+      d.drawn = nothingDrawn(d.pen);
       d.tailArea = null;
     }
     this.liveUpdate();
@@ -730,17 +914,30 @@ export class InkSurface {
     const pts = d.builder.points();
     const last = pts[pts.length - 1];
     const t = this.toPage(target.x, target.y);
-    const w = this.liveW(d);
     const { pctx } = this;
     this.setView(pctx);
-    pctx.strokeStyle = INK[d.color];
-    pctx.lineCap = 'round';
-    pctx.lineWidth = w;
-    pctx.beginPath();
-    pctx.moveTo(last.x, last.y);
-    pctx.lineTo(t.x, t.y);
-    pctx.stroke();
-    this.predArea = this.screenBox([Math.min(last.x, t.x), Math.min(last.y, t.y), Math.max(last.x, t.x), Math.max(last.y, t.y)], w + 2 / this.view.s);
+    let pad: number;
+    if (isShape(d.pen)) {
+      // Eine Form: Viereck vom letzten Punkt zum vorhergesagten in der Breite des letzten Punkts, ein Kreis am Ende.
+      const r = last.w / 2;
+      this.shapePaint(pctx, d.pen, d.color);
+      pctx.beginPath();
+      addQuad(pctx, last, r, t, r);
+      addCircle(pctx, t, r);
+      pctx.fill('nonzero');
+      pad = r + 2 / this.view.s;
+    } else {
+      const w = this.liveW(d);
+      pctx.strokeStyle = INK[d.color];
+      pctx.lineCap = 'round';
+      pctx.lineWidth = w;
+      pctx.beginPath();
+      pctx.moveTo(last.x, last.y);
+      pctx.lineTo(t.x, t.y);
+      pctx.stroke();
+      pad = w + 2 / this.view.s;
+    }
+    this.predArea = this.screenBox([Math.min(last.x, t.x), Math.min(last.y, t.y), Math.max(last.x, t.x), Math.max(last.y, t.y)], pad);
     this.predTimer = window.setTimeout(() => this.clearPred(), 40); // der Stift steht still: Vorhersage wieder weg
   }
 
@@ -752,15 +949,27 @@ export class InkSurface {
       this.eraserCursor(pos);
       return;
     }
-    const builder = this.newBuilder();
-    this.drawing = { id: e.pointerId, builder, color: this.color, box: emptyBox(), drawn: 1, tailArea: null, hist: [] };
+    const pen = this.pen;
+    const builder = this.newBuilder(pen);
+    const color = builder.stroke().color;
+    this.drawing = { id: e.pointerId, builder, pen, color, box: emptyBox(), drawn: nothingDrawn(pen), tailArea: null, hist: [] };
+    // Der Bleistift malt auf Live- und Vorhersage-Ebene voll deckend, seine Deckkraft gilt für die ganze Ebene. So sieht er
+    // aus wie der fertige Strich, auch wo sich seine Stücke überlappen.
+    if (pen === 'bleistift') this.setLiveOpacity(String(BLEISTIFT_OPACITY));
     this.addSample(e);
     this.liveUpdate();
     this.startMeter();
   }
 
-  private newBuilder(): StrokeBuilder {
+  /** Deckkraft von Live- und Vorhersage-Ebene als Ganzes. Leer heißt: ganz deckend. */
+  private setLiveOpacity(value: string): void {
+    this.live.style.opacity = value;
+    this.pred.style.opacity = value;
+  }
+
+  private newBuilder(pen: PenKind): StrokeBuilder {
     return new StrokeBuilder({
+      pen,
       color: this.color,
       widthMm: this.widthMm,
       sigma: this.opts.sigma,
@@ -784,7 +993,7 @@ export class InkSurface {
     }
     d.hist.push({ x: pos.x, y: pos.y, t: ev.timeStamp });
     if (d.hist.length > 12) d.hist.shift();
-    if (d.builder.add(pt.x, pt.y, ev.pressure)) growBox(d.box, pt);
+    if (d.builder.add(pt.x, pt.y, ev.pressure, ev.tiltX ?? 0, ev.tiltY ?? 0)) growBox(d.box, pt);
   }
 
   /**
@@ -795,9 +1004,9 @@ export class InkSurface {
     const d = this.drawing;
     if (!d || !d.builder.points().length) return;
     this.commitStroke(d);
-    d.builder = this.newBuilder();
+    d.builder = this.newBuilder(d.pen);
     d.box = emptyBox();
-    d.drawn = 1;
+    d.drawn = nothingDrawn(d.pen);
     d.tailArea = null;
     d.hist = [];
     this.clearLive(true);
@@ -863,13 +1072,14 @@ export class InkSurface {
     }, 300);
   }
 
-  /** Der Stift hebt ab. */
+  /** Der Stift hebt ab, oder der Strich wird abgebrochen (`commit` falsch). */
   private finishDraw(commit: boolean): void {
     const d = this.drawing;
     this.drawing = null;
     this.stopMeter();
     this.clearLive(true);
     this.clearPredLayer();
+    this.setLiveOpacity('');
     if (d && commit) this.commitStroke(d);
   }
 

@@ -6,12 +6,16 @@ import type { Page } from '@playwright/test';
 
 export type Kind = 'pen' | 'touch' | 'mouse';
 type Phase = 'down' | 'move' | 'up';
-type Step = { kind: Kind; id: number; primary: boolean; phase: Phase; x: number; y: number; size: number };
+/** Druck und Neigung, die ein Zeiger mit jedem Ereignis meldet. */
+type Feel = { pressure: number; tiltX: number; tiltY: number };
+type Step = { kind: Kind; id: number; primary: boolean; phase: Phase; x: number; y: number; size: number; feel: Feel };
 
 const LIVE = 'canvas[data-layer="live"]';
 /** So groß ist die Auflagefläche eines Fingers im Test (ein Handballen ist größer als 120). */
 const FINGER_SIZE = 1;
 const PALM_SIZE = 150;
+/** Ohne Angabe: halber Druck und keine Neigung. */
+const PLAIN: Feel = { pressure: 0.5, tiltX: 0, tiltY: 0 };
 
 /**
  * Spielt die Schritte in der Reihenfolge ab, alle in einem Aufruf: Zwischen zwei Ereignissen vergeht keine Wartezeit.
@@ -30,7 +34,9 @@ async function play(page: Page, steps: Step[]): Promise<void> {
             pointerId: s.id,
             pointerType: s.kind,
             isPrimary: s.primary,
-            pressure: 0.5,
+            pressure: s.feel.pressure,
+            tiltX: s.feel.tiltX,
+            tiltY: s.feel.tiltY,
             width: s.size,
             height: s.size,
             clientX: at.x,
@@ -51,9 +57,9 @@ async function play(page: Page, steps: Step[]): Promise<void> {
 type OnElementEvent = { type: 'pointerdown' | 'pointermove' | 'pointerup' | 'pointercancel'; x: number; y: number };
 
 /** Schickt Zeigerereignisse an ein Element außerhalb der Schreibfläche. Orte sind Bildschirmkoordinaten. */
-async function sendOn(page: Page, selector: string, kind: Kind, id: number, size: number, events: OnElementEvent[]): Promise<void> {
+async function sendOn(page: Page, selector: string, kind: Kind, id: number, size: number, feel: Feel, events: OnElementEvent[]): Promise<void> {
   await page.evaluate(
-    ({ selector: sel, kind: pointerType, id: pointerId, size: contact, events: list }) => {
+    ({ selector: sel, kind: pointerType, id: pointerId, size: contact, feel: { pressure, tiltX, tiltY }, events: list }) => {
       const el = document.querySelector(sel);
       if (!el) throw new Error(`Nichts gefunden für ${sel}.`);
       for (const ev of list) {
@@ -62,7 +68,9 @@ async function sendOn(page: Page, selector: string, kind: Kind, id: number, size
             pointerId,
             pointerType,
             isPrimary: true,
-            pressure: 0.5,
+            pressure,
+            tiltX,
+            tiltY,
             width: contact,
             height: contact,
             clientX: ev.x,
@@ -76,7 +84,7 @@ async function sendOn(page: Page, selector: string, kind: Kind, id: number, size
         );
       }
     },
-    { selector, kind, id, size, events },
+    { selector, kind, id, size, feel, events },
   );
 }
 
@@ -112,15 +120,15 @@ export type Pointer = {
 
 const BASE_ID: Record<Kind, number> = { mouse: 1, pen: 11, touch: 21 };
 
-function pointer(page: Page, kind: Kind, n: number, size = FINGER_SIZE): Pointer {
+function pointer(page: Page, kind: Kind, n: number, size = FINGER_SIZE, feel = PLAIN): Pointer {
   const id = BASE_ID[kind] + n;
-  const step = (phase: Phase, [x, y]: [number, number]): Step => ({ kind, id, primary: n === 0, phase, x, y, size });
+  const step = (phase: Phase, [x, y]: [number, number]): Step => ({ kind, id, primary: n === 0, phase, x, y, size, feel });
   const path = (points: [number, number][]): Step[] => [
     step('down', points[0]),
     ...points.slice(1).map((p) => step('move', p)),
     step('up', points[points.length - 1]),
   ];
-  const on = (selector: string, events: OnElementEvent[]) => sendOn(page, selector, kind, id, size, events);
+  const on = (selector: string, events: OnElementEvent[]) => sendOn(page, selector, kind, id, size, feel, events);
   return {
     stroke: (points) => play(page, path(points)),
     tap: (x, y) => play(page, path([[x, y]])),
@@ -149,8 +157,9 @@ function pointer(page: Page, kind: Kind, n: number, size = FINGER_SIZE): Pointer
   };
 }
 
-/** Der Apple Pencil. */
-export const pen = (page: Page): Pointer => pointer(page, 'pen', 0);
+/** Der Apple Pencil. Jedes Ereignis meldet `pressure` (ohne Angabe 0,5), `tiltX` und `tiltY` (ohne Angabe 0). */
+export const pen = (page: Page, o: { pressure?: number; tiltX?: number; tiltY?: number } = {}): Pointer =>
+  pointer(page, 'pen', 0, FINGER_SIZE, { pressure: o.pressure ?? PLAIN.pressure, tiltX: o.tiltX ?? PLAIN.tiltX, tiltY: o.tiltY ?? PLAIN.tiltY });
 /** Ein Finger. `n` unterscheidet mehrere Finger zugleich (0 ist der erste). */
 export const touch = (page: Page, n = 0): Pointer => pointer(page, 'touch', n);
 /** Die Maus. */
@@ -166,6 +175,7 @@ const finger = (n: number, phase: Phase, [x, y]: [number, number]): Step => ({
   x,
   y,
   size: FINGER_SIZE,
+  feel: PLAIN,
 });
 
 /** Zwei Finger setzen gleichzeitig auf und heben ohne Bewegung wieder ab, alles in einem Zug. */

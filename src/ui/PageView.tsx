@@ -176,6 +176,7 @@ export function PageView(p: Props) {
     const stopPrefs = effect(() => {
       const chosen = inkPrefs.value;
       view.setTool(chosen.tool);
+      view.setPen(chosen.pen);
       view.setColor(chosen.color);
       view.setWidth(chosen.width);
       view.setEraser(chosen.eraserSize, chosen.eraserMode);
