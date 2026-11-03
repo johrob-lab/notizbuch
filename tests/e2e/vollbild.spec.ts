@@ -304,6 +304,29 @@ test('a tap next to the ring closes it and draws nothing', async ({ page }) => {
   await expect.poll(() => strokeCount(page)).toBe(1);
 });
 
+test('a hand resting beside the ring does not close it, the pen still picks a colour', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  await touch(page).tapOn(QUICK);
+  await expect(ring(page).first()).toBeVisible();
+
+  // Die Hand landet neben dem Ring, bevor der Stift einen Knopf erreicht: auf dem Schutzfeld über dem Papier.
+  const hand = await page.evaluate(() => window.__notizbuch.toClient(200, 1000));
+  expect(await topmost(page, hand)).toBe('ring-schutz');
+  await onScreen(page, 'touch', [{ type: 'pointerdown', ...hand }]);
+  await expect(ring(page)).toHaveCount(16);
+  await tapTop(page, 'pen', im('Rot (offen)'));
+  await expect(ring(page)).toHaveCount(0);
+  await expect(page.locator(SCHUTZ)).toHaveCount(0);
+  // Die Hand hebt ab, wo jetzt wieder das Papier liegt.
+  await onScreen(page, 'touch', [{ type: 'pointerup', ...hand }]);
+  await expect.poll(async () => ((await savedSettings(page))?.ink as { color?: string } | undefined)?.color).toBe('rot');
+  expect(await strokeCount(page)).toBe(0);
+
+  await strokeTop(page, 'pen', LINE);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  expect((await page.evaluate(() => window.__notizbuch.currentPage().strokes))[0]).toMatchObject({ color: 'rot' });
+});
+
 test('the ring stays on the screen when the wheel sits in a corner', async ({ page }) => {
   await openSeeded(page, DAY, { settings: { ...ON, quickSwitchPos: [0, 0] } });
   await touch(page).tapOn(QUICK);

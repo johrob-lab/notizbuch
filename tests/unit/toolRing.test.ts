@@ -100,6 +100,7 @@ afterEach(() => {
   render(null, host);
   host.remove();
   vi.unstubAllGlobals();
+  delete (document as { visibilityState?: unknown }).visibilityState;
 });
 
 test('the buttons sit where ringLayout puts them, with their name, state and lock', () => {
@@ -202,7 +203,7 @@ test('a pen next to the ring closes it: the buttons go at once, the shield stays
   expect(done).toEqual([]);
 });
 
-test('a finger or the mouse next to the ring closes it too, the hand does not', async () => {
+test('a finger next to the ring closes it when it lifts, the hand and a finger that holds do not', async () => {
   mount();
   filter.penDown(900);
   send(shield()!, 'pointerdown', { kind: 'touch', t: 1000, x: 50, y: 50 }); // die Hand, während der Stift aufliegt
@@ -210,20 +211,48 @@ test('a finger or the mouse next to the ring closes it too, the hand does not', 
   filter.penUp(1100);
   send(shield()!, 'pointerdown', { kind: 'touch', t: 2000, x: 50, y: 50, size: 150 }); // ein Handballen
   send(shield()!, 'pointerup', { kind: 'touch', t: 2040, x: 50, y: 50, size: 150 });
+  send(shield()!, 'pointerdown', { kind: 'touch', t: 3000, x: 50, y: 50 }); // ein Finger, der länger liegt als ein Tipp
+  send(shield()!, 'pointerup', { kind: 'touch', t: 3600, x: 50, y: 50 });
   await settle();
   expect(buttons()).toHaveLength(16);
   expect(closes).toBe(0);
 
-  send(shield()!, 'pointerdown', { kind: 'touch', t: 3000, x: 50, y: 50 });
-  send(shield()!, 'pointerup', { kind: 'touch', t: 3040, x: 50, y: 50 });
+  const down = send(shield()!, 'pointerdown', { kind: 'touch', t: 4000, x: 50, y: 50 });
+  await settle();
+  expect(down.defaultPrevented).toBe(true); // nichts darunter bekommt ihn
+  expect(buttons()).toHaveLength(16); // noch könnte er die Hand sein
+  expect(closes).toBe(0);
+  send(shield()!, 'pointerup', { kind: 'touch', t: 4040, x: 50, y: 50 });
   expect(closes).toBe(1);
+});
 
-  render(null, host);
-  host.remove();
+test('the mouse next to the ring closes it at once', async () => {
   mount();
-  send(shield()!, 'pointerdown', { kind: 'mouse', t: 4000, x: 50, y: 50 });
-  send(shield()!, 'pointerup', { kind: 'mouse', t: 4040, x: 50, y: 50 });
-  expect(closes).toBe(2);
+  send(shield()!, 'pointerdown', { kind: 'mouse', t: 1000, x: 50, y: 50 });
+  await settle();
+  expect(buttons()).toHaveLength(0);
+  expect(closes).toBe(0);
+  send(shield()!, 'pointerup', { kind: 'mouse', t: 1040, x: 50, y: 50 });
+  expect(closes).toBe(1);
+});
+
+test('a hand resting beside the ring leaves it open, and the pen still chooses a button', async () => {
+  mount();
+  // Die Hand landet neben dem Ring, bevor der Stift einen Knopf erreicht.
+  const hand = send(shield()!, 'pointerdown', { kind: 'touch', t: 1000, x: 50, y: 50, id: 21 });
+  await settle();
+  expect(hand.defaultPrevented).toBe(true); // nichts darunter bekommt sie
+  expect(buttons()).toHaveLength(16);
+  tap('Rückgängig', 'pen', 1200);
+  expect(done).toEqual([{ kind: 'undo' }]);
+  // Sie hebt erst ab, als der Stift längst gewählt hat: Sie war die Hand, der Ring bleibt offen.
+  send(shield()!, 'pointerup', { kind: 'touch', t: 1600, x: 50, y: 50, id: 21 });
+  await settle();
+  expect(closes).toBe(0);
+  expect(buttons()).toHaveLength(16);
+  tap('Rot (offen)', 'pen', 2000);
+  expect(done).toEqual([{ kind: 'undo' }, { kind: 'color', color: 'rot' }]);
+  expect(closes).toBe(1);
 });
 
 test('the ring closes when that pointer lifts somewhere else, so the shield never stays behind', () => {
@@ -233,6 +262,42 @@ test('the ring closes when that pointer lifts somewhere else, so the shield neve
   expect(closes).toBe(0);
   send(document.body, 'pointerup', { kind: 'pen', t: 1060, x: 50, y: 50, id: 3 });
   expect(closes).toBe(1);
+});
+
+test('when the closing pointer never lifts, the next pointer closes the ring at once, the hand does not', async () => {
+  mount();
+  send(shield()!, 'pointerdown', { kind: 'pen', t: 1000, x: 50, y: 50, id: 3 }); // sein Abheben kommt nie an (iOS beim Wechsel der App)
+  await settle();
+  expect(buttons()).toHaveLength(0);
+  send(shield()!, 'pointerdown', { kind: 'pen', t: 1500, x: 50, y: 50, id: 3 }); // derselbe Zeiger noch einmal: Der Ring wartet auf sein Abheben
+  send(shield()!, 'pointerdown', { kind: 'touch', t: 2000, x: 60, y: 60, id: 21, size: 150 }); // ein Handballen
+  expect(closes).toBe(0);
+  const next = send(shield()!, 'pointerdown', { kind: 'pen', t: 3000, x: 60, y: 60, id: 4 });
+  expect(next.defaultPrevented).toBe(true);
+  expect(closes).toBe(1);
+});
+
+test('the ring closes when the page is hidden or the window loses focus, and stops listening when it goes', async () => {
+  mount();
+  document.dispatchEvent(new Event('visibilitychange')); // noch sichtbar
+  expect(closes).toBe(0);
+  window.dispatchEvent(new Event('blur'));
+  expect(closes).toBe(1);
+
+  render(null, host);
+  host.remove();
+  mount();
+  send(shield()!, 'pointerdown', { kind: 'pen', t: 1000, x: 50, y: 50, id: 3 }); // sein Abheben kommt nie an
+  await settle();
+  expect(buttons()).toHaveLength(0);
+  Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+  document.dispatchEvent(new Event('visibilitychange'));
+  expect(closes).toBe(2);
+
+  render(null, host);
+  window.dispatchEvent(new Event('blur'));
+  document.dispatchEvent(new Event('visibilitychange'));
+  expect(closes).toBe(2);
 });
 
 test('the ring closes when the stage changes size, not before', () => {

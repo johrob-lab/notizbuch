@@ -62,19 +62,40 @@ export function ActionFace({ action }: { action: ToolAction }) {
   }
 }
 
+/** Wartet auf das Abheben (oder den Abbruch) des Zeigers `id`, wo auch immer es ankommt. Gibt zurück, wie man das Warten beendet. */
+function untilLifted(id: number, then: (ev: PointerEvent) => void): () => void {
+  function stop() {
+    window.removeEventListener('pointerup', end, true);
+    window.removeEventListener('pointercancel', end, true);
+  }
+  function end(ev: PointerEvent) {
+    if (ev.pointerId !== id) return;
+    stop();
+    then(ev);
+  }
+  window.addEventListener('pointerup', end, true);
+  window.addEventListener('pointercancel', end, true);
+  return stop;
+}
+
 /**
  * Der Ring: innen die Wahl zum Werkzeug, außen alles andere, an den Orten aus `ringLayout`. Ein Knopf wirkt beim Abheben (Stift, Maus,
  * ein Finger, den das Tor annimmt); danach schließt der Ring, außer bei Rückgängig und Wiederholen. Das Schutzfeld fängt jeden Zeiger
- * daneben: Stift, Maus oder Finger schließen den Ring (die Knöpfe gehen sofort, das Feld erst, wenn der Zeiger abhebt, damit auch sein
- * Ende nichts darunter trifft), die Hand schließt ihn nicht. Ändert sich die Größe der Bühne, schließt der Ring.
+ * daneben, nichts darunter bekommt ihn. Stift und Maus schließen den Ring sofort (die Knöpfe gehen gleich, das Feld erst, wenn der
+ * Zeiger abhebt, damit auch sein Ende nichts darunter trifft). Ein Finger schließt ihn erst beim Abheben und nur, wenn das Tor ihn dann
+ * noch annimmt und er noch tippt (`acceptTouch` und `stillTap`): Die Hand, die neben dem Ring landet, bevor der Stift einen Knopf
+ * erreicht, schließt ihn nicht. Ändert sich die Größe der Bühne, geht die Seite in den Hintergrund oder verliert das Fenster den Fokus,
+ * schließt der Ring. Er gilt für ein Öffnen: Nach `onClose` baut ihn der Elternteil ab (`ToolWheel`), zurückgesetzt wird nichts.
  */
 export function ToolRing({ anchor, area, actions, filter, onAction, onClose }: Props) {
   const shield = useRef<HTMLDivElement>(null);
   // Die Ereignisse eines Zeigers kommen auch nach einem neuen Zeichnen an: Sie rufen immer die neuesten Angaben auf.
   const latest = useRef({ filter, onClose });
   latest.current = { filter, onClose };
-  /** Der Zeiger, der neben den Ring tippte, und wie man das Warten auf sein Abheben beendet. */
+  /** Der Stift oder die Maus, die neben den Ring tippten und ihn schließen, und wie man das Warten auf ihr Abheben beendet. */
   const leaving = useRef<{ id: number; stop(): void } | null>(null);
+  /** Finger auf dem Schutzfeld, die den Ring beim Abheben schließen, wenn sie dann noch tippen: wie man das Warten beendet. */
+  const fingers = useRef(new Map<number, () => void>());
   const [closing, setClosing] = useState(false);
 
   // Dreht sich das iPad oder ändert sich die Bühne sonst, passt der Ring nicht mehr zu ihr: Er schließt.
@@ -89,8 +110,31 @@ export function ToolRing({ anchor, area, actions, filter, onAction, onClose }: P
     return () => observer.disconnect();
   }, [area.w, area.h]);
 
-  // Geht der Ring, während ein Zeiger daneben noch aufliegt (die Bühne ändert ihre Größe, die Seite wechselt), wartet nichts mehr auf ihn.
-  useLayoutEffect(() => () => leaving.current?.stop(), []);
+  // Geht die Seite in den Hintergrund (Wechsel der App) oder verliert das Fenster den Fokus, schließt der Ring. Danach kommt oft das
+  // Abheben eines Zeigers nicht mehr an, auf das er sonst wartete.
+  useLayoutEffect(() => {
+    const close = () => latest.current.onClose();
+    const hidden = () => {
+      if (document.visibilityState === 'hidden') close();
+    };
+    document.addEventListener('visibilitychange', hidden);
+    window.addEventListener('blur', close);
+    return () => {
+      document.removeEventListener('visibilitychange', hidden);
+      window.removeEventListener('blur', close);
+    };
+  }, []);
+
+  // Geht der Ring, während ein Zeiger daneben noch aufliegt (die Bühne ändert ihre Größe, die Seite wechselt, der Stift wählt einen
+  // Knopf, während die Hand daneben liegt), wartet nichts mehr auf ihn.
+  useLayoutEffect(
+    () => () => {
+      leaving.current?.stop();
+      for (const stop of fingers.current.values()) stop();
+      fingers.current.clear();
+    },
+    [],
+  );
 
   const layout = ringLayout(anchor, { inner: actions.inner.length, outer: actions.outer.length }, area);
 
@@ -104,22 +148,34 @@ export function ToolRing({ anchor, area, actions, filter, onAction, onClose }: P
     e.preventDefault();
     if (e.pointerType === 'pen') filter.penDown(e.timeStamp);
     else if (e.pointerType === 'touch' && !filter.acceptTouch(e, e.timeStamp)) return; // die Hand neben dem Ring schließt ihn nicht
-    if (leaving.current) return;
-    capturePointer(e.currentTarget as Element, e.pointerId);
-    // Der Ring schließt, sobald dieser Zeiger abhebt, wo auch immer: Das Schutzfeld bleibt nie liegen.
     const id = e.pointerId;
-    function stop() {
-      window.removeEventListener('pointerup', end, true);
-      window.removeEventListener('pointercancel', end, true);
+    if (leaving.current) {
+      // Der Ring schließt schon. Kommt das Abheben des Zeigers, der ihn schließt, nie an (iOS beim Wechsel der App), bliebe das
+      // Schutzfeld ohne Knöpfe liegen: Ein anderer Zeiger schließt ihn darum sofort.
+      if (id !== leaving.current.id) latest.current.onClose();
+      return;
     }
-    function end(ev: PointerEvent) {
-      if (ev.pointerId !== id) return;
-      stop();
+    capturePointer(e.currentTarget as Element, id);
+    if (e.pointerType === 'touch') {
+      // Ein Finger kann auch die Hand sein, die neben dem Ring landet, bevor der Stift einen Knopf erreicht: Die Knöpfe bleiben. Beim
+      // Abheben schließt er den Ring, wenn er ein Tipp war. Kam inzwischen der Stift oder lag er länger, bleibt der Ring offen.
+      const mark = filter.mark(e.timeStamp);
+      fingers.current.get(id)?.(); // ein früherer Finger mit derselben Kennung, dessen Abheben nie ankam
+      fingers.current.set(
+        id,
+        untilLifted(id, (ev) => {
+          fingers.current.delete(id);
+          const gate = latest.current.filter;
+          if (ev.type === 'pointerup' && gate.acceptTouch(ev, ev.timeStamp) && gate.stillTap(mark, ev.timeStamp)) latest.current.onClose();
+        }),
+      );
+      return;
+    }
+    // Stift und Maus schließen den Ring, sobald sie abheben, wo auch immer: Das Schutzfeld bleibt nie liegen.
+    const stop = untilLifted(id, (ev) => {
       if (ev.pointerType === 'pen') latest.current.filter.penUp(ev.timeStamp);
       latest.current.onClose();
-    }
-    window.addEventListener('pointerup', end, true);
-    window.addEventListener('pointercancel', end, true);
+    });
     leaving.current = { id, stop };
     setClosing(true);
   }
