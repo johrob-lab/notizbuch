@@ -170,6 +170,8 @@ Wo: Testkopie, dann echtes Vault, Firmen-PC. Dauer: etwa 15 Minuten. Am PC kanns
 7. Hole am iPad die App in den Vordergrund. Innerhalb von Sekunden, spätestens nach 3 Minuten, steht der Haken auch dort.
 8. Probiere am PC noch: **Strg** halten und das Mausrad drehen zoomt die Seite, das Mausrad allein verschiebt sie, der Knopf **Ganze Seite** unten links auf der Seite bringt sie zurück.
 
+Hinweis: Die App lädt sich nach einer neuen Version selbst neu, in einem ruhigen Moment (nicht beim Schreiben). Nach dem Online-Gang dieser neuen Stifte lade den Firmen-PC einmal mit **F5** neu, danach läuft dort die neue Version. Das gilt auch nach jedem späteren Update.
+
 9. Klicke oben auf **Vollbild** und klicke mit der Maus auf den runden Knopf unten rechts (er zeigt drei Punkte). Erwartet: Ein Ring geht auf mit **‹**, **Heute**, **›**, den vier Ecken nach außen (**Ganze Seite**) und den vier Ecken nach innen (**Vollbild aus**), sonst nichts. Klicke auf **Vollbild aus**. Erwartet: Die Leisten sind wieder da.
 
 Erwartet: Abhaken und Tippen klappen am PC, und die Änderungen sind am iPad zu sehen.
@@ -359,6 +361,24 @@ Die Lasche am linken Rand:
 14. Tippe in der Leiste auf die vier Ecken nach innen (**Vollbild aus**). Erwartet: Die Leisten sind wieder da. Stelle bei **Werkzeuge im Vollbild** die Wahl ein, die dir besser gefällt.
 
 Am Firmen-PC prüfst du den Ring bei 2.5: Schalte dort oben auf **Vollbild**, klicke mit der Maus auf den runden Knopf (er zeigt drei Punkte) und erwarte **‹**, **Heute**, **›**, die vier Ecken nach außen und die vier Ecken nach innen. Klicke zuletzt auf **Vollbild aus**.
+
+- [ ] Klappt
+
+### 3.11 Neue Stifte
+
+Neben dem Kugelschreiber gibt es jetzt **Fineliner**, **Füllfeder** und **Bleistift**. Wo: Testkopie, iPad mit Apple Pencil, am besten die Tagesseite vom 30.10.2026 (die Beispielseite `stifte`, falls sie im Test-Repo liegt) oder eine leere Tagesseite. Dauer: etwa 20 Minuten.
+
+1. Tippe oben in der Werkzeugleiste nacheinander auf **Kugelschreiber**, **Fineliner**, **Füllfeder** und **Bleistift**. Schreib mit jedem Stift ein paar Wörter in das Feld **Notizen**. Erwartet: Jeder Stift sieht anders aus, und der gewählte Knopf ist hervorgehoben.
+2. Wähle die Farbe **Blau** und wechsle dann zwischen Kugelschreiber, Fineliner und Füllfeder. Erwartet: Die Farbe bleibt Blau. Wähle den **Bleistift**. Erwartet: Es gibt keine Farben, der Bleistift schreibt immer grau.
+3. Füllfeder mit gedrehter Hand: Halte den Stift so, wie du sonst schreibst, und schreib ein paar Zeilen mit Schrägstrichen und Bögen. Erwartet: Striche, die nach rechts unten laufen, sind breit, Aufstriche sind fein, wie bei einer Schreibfeder.
+4. Schreib mit der Füllfeder dieselbe Zeile einmal mit festem und einmal mit leichtem Druck. Erwartet: Fester Druck gibt eine breitere Linie, leichter Druck eine feinere. Die Linie bricht nirgends ab.
+5. Bleistift: Schreib ein paar Zeilen und lege ein Stück davon über eine Zeile Kugelschreiber. Erwartet: Der Bleistift ist körnig und scheint ein wenig durch, die Schrift darunter bleibt zu sehen.
+6. Safari-Prüfung der Körnung: Zoome mit zwei Fingern auf etwa das Dreifache und schreib mit dem Bleistift langsam einen Zickzack mehrmals über sich selbst. Vergleiche das Bild während des Schreibens mit dem Bild, nachdem du den Stift abgehoben hast. Erwartet: Beides sieht gleich aus, körnig und nicht dunkler während des Schreibens.
+7. Teil-Radieren: Schreib mit der Füllfeder eine lange Linie. Wähle den Radierer mit der Größe **Stück** und streiche einmal quer mitten durch die Linie. Erwartet: Nur das Stück in der Mitte verschwindet, die beiden Enden bleiben mit gleicher Farbe und Breite stehen. Tippe auf den Pfeil **Rückgängig**. Erwartet: Die Linie ist wieder ganz.
+8. Kritzeln über Bleistift: Schreib ein Wort mit dem Bleistift und kritzle mit dem Fineliner kreuz und quer darüber. Erwartet: Der Bleistift bleibt darunter sichtbar, und nichts wird gelöscht.
+9. Ring und Lasche: Tippe oben auf **Vollbild**. Öffne den Ring (Finger auf den runden Knopf) und zähle die Knöpfe. Erwartet: Es sind 12 Knöpfe, alle gut zu treffen, darunter die vier Stifte. Wähle die Füllfeder und schreib. Wechsle dann in den Einstellungen (Zahnrad) bei **Werkzeuge im Vollbild** auf **Tab** und öffne die Lasche am linken Rand. Erwartet: Die vier Stifte stehen auch dort, und der Wechsel klappt. Beende mit **Vollbild aus**.
+10. Verzögerung messen wie in 3.1 (Schritt 2): Schreib mit jedem der vier Stifte schnell Schleifen, mit **Vorhersage** an und aus. Erwartet: Bei keinem Stift hängt die Linie spürbar hinter der Spitze her.
+11. Warte, bis oben **Gesichert** steht. Am nächsten Morgen prüfst du, ob die Abendroutine alles abgetippt hat: Öffne die Tagesnotiz in Obsidian. Erwartet: Das Geschriebene aller vier Stifte steht im Abschnitt **Handschrift** oder **Besprechungen**, auch der Bleistift, und nichts fehlt.
 
 - [ ] Klappt
 

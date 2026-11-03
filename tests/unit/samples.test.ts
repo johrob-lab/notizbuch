@@ -16,6 +16,7 @@ import { assertAllowedPath } from '../../src/sync/paths';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LAUNCHER = join(ROOT, 'scripts', 'make-samples.mjs');
 const DAY = '2026-10-29';
+const PEN_DAY = '2026-10-30';
 const MEETING = `${DAY} 0800 Abstimmung Beispiel 2027`;
 
 function find(samples: Sample[], folder: string, path: string): Sample {
@@ -32,7 +33,7 @@ afterEach(() => {
 describe('sample pages', () => {
   const samples = buildSamples();
 
-  test('the set: day, two meeting pages, week, month and the later day page', () => {
+  test('the set: day, two meeting pages, week, month, the later day page and the pen page', () => {
     expect(samples.map((s) => `${s.folder}: ${s.path}`)).toEqual([
       `lauf1: ${tagPagePath(DAY)}`,
       `lauf1: ${besprechungPagePath(MEETING, 1)}`,
@@ -40,6 +41,7 @@ describe('sample pages', () => {
       `lauf1: ${wochePagePath('2026-W44')}`,
       `monat: ${monatPagePath('2026-10')}`,
       `lauf3-nachtrag: ${tagPagePath(DAY)}`,
+      `stifte: ${tagPagePath(PEN_DAY)}`,
     ]);
   });
 
@@ -88,6 +90,26 @@ describe('sample pages', () => {
     // Die neuen Striche kommen später als alles, was schon da war.
     const lastBefore = Math.max(...first.map((s) => s.t));
     expect(later.slice(first.length).every((s) => s.t > lastBefore)).toBe(true);
+  });
+
+  test('the pen sample page uses all four pens and is version 2', () => {
+    const sample = find(samples, 'stifte', tagPagePath(PEN_DAY));
+    const page = parsePage(sample.svg);
+    expect(new Set(page.strokes.map((s) => s.tool))).toEqual(new Set(['kugel', 'fineliner', 'fueller', 'bleistift']));
+    expect(sample.svg).toContain('data-notizbuch="2"');
+    // Die Zeilen sind nacheinander geschrieben: Die Reihenfolge der Werkzeuge nach der Zeit ist Kugel, Fineliner, Füllfeder, Bleistift.
+    const order = [...page.strokes].sort((a, b) => a.t - b.t).map((s) => s.tool);
+    expect(order.filter((tool, i) => i === 0 || tool !== order[i - 1])).toEqual(['kugel', 'fineliner', 'fueller', 'bleistift']);
+    expect(new Set(page.strokes.map((s) => s.t)).size).toBe(page.strokes.length);
+  });
+
+  test('the older samples stay ballpoint pages of version 1', () => {
+    const older = samples.filter((s) => s.folder !== 'stifte');
+    expect(older.length).toBe(6);
+    for (const sample of older) {
+      expect(new Set(parsePage(sample.svg).strokes.map((s) => s.tool)), sample.path).toEqual(new Set(['kugel']));
+      expect(sample.svg, sample.path).toContain('data-notizbuch="1"');
+    }
   });
 
   test('building the pages leaves Math.random alone', () => {

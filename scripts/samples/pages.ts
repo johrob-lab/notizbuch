@@ -4,6 +4,7 @@
 // Aufgerufen wird das über scripts/make-samples.mjs <Ausgabeordner>. Alles hier ist erfunden: keine echten Namen,
 // keine Vault-Inhalte. Reine Rechnung ohne Dateizugriff: `buildSamples` liefert die Seiten, geschrieben werden sie vom Skript.
 
+import type { PenKind } from '../../src/ink/pens';
 import { StrokeBuilder } from '../../src/ink/stroke';
 import { serializePage } from '../../src/ink/svg';
 import { SMOOTHING, type InkColor, type Page, type Stroke } from '../../src/ink/types';
@@ -44,6 +45,9 @@ const WEEK_LINE = 36; // Zeilenabstand in den Tagen der Woche: 6 mm
 
 // ---------- Schreiber ----------
 
+/** Stift und Neigung für einen Strich. Ohne Angaben: Kugelschreiber ohne Neigung, wie bisher. */
+type PenOpts = { pen?: PenKind; tiltX?: number; tiltY?: number };
+
 class Scribe {
   readonly strokes: Stroke[] = [];
   t: number;
@@ -60,9 +64,9 @@ class Scribe {
   }
 
   /** Ein Linienzug als Strich, so wie ihn der Stift liefern würde: dicht abgetastet, leicht zittrig, mit Druck. */
-  stroke(poly: Pt[], color: InkColor, widthMm = 0.2): void {
+  stroke(poly: Pt[], color: InkColor, widthMm = 0.2, opts: PenOpts = {}): void {
     if (poly.length === 0) return;
-    const builder = new StrokeBuilder({ color, widthMm, sigma: SMOOTHING.mittel, t: Math.round(this.t), minDist: 0.9 });
+    const builder = new StrokeBuilder({ pen: opts.pen, color, widthMm, sigma: SMOOTHING.mittel, t: Math.round(this.t), minDist: 0.9 });
     const step = 2.0 + this.rng() * 0.8;
     const dense: Pt[] = [poly[0]];
     for (let i = 1; i < poly.length; i++) {
@@ -74,7 +78,7 @@ class Scribe {
     let pressure = 0.5;
     for (const [x, y] of dense) {
       pressure = Math.min(0.78, Math.max(0.3, pressure + this.jitter() * 0.12));
-      builder.add(x + this.jitter() * 0.45, y + this.jitter() * 0.45, pressure);
+      builder.add(x + this.jitter() * 0.45, y + this.jitter() * 0.45, pressure, opts.tiltX, opts.tiltY);
     }
     this.strokes.push(builder.stroke());
     this.t += 160 + this.rng() * 260;
@@ -85,7 +89,7 @@ class Scribe {
   }
 
   /** Text in Einstrich-Schrift. `x` ist der Anfang, `base` die Grundlinie, `scale` Seiteneinheiten je Schrifteinheit. */
-  text(str: string, x: number, base: number, color: InkColor, scale = 2.2, widthMm = 0.2): { x0: number; x1: number } {
+  text(str: string, x: number, base: number, color: InkColor, scale = 2.2, widthMm = 0.2, opts: PenOpts = {}): { x0: number; x1: number } {
     let cx = x;
     const slant = 0.1 + this.rng() * 0.06;
     for (const ch of str.normalize('NFC')) {
@@ -98,6 +102,7 @@ class Scribe {
           s.map(([gx, gy]) => [cx + gx * sc + gy * sc * slant, base + dy - gy * sc] as Pt),
           color,
           widthMm,
+          opts,
         );
       }
       cx += (g.w + GAP) * sc;
@@ -190,6 +195,24 @@ function dayPage(nachtrag: boolean): Built {
   });
 }
 
+const PEN_DAY = '2026-10-30';
+const PEN_DAY_START = Date.UTC(2026, 9, 30, 6, 30); // 07:30 Uhr Wiener Zeit
+
+/** Tagesseite mit je einer Zeile in jedem Stift, nacheinander geschrieben. Die Füllfeder liegt in der Hand geneigt (40, 40). */
+function penPage(): Built {
+  const layout = tagLayout(PEN_DAY);
+  return seeded(20261030, (rng) => {
+    const s = new Scribe(rng, PEN_DAY_START);
+    const notizen = field(layout, 'notizen');
+    const nx = notizen[0] + 16;
+    s.text('Kugelschreiber', nx, baselineOf(notizen, 0), 'schwarz');
+    s.text('Fineliner', nx, baselineOf(notizen, 1), 'blau', 2.2, 0.2, { pen: 'fineliner' });
+    s.text('Füllfeder', nx, baselineOf(notizen, 2), 'schwarz', 2.2, 0.3, { pen: 'fueller', tiltX: 40, tiltY: 40 });
+    s.text('Bleistift', nx, baselineOf(notizen, 3), 'schwarz', 2.2, 0.3, { pen: 'bleistift' });
+    return { page: { kind: 'tag', key: PEN_DAY, meta: {}, strokes: s.strokes }, layout };
+  });
+}
+
 const MEETING = { thema: 'Abstimmung Beispiel 2027', datum: DAY, zeit: '08:00', ort: 'Musterstadt', projekt: 'Beispielprojekt A' };
 
 function meetingPage(n: 1 | 2): Built {
@@ -273,7 +296,7 @@ function monthPage(): Built {
 
 /** Eine fertige Beispielseite: wohin sie im Ausgabeordner gehört und ihr SVG-Text. */
 export type Sample = {
-  /** Unterordner der Ausgabe: `lauf1`, `monat` oder `lauf3-nachtrag`. */
+  /** Unterordner der Ausgabe: `lauf1`, `monat`, `lauf3-nachtrag` oder `stifte`. */
   folder: string;
   /** Pfad im Vault, zum Beispiel `07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg`. */
   path: string;
@@ -287,6 +310,7 @@ export type Sample = {
  * - `lauf1`: der Stand am Abend des 29.10.2026 (Tagesseite, Besprechung über zwei Seiten, Wochenseite)
  * - `monat`: die Monatsseite
  * - `lauf3-nachtrag`: dieselbe Tagesseite, am Nachmittag weitergeschrieben
+ * - `stifte`: Tagesseite vom 30.10.2026 mit je einer Zeile in Kugelschreiber, Fineliner, Füllfeder und Bleistift (Version 2)
  */
 export function buildSamples(): Sample[] {
   const samples: Sample[] = [];
@@ -302,5 +326,6 @@ export function buildSamples(): Sample[] {
   add('lauf1', wochePagePath('2026-W44'), weekPage());
   add('monat', monatPagePath('2026-10'), monthPage());
   add('lauf3-nachtrag', tagPagePath(DAY), dayPage(true));
+  add('stifte', tagPagePath(PEN_DAY), penPage());
   return samples;
 }
