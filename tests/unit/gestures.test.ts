@@ -226,3 +226,15 @@ test('clampView keeps 60 px of the page on the screen up and down', () => {
   expect(clampView({ s: 1, x: 0, y: 5000 }, SIZE, PAGE).y).toBe(740);
   expect(clampView({ s: 0.5, x: 0, y: 20 }, SIZE, PAGE)).toEqual({ s: 0.5, x: 202, y: 20 });
 });
+
+test('stillTap: a finger that was down when the pen came down, or that holds, never taps', () => {
+  const g = new GestureFilter();
+  const m = g.mark(1000);
+  expect(g.stillTap(m, 1400)).toBe(true);
+  expect(g.stillTap(m, 1500)).toBe(true);
+  expect(g.stillTap(m, 1501)).toBe(false); // hält nur
+  g.penDown(1100);
+  g.penUp(1200);
+  expect(g.stillTap(m, 1450)).toBe(false); // der Stift setzte auf, während der Finger lag
+  expect(g.stillTap(g.mark(2000), 2100)).toBe(true); // ein neuer Finger danach darf tippen
+});

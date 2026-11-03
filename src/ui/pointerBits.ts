@@ -1,5 +1,5 @@
 import { useRef } from 'preact/hooks';
-import type { GestureFilter } from '../ink/gestures';
+import type { GestureFilter, TouchMark } from '../ink/gestures';
 
 // Was Ring, Lasche und Rad gemeinsam brauchen: den Zeiger an einem Knopf festhalten, prüfen, ob er noch auf dem Knopf liegt,
 // und die Regel, wer einen Knopf auslöst.
@@ -30,23 +30,24 @@ export type Pressable = { key: string; disabled?: boolean };
  */
 export function useActivation<B extends Pressable>(filter: GestureFilter, act: (b: B) => void) {
   /** Welcher Zeiger auf welchem Knopf liegt (sein `key`). */
-  const pressed = useRef(new Map<number, string>());
+  const pressed = useRef(new Map<number, { key: string; mark: TouchMark }>());
 
   function press(e: PointerEvent, b: B) {
     if (e.pointerType === 'pen') filter.penDown(e.timeStamp);
     else if (e.pointerType === 'touch' ? !filter.acceptTouch(e, e.timeStamp) : e.button !== 0) return;
     if (b.disabled) return;
-    pressed.current.set(e.pointerId, b.key);
+    pressed.current.set(e.pointerId, { key: b.key, mark: filter.mark(e.timeStamp) });
     capturePointer(e.currentTarget as Element, e.pointerId);
   }
 
   function release(e: PointerEvent, b: B) {
     if (e.pointerType === 'pen') filter.penUp(e.timeStamp);
-    const key = pressed.current.get(e.pointerId);
+    const down = pressed.current.get(e.pointerId);
     pressed.current.delete(e.pointerId);
-    if (key !== b.key || e.type !== 'pointerup' || b.disabled) return;
+    if (down?.key !== b.key || e.type !== 'pointerup' || b.disabled) return;
     // Kam der Stift, während der Finger auf dem Knopf lag, war der Finger die Hand.
-    if (e.pointerType === 'touch' && !filter.acceptTouch(e, e.timeStamp)) return;
+    // Ein Finger, der schon lag, als der Stift aufsetzte, oder der nur hält, war die Hand und tippt nichts.
+    if (e.pointerType === 'touch' && (!filter.acceptTouch(e, e.timeStamp) || !filter.stillTap(down.mark, e.timeStamp))) return;
     if (inside(e, e.currentTarget as Element)) act(b);
   }
 

@@ -26,10 +26,12 @@ export const SIDE_MARGIN_PX = 16;
 export class GestureFilter {
   #penIsDown = false;
   #lastPenUp = -Infinity;
+  #penDowns = 0;
 
   /** Der Stift setzt auf. (Die Zeit braucht die Methode nicht, sie hat dieselbe Form wie `penUp`.) */
   penDown(_now: number): void {
     this.#penIsDown = true;
+    this.#penDowns++;
   }
 
   /** Der Stift hebt ab (oder das System bricht ihn ab). `now` in Millisekunden. */
@@ -43,7 +45,23 @@ export class GestureFilter {
     if (this.#penIsDown || now - this.#lastPenUp < PALM_PAUSE_MS) return false;
     return (e.width ?? 0) <= PALM_SIZE_PX && (e.height ?? 0) <= PALM_SIZE_PX;
   }
+
+  /** Merkt sich den Stand beim Aufsetzen eines Fingers. */
+  mark(now: number): TouchMark {
+    return { pens: this.#penDowns, t: now };
+  }
+
+  /**
+   * Wahr, wenn ein Finger, der bei `mark` aufsetzte, jetzt noch tippen darf: Kein Stift ist seitdem aufgesetzt (sonst lag er schon
+   * als Hand da, auch wenn er erst nach der Pause abhebt) und er liegt höchstens `FINGER_TAP_MS` auf (sonst hält er nur).
+   */
+  stillTap(mark: TouchMark, now: number): boolean {
+    return this.#penDowns === mark.pens && now - mark.t <= FINGER_TAP_MS;
+  }
 }
+
+/** Der Stand beim Aufsetzen eines Fingers, für `GestureFilter.stillTap`. */
+export type TouchMark = { pens: number; t: number };
 
 /** Ein Ereignis eines Fingers. `t` in Millisekunden, Orte in Bildschirmpunkten. */
 export type FingerEvent = { id: number; type: 'down' | 'move' | 'up'; x: number; y: number; t: number };

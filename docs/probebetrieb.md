@@ -170,6 +170,8 @@ Wo: Testkopie, dann echtes Vault, Firmen-PC. Dauer: etwa 15 Minuten. Am PC kanns
 7. Hole am iPad die App in den Vordergrund. Innerhalb von Sekunden, spätestens nach 3 Minuten, steht der Haken auch dort.
 8. Probiere am PC noch: **Strg** halten und das Mausrad drehen zoomt die Seite, das Mausrad allein verschiebt sie, der Knopf **Ganze Seite** unten links auf der Seite bringt sie zurück.
 
+9. Tippe oben auf **Vollbild** und klicke mit der Maus auf den runden Knopf unten rechts (er zeigt drei Punkte). Erwartet: Ein Ring geht auf mit **‹**, **Heute**, **›**, den vier Ecken nach außen (**Ganze Seite**) und den vier Ecken nach innen (**Vollbild aus**), sonst nichts. Klicke auf **Vollbild aus**. Erwartet: Die Leisten sind wieder da.
+
 Erwartet: Abhaken und Tippen klappen am PC, und die Änderungen sind am iPad zu sehen.
 
 - [ ] Klappt
@@ -334,20 +336,29 @@ Das Notizbuch schreibt nur in einem Fenster. Ein zweites Fenster liest nur und s
 
 ### 3.10 Vollbild
 
-Vollbild blendet alle Leisten aus, die Seite füllt den Bildschirm. Die Werkzeuge stehen dann in einem Ring um einen runden Knopf (Kreis) oder in einer Lasche am linken Rand (Tab). Ring und Lasche sind neu, prüfe sie gründlich. Der letzte Punkt gilt für den Firmen-PC; am iPad stellst du ihn mit der Einstellung **Gerät** nach.
+Vollbild blendet die Leisten aus, die Seite füllt den Bildschirm. Die Werkzeuge stehen dann in einem Ring um einen runden Knopf (**Kreis**, so ist es eingestellt) oder in einer Lasche am linken Rand (**Tab**). Beides ist neu, prüfe es gründlich. Merke dir den Weg heraus: In beiden Fällen gibt es dafür einen Knopf mit vier Ecken, die nach innen zeigen (**Vollbild aus**). Er ist der einzige Weg zurück, denn das Zahnrad ist im Vollbild weg.
 
-1. Öffne den 29.10.2026 und tippe oben auf **Vollbild**. Erwartet: Leisten und Zahnrad sind weg, nur der runde Knopf unten rechts bleibt.
-2. Prüfe den Ring mit dem Stift. Tippe kurz mit dem Stift auf den runden Knopf. Erwartet: Er wechselt zwischen Kugelschreiber und Radierer, es geht nichts auf. Halte dann den Stift etwa eine halbe Sekunde auf dem Knopf. Erwartet: Der Ring geht auf, und der Knopf hat nichts gewechselt.
-3. Tippe mit dem Finger auf den runden Knopf. Erwartet: Der Ring geht auf. Tippe auf eine Farbe, zum Beispiel **Rot (offen)**. Erwartet: Der Ring schließt sich, und der nächste Strich ist rot.
-4. Öffne den Ring noch einmal und tippe auf die Seite neben den Ring, am besten auf ein Kästchen der Karte **Morgenbriefing**. Erwartet: Der Ring schließt sich, auf dem Papier entsteht kein Strich, und das Kästchen darunter ist nicht abgehakt.
-5. Öffne den Ring und tippe auf **›** (nächster Tag), dann wieder auf den Knopf und auf **Heute**. Erwartet: Die Seite wechselt, der Ring schließt sich, und du kannst gleich schreiben. Öffne den Ring und tippe auf **Ganze Seite**. Erwartet: Die Seite ist wieder ganz im Bild.
-6. Öffne den Ring und tippe auf **Vollbild aus**. Erwartet: Die Leisten sind wieder da.
-7. Tippe auf das Zahnrad, dann auf **Werkzeuge im Vollbild** und auf **Tab**. Tippe oben auf **Heute** und dann auf **Vollbild**. Erwartet: Am linken Rand, in der Mitte der Höhe, steht ein kleiner Griff, und der runde Knopf unten rechts wechselt nur noch das Werkzeug.
-8. Tippe auf den Griff. Erwartet: Eine Leiste klappt aus, mit Kugelschreiber und Radierer ganz oben, darunter Farben und Breiten, dann Rückgängig und Wiederholen, ‹, **Heute**, ›, **Ganze Seite** und **Vollbild aus**. Tippe noch einmal auf den Griff. Erwartet: Die Leiste klappt wieder zu.
-9. Klappe die Leiste aus und tippe auf eine Farbe. Erwartet: Die Leiste bleibt offen. Schreib einen Strich auf die Seite. Erwartet: Der Strich ist da, und die Leiste bleibt offen. Passt die Leiste nicht ganz auf den Bildschirm, schiebe sie mit dem Finger auf und ab.
-10. Prüfe die Hand. Schreib im Rad-Modus (Zahnrad, **Werkzeuge im Vollbild**, **Kreis**) mehrere Zeilen und leg die Hand dabei auf den runden Knopf. Erwartet: Der Ring geht nicht auf. Mach dasselbe im Tab-Modus mit der Hand auf dem Griff und auf der ausgeklappten Leiste. Erwartet: Nichts klappt auf oder zu, nichts wird gewählt, und geschrieben ist trotzdem.
-11. Tippe in der Leiste auf **Vollbild aus**. Erwartet: Die Leisten sind wieder da. Stelle zum Schluss **Werkzeuge im Vollbild** wieder auf die Wahl, die dir besser gefällt.
-12. Am Firmen-PC: Stelle bei **Gerät** **Firmen-PC** ein, tippe auf **Vollbild** und klicke mit der Maus auf den runden Knopf. Erwartet: Der Ring zeigt nur ‹, **Heute**, ›, **Ganze Seite** und **Vollbild aus**. Klicke auf **Vollbild aus**. Stelle **Gerät** danach wieder auf **iPad**.
+Der Ring um den runden Knopf:
+
+1. Öffne den 29.10.2026 und tippe oben auf **Vollbild**. Erwartet: Die Leisten sind weg. Unten rechts steht der runde Knopf mit dem Kugelschreiber. Er kann an einem anderen Ort stehen, wenn du ihn verschoben hast. Der Stand des Abgleichs oben kann bleiben.
+2. Tippe kurz mit dem Stift auf den runden Knopf. Erwartet: Er zeigt jetzt den Radierer, es geht nichts auf. Halte dann den Stift etwa eine halbe Sekunde auf dem Knopf. Erwartet: Der Ring geht auf, der Knopf wechselt nichts.
+3. Schließe den Ring, indem du mit dem Stift auf die Seite neben den Ring tippst. Tippe dann mit dem Stift auf den runden Knopf, bis wieder der Kugelschreiber zu sehen ist. Erwartet: Der Ring ist zu, auf dem Papier ist kein Strich.
+4. Tippe mit dem Finger auf den runden Knopf. Erwartet: Der Ring geht auf. Tippe auf eine Farbe, zum Beispiel die rote. Erwartet: Der Ring schließt sich, und der nächste Strich ist rot.
+5. Öffne den Ring wieder mit dem Finger und tippe auf die Seite neben dem Ring, am besten auf ein Kästchen der Karte **Morgenbriefing**. Erwartet: Der Ring schließt sich, auf dem Papier entsteht kein Strich, und der Zustand des Kästchens darunter ändert sich nicht.
+6. Öffne den Ring und tippe auf das Wort **Heute**. Erwartet: Die Seite wechselt zu heute, der Ring ist zu. Öffne ihn wieder und tippe auf **›** (nächster Tag). Erwartet: Es kommt der nächste Tag, der Ring ist zu, und du kannst gleich mit dem Stift schreiben.
+7. Zoome mit zwei Fingern in die Seite hinein, öffne den Ring und tippe auf den Knopf mit den vier Ecken, die nach außen zeigen (**Ganze Seite**). Erwartet: Die Seite ist wieder ganz im Bild.
+8. Prüfe die Hand: Leg beim Schreiben mehrere Zeilen lang die Hand auf den runden Knopf. Leg sie dann auf den Knopf, schreib mit dem Stift einen Strich und heb die Hand erst danach ab. Erwartet: Der Ring geht nie von allein auf, und geschrieben ist trotzdem.
+9. Öffne den Ring und tippe auf den Knopf mit den vier Ecken, die nach innen zeigen (**Vollbild aus**). Erwartet: Die Leisten sind wieder da.
+
+Die Lasche am linken Rand:
+
+10. Tippe auf das Zahnrad, dann bei **Werkzeuge im Vollbild** auf **Tab**. Tippe oben auf **Heute** und dann auf **Vollbild**. Erwartet: Am linken Rand, in der Mitte der Höhe, steht ein kleiner Griff mit drei Punkten. Der runde Knopf unten rechts wechselt nur noch das Werkzeug.
+11. Tippe mit dem Finger auf den Griff. Erwartet: Eine Leiste klappt aus. Von oben nach unten stehen darin Kugelschreiber und Radierer (die Symbole von Stift und Radierer), beim Kugelschreiber dazu Farben und Breiten (beim Radierer Größen und Stück oder Strich), der Pfeil nach links (Rückgängig) und der Pfeil nach rechts (Wiederholen), dann **‹**, **Heute**, **›**, die vier Ecken nach außen (**Ganze Seite**) und ganz unten die vier Ecken nach innen (**Vollbild aus**). Ist der Bildschirm zu niedrig, schiebe die Leiste mit dem Finger nach oben und unten. Tippe noch einmal auf den Griff. Erwartet: Die Leiste klappt zu.
+12. Klappe die Leiste aus und tippe auf eine Farbe. Erwartet: Die Leiste bleibt offen. Schreib einen Strich auf die Seite. Erwartet: Der Strich ist da, und die Leiste bleibt offen.
+13. Prüfe die Hand an der Lasche: Leg die Hand auf den Griff und schreib mit dem Stift einen Strich. Heb die Hand erst danach ab. Erwartet: Die Leiste klappt nicht auf oder zu. Mach dasselbe mit der Hand auf einem Knopf der ausgeklappten Leiste, zum Beispiel dem Pfeil nach links. Erwartet: Nichts wird rückgängig gemacht, und der Strich bleibt.
+14. Tippe in der Leiste auf die vier Ecken nach innen (**Vollbild aus**). Erwartet: Die Leisten sind wieder da. Stelle bei **Werkzeuge im Vollbild** die Wahl ein, die dir besser gefällt.
+
+Am Firmen-PC prüfst du den Ring bei 2.5: Schalte dort oben auf **Vollbild**, klicke mit der Maus auf den runden Knopf (er zeigt drei Punkte) und erwarte **‹**, **Heute**, **›**, die vier Ecken nach außen und die vier Ecken nach innen. Klicke zuletzt auf **Vollbild aus**.
 
 - [ ] Klappt
 

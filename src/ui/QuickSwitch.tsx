@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { TAP_SLOP_PX, type GestureFilter } from '../ink/gestures';
+import { TAP_SLOP_PX, type GestureFilter, type TouchMark } from '../ink/gestures';
 import { capturePointer, inside } from './pointerBits';
 import { Icon, type IconName } from './Toolbar';
 import type { Tool } from './toolChoices';
@@ -48,6 +48,8 @@ type Drag = {
   box: DOMRect;
   x: number;
   y: number;
+  /** Der Stand des Tors beim Aufsetzen (für einen Finger). */
+  mark: TouchMark;
   /** Der Zeiger ist einmal `TAP_SLOP_PX` oder weiter gekommen: Er tippt nicht, er zieht. */
   far: boolean;
   /** Der Stift hat die Werkzeuge geöffnet oder den Knopf verlassen: Beim Abheben wechselt er nichts. */
@@ -112,6 +114,7 @@ export function QuickSwitch({ tool, partial, pos, filter, onToggle, onMove, onOp
       box,
       x: e.clientX,
       y: e.clientY,
+      mark: filter.mark(e.timeStamp),
       far: false,
       spent: false,
     };
@@ -171,9 +174,9 @@ export function QuickSwitch({ tool, partial, pos, filter, onToggle, onMove, onOp
       return;
     }
     if (onOpen && !d.far) {
-      // Ein Fingertipp öffnet die Werkzeuge, wenn das Tor ihn auch beim Abheben für einen Finger hält: Kam inzwischen der Stift, war er die Hand.
+      // Ein Fingertipp öffnet die Werkzeuge, wenn das Tor ihn auch beim Abheben für einen Finger hält und er nicht länger lag als ein Tipp: Setzte inzwischen der Stift auf, war er die Hand.
       dropDrag();
-      if (lifted && filter.acceptTouch(e, e.timeStamp)) onOpen();
+      if (lifted && filter.acceptTouch(e, e.timeStamp) && filter.stillTap(d.mark, e.timeStamp)) onOpen();
       return;
     }
     const done = moving.current;

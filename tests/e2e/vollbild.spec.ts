@@ -641,3 +641,52 @@ test('a tall strip scrolls and the tab does not block the page', async ({ page }
   expect(await strip.evaluate((el) => getComputedStyle(el).overflowY)).toBe('auto');
   expect((await topmost(page, { x: 600, y: 250 })) ?? '').not.toContain('lasche');
 });
+
+// ---------- Eine Hand, die schon lag, bevor der Stift schrieb ----------
+
+/** Die Hand liegt auf `selector`, der Stift schreibt einen Strich, 300 ms später hebt die Hand ab: Sie war die Hand. */
+async function restingHand(page: Page, selector: string): Promise<void> {
+  const c = await centerOf(page, selector);
+  const hand = touch(page);
+  await hand.downOn(selector, c.x, c.y);
+  await pen(page).stroke(LINE);
+  await afterPalmWindow(page);
+  await hand.upOn(selector, c.x, c.y);
+}
+
+test('a hand resting on the handle while the pen wrote does not toggle the tab', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: TAB });
+  await restingHand(page, GRIFF);
+  await expect(page.locator(LEISTE)).toHaveCount(0);
+  await touch(page).tapOn(GRIFF); // ein Fingertipp danach geht wie sonst
+  await expect(page.locator(LEISTE)).toBeVisible();
+});
+
+test('a hand resting on a tab button while the pen wrote does nothing', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: TAB });
+  await touch(page).tapOn(GRIFF);
+  await restingHand(page, laBtn('Rückgängig'));
+  expect(await strokeCount(page)).toBe(1);
+  await expect(page.locator(LEISTE)).toBeVisible();
+  await restingHand(page, laBtn('Nächster Tag'));
+  expect(await pageKey(page)).toBe('2026-10-29');
+});
+
+test('a finger held longer than a tap does not press a tab button', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: TAB });
+  await touch(page).tapOn(GRIFF);
+  const c = await centerOf(page, laBtn('Blau'));
+  await touch(page).downOn(laBtn('Blau'), c.x, c.y);
+  await page.waitForTimeout(700);
+  await touch(page).upOn(laBtn('Blau'), c.x, c.y);
+  await expect(page.locator(laBtn('Blau'))).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('a hand resting on the wheel while the pen wrote does not open the ring', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: ON });
+  await restingHand(page, QUICK);
+  await expect(ring(page)).toHaveCount(0);
+  await expect(page.locator(SCHUTZ)).toHaveCount(0);
+  await strokeTop(page, 'pen', LINE);
+  await expect.poll(() => strokeCount(page)).toBe(2);
+});
