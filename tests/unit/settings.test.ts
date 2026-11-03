@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { forceCloseDatabase, IDBFactory } from 'fake-indexeddb';
 import { unwrap } from 'idb';
 import { afterEach, beforeEach, expect, test } from 'vitest';
-import { loadSettings, saveSettings, updateSettings, type Settings } from '../../src/lib/settings';
+import { loadSettings, saveSettings, updateSettings, vollbildOf, type Settings } from '../../src/lib/settings';
 import { openStore, type Store } from '../../src/sync/store';
 
 // Alles hier ist erfunden, auch der Token.
@@ -133,4 +133,11 @@ test('an update still saves after the browser closed the connection in the backg
   const again = await openStore();
   expect((await loadSettings(again))?.smoothing).toBe('aus');
   again.close();
+});
+
+test('vollbildOf fills gaps and ignores garbage', () => {
+  expect(vollbildOf(null)).toEqual({ an: false, werkzeuge: 'kreis' });
+  expect(vollbildOf({ vollbild: { an: true } })).toEqual({ an: true, werkzeuge: 'kreis' });
+  expect(vollbildOf({ vollbild: { an: 'ja', werkzeuge: 'stern' } })).toEqual({ an: false, werkzeuge: 'kreis' });
+  expect(vollbildOf({ vollbild: { an: true, werkzeuge: 'tab' } })).toEqual({ an: true, werkzeuge: 'tab' });
 });

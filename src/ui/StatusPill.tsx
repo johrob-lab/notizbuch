@@ -12,8 +12,10 @@ function useSignalValue<T>(source: Signal<T>): T {
  * Der Stand des Abgleichs als Text: Gesichert, Wartet auf Netz oder Zugang erneuern. Immer genau diese Texte. „Zugang
  * erneuern“ ist ein Link: Ein Tipp darauf führt zu den Einstellungen, wo der Zugang erneuert wird.
  */
-export function StatusPill({ engine }: { engine: Pick<SyncEngine, 'status'> }) {
+export function StatusPill({ engine, hideWhenSaved }: { engine: Pick<SyncEngine, 'status'>; hideWhenSaved?: boolean }) {
   const status = useSignalValue(engine.status);
+  // Im Vollbild stört der Stand nur, solange alles gesichert ist: Dann steht nichts da.
+  if (hideWhenSaved && status.state === 'gesichert') return null;
   return (
     <span class={`status status-${status.state}`} data-testid="status" role="status">
       {status.state === 'zugang' ? <a href="#/einstellungen">{statusLabel(status)}</a> : statusLabel(status)}

@@ -3,7 +3,7 @@ import { SMOOTHING } from '../ink/types';
 import { AccessChangedError, accessProblem, PendingChangesError, saveAccess, waitingText } from '../lib/access';
 import { todayVienna, type Day } from '../lib/dates';
 import { expiryWarning, knownExpiry } from '../lib/expiry';
-import { loadSettings, updateSettings, type Settings } from '../lib/settings';
+import { loadSettings, updateSettings, vollbildOf, type Settings, type Vollbild } from '../lib/settings';
 import { initInkPrefs } from './inkPrefs';
 import { SyncEngine } from '../sync/engine';
 import { GitHubClient, type ListDir } from '../sync/github';
@@ -278,14 +278,14 @@ export function App() {
   // ---------- Einstellungen ----------
 
   /** Eine Wahl der Einstellungen gilt sofort und wird gespeichert, ausgehend vom Stand im Speicher: Nichts anderes geht dabei verloren. */
-  const choose = async (patch: Partial<Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung'>>): Promise<void> => {
+  const choose = async (patch: Partial<Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung' | 'vollbild'>>): Promise<void> => {
     const now = bootNow.current;
     if (now.phase !== 'bereit' || !now.window.active) return;
     const before = Object.fromEntries(Object.keys(patch).map((key) => [key, now.settings[key as keyof Settings]])) as Partial<Settings>;
     setBoot((current) => (current.phase === 'bereit' ? { ...current, settings: { ...current.settings, ...patch } } : current));
     if (patch.device) now.engine.setDevice(patch.device);
     try {
-      await updateSettings(now.store, (saved) => ({ ...saved, ...patch }));
+      await updateSettings(now.store, (saved) => ({ ...saved, ...patch, ...(patch.vollbild && { vollbild: { ...vollbildOf(saved), ...patch.vollbild } }) }));
     } catch (error) {
       // Gespeichert ist nichts: Die Oberfläche zeigt wieder, was gilt, und die Seite sagt, dass es nicht geklappt hat.
       setBoot((current) => (current.phase === 'bereit' ? { ...current, settings: { ...current.settings, ...before } } : current));
@@ -376,13 +376,27 @@ export function App() {
     void updateSettings(now.store, (saved) => ({ ...saved, quickSwitchPos: pos })).catch(() => undefined);
   };
 
+  // Das Vollbild wurde ein- oder ausgeschaltet: gleich auf dem Bildschirm, dann in den Einstellungen des Geräts. Das Fenster, das
+  // nur liest, ändert die Ansicht, speichert aber nichts. Ein Fehler beim Speichern ändert die Anzeige nicht.
+  const setVollbild = (change: Partial<Vollbild>) => {
+    const now = bootNow.current;
+    if (now.phase !== 'bereit') return;
+    setBoot((current) => (current.phase === 'bereit' ? { ...current, settings: { ...current.settings, vollbild: { ...vollbildOf(current.settings), ...change } } } : current));
+    if (!now.window.active) return;
+    void updateSettings(now.store, (saved) => ({ ...saved, vollbild: { ...vollbildOf(saved), ...change } })).catch(() => undefined);
+  };
+
+  // Vollbild gilt nur auf Seiten, nie in den Einstellungen.
+  const vollbild = boot.phase === 'bereit' ? vollbildOf(boot.settings) : null;
+  const fullscreen = vollbild !== null && vollbild.an && route.view !== 'einstellungen';
+
   // Die Reiter gehören zum Jahr und Monat der Seite, bei einer Woche zu denen ihres Donnerstags. Die Einstellungen sind keine
   // Seite des Kalenders und haben keine.
   const shown = shownMonth(route);
 
   // Was gleich unter der Leiste steht und bleibt: Das zweite Fenster eines Geräts liest nur, oder der Zugang wird umgestellt.
   const banner = boot.phase !== 'bereit' ? null : !boot.window.active ? OTHER_WINDOW : switching ? SWITCHING : null;
-  const classes = [banner !== null ? 'mit-hinweis' : '', switching ? 'umstellen' : ''].filter(Boolean).join(' ');
+  const classes = [banner !== null ? 'mit-hinweis' : '', switching ? 'umstellen' : '', fullscreen ? 'vollbild' : ''].filter(Boolean).join(' ');
 
   return (
     <main id="app" class={classes || undefined}>
@@ -395,6 +409,8 @@ export function App() {
             startNotice={startNotice}
             passive={!boot.window.active}
             blocked={switching}
+            vollbild={fullscreen}
+            onVollbild={() => setVollbild({ an: true })}
           />
           {banner !== null && (
             <p class="fensterhinweis" role="status">
@@ -425,9 +441,10 @@ export function App() {
                 messung={boot.settings.messung ?? false}
                 quickSwitchPos={boot.settings.quickSwitchPos}
                 onQuickSwitchMove={moveQuickSwitch}
+                vollbild={fullscreen ? vollbildOf(boot.settings).werkzeuge : null}
               />
             )}
-            {route.view !== 'einstellungen' && <MonthTabs year={Number(shown.slice(0, 4))} current={shown} />}
+            {route.view !== 'einstellungen' && !fullscreen && <MonthTabs year={Number(shown.slice(0, 4))} current={shown} />}
           </div>
         </>
       ) : boot.phase === 'einrichten' ? (

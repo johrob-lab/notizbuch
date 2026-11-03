@@ -22,6 +22,10 @@ type Props = {
   passive?: boolean;
   /** Die App wartet (der Zugang wird umgestellt): Nichts in der Leiste lässt sich antippen, auch nicht mit der Tastatur. */
   blocked?: boolean;
+  /** Das Vollbild gilt: Von der Leiste bleiben nur die Meldungen und, solange etwas nicht gesichert ist, der Stand. */
+  vollbild?: boolean;
+  /** Schaltet das Vollbild ein. Ohne diese Angabe (die Einstellungen) gibt es den Knopf nicht. */
+  onVollbild?(): void;
 };
 
 type Note = { id: number; text: string; alert: boolean; start?: boolean };
@@ -77,7 +81,7 @@ function Step({ label, symbol, from, to }: { label: string; symbol: string; from
  * Meldungen der Engine auf (Konfliktkopie, Fehler beim Abgleich) und bleiben, bis man sie schließt. Ein Hinweis, der nur
  * informiert, verschwindet nach 8 Sekunden von selbst.
  */
-export function TopBar({ route, engine, steps, startNotice, passive, blocked }: Props) {
+export function TopBar({ route, engine, steps, startNotice, passive, blocked, vollbild, onVollbild }: Props) {
   const [notes, setNotes] = useState<Note[]>([]);
   const lastId = useRef(0);
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -132,6 +136,30 @@ export function TopBar({ route, engine, steps, startNotice, passive, blocked }: 
   // Wer die App über Nacht offen lässt, soll mit „Heute“ im neuen Tag landen: Der Tag wird beim Tippen berechnet.
   const today = () => routeHash({ view: 'tag', key: todayVienna() });
 
+  const meldungen = notes.length > 0 && (
+    <div class="meldungen">
+      {notes.map((n) => (
+        <div key={n.id} class="meldung" role={n.alert ? 'alert' : 'status'}>
+          <span>{n.text}</span>
+          <button type="button" class="tb" aria-label="Hinweis schließen" onClick={() => setNotes((list) => list.filter((x) => x.id !== n.id))}>
+            ×
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+
+  // Im Vollbild bleiben nur der Stand (erst wenn etwas nicht gesichert ist) und die Meldungen. Blättern, Ansichten und Zahnrad
+  // sind weg; wo die Leiste fehlt, kommt man mit dem Vollbild-Aus des Rads oder der Lasche zurück.
+  if (vollbild) {
+    return (
+      <header class="topbar" inert={blocked}>
+        {!passive && <StatusPill engine={engine} hideWhenSaved />}
+        {meldungen}
+      </header>
+    );
+  }
+
   return (
     <header class="topbar" inert={blocked}>
       <div class="schritte" role="group" aria-label="Blättern">
@@ -163,23 +191,17 @@ export function TopBar({ route, engine, steps, startNotice, passive, blocked }: 
       </nav>
       {/* Das Fenster, das nur liest, hat keinen Stand zu zeigen. Die leere Fläche hält das Zahnrad rechts. */}
       {passive ? <span class="status" /> : <StatusPill engine={engine} />}
+      {onVollbild && route.view !== 'einstellungen' && (
+        <button type="button" class="pill vollbild-knopf" onClick={onVollbild}>
+          Vollbild
+        </button>
+      )}
       <a class="pill zahnrad" href="#/einstellungen" aria-label="Einstellungen" aria-current={route.view === 'einstellungen' ? 'page' : undefined}>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d={GEAR} />
         </svg>
       </a>
-      {notes.length > 0 && (
-        <div class="meldungen">
-          {notes.map((n) => (
-            <div key={n.id} class="meldung" role={n.alert ? 'alert' : 'status'}>
-              <span>{n.text}</span>
-              <button type="button" class="tb" aria-label="Hinweis schließen" onClick={() => setNotes((list) => list.filter((x) => x.id !== n.id))}>
-                ×
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      {meldungen}
     </header>
   );
 }

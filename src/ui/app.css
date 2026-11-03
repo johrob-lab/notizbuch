@@ -352,6 +352,20 @@ body {
   }
 }
 
+/*
+ * Das iPad im Hochformat (834 Punkte) ist am engsten: Mit dem Knopf für das Vollbild rücken die Knöpfe näher zusammen, damit der
+ * Stand nicht auf mehr Zeilen umbricht und die Leiste höher wird (die Seite würde springen). Die Knöpfe bleiben 44 Punkte hoch.
+ */
+@media (max-width: 900px) {
+  .topbar {
+    gap: 4px;
+  }
+
+  .pill {
+    padding: 0 8px;
+  }
+}
+
 /* Erst wenn es gar nicht mehr passt, bricht die Leiste um. */
 @media (max-width: 670px) {
   .topbar {
@@ -430,6 +444,53 @@ body {
 /* Mit Hinweis (das Fenster liest nur, oder der Zugang wird umgestellt) schweben die Meldungen unter dem Hinweis, damit sie ihn nicht verdecken. */
 .mit-hinweis .meldungen {
   margin-top: 48px;
+}
+
+/*
+ * Vollbild: Die Leiste oben nimmt keine Höhe, die Seite füllt das Fenster. Die Meldungen und der Stand (nur wenn etwas nicht
+ * gesichert ist, oben rechts) liegen über der Seite. Der Stand fängt keine Berührung ab, nur sein Link zu den Einstellungen.
+ */
+#app.vollbild {
+  position: relative;
+}
+
+.vollbild .topbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  pointer-events: none;
+}
+
+.vollbild .status {
+  position: absolute;
+  top: max(8px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 0.9);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.15);
+}
+
+.vollbild .status a {
+  pointer-events: auto;
+}
+
+.vollbild .meldungen {
+  top: 0;
+  margin-top: 44px;
+}
+
+.vollbild.mit-hinweis .status {
+  top: 52px;
+}
+
+.vollbild.mit-hinweis .meldungen {
+  margin-top: 92px;
 }
 
 /* Solange der Zugang umgestellt wird, ist die Leiste und die Seite gesperrt (`inert`): blasser, denn die App ist nicht kaputt, sie wartet. */

@@ -15,6 +15,7 @@ import { QuickSwitch } from './QuickSwitch';
 import { retryCues } from './retryCues';
 import { routeHash } from './router';
 import { Icon, Toolbar, type Tool } from './Toolbar';
+import type { VollbildWerkzeuge } from '../lib/settings';
 
 // Eine Seite zum Schreiben, ganz gleich ob Tag, Woche oder Monat: Das Layout sagt, welche Felder und welchen Hintergrund
 // sie hat. Lesen, Speichern und fremde Änderungen übernimmt `PageSession`, diese Datei verbindet sie mit der Schreibfläche
@@ -33,6 +34,8 @@ export type PageProps = {
   /** Ort des Schnellwechsels, siehe `Settings.quickSwitchPos`. */
   quickSwitchPos?: [number, number];
   onQuickSwitchMove(pos: [number, number]): void;
+  /** Im Vollbild: womit man die Werkzeuge erreicht. Dann zeigt die Seite weder Werkzeugleiste noch Kopfdaten noch den Ersatzknopf „Ganze Seite“. Sonst `null`. */
+  vollbild?: VollbildWerkzeuge | null;
 };
 
 /** Was das Formular über einer Seite mit Kopfdaten von der Seite bekommt. */
@@ -232,6 +235,7 @@ export function PageView(p: Props) {
     setInkPrefs({ width: w, tool: 'pen' });
   };
 
+  const full = p.vollbild != null;
   const canWrite = !readOnly && phase !== 'unlesbar' && phase !== 'gesperrt' && phase !== 'nichtGeladen';
 
   // Eine Änderung am Kopf ändert die Kopfdaten der Fläche an Ort und Stelle (dieselbe Seite, dieselben Striche) und geht
@@ -256,7 +260,7 @@ export function PageView(p: Props) {
   return (
     <div class="seite">
       {/* Nur ansehen heißt: keine Werkzeuge, also auch keine Leiste. Sonst bleibt sie stehen, damit die Seite nicht springt. */}
-      {!readOnly && (
+      {!readOnly && !full && (
         <div class="leiste">
           {canWrite && (
             <Toolbar
@@ -279,7 +283,7 @@ export function PageView(p: Props) {
           )}
         </div>
       )}
-      {kopf && tools && <div class="kopf">{kopf.form(tools)}</div>}
+      {kopf && tools && !full && <div class="kopf">{kopf.form(tools)}</div>}
       <div class="buehne" ref={stage}>
         <div class="flaeche" data-testid="surface" ref={host} />
         {/* Die Karten gehören nicht zur Schreibfläche: Sie liegen daneben und sind echte Bedienelemente (Kästchen, Knöpfe, Felder). */}
@@ -328,7 +332,7 @@ export function PageView(p: Props) {
           </p>
         )}
         {/* Wo es keine Werkzeugleiste gibt (Firmen-PC, Seite nicht lesbar oder nicht geladen), bleibt dieser Knopf: der Weg zurück zur ganzen Seite. */}
-        {!canWrite && (
+        {!canWrite && !full && (
           <button type="button" class="tb ganze-seite" aria-label="Ganze Seite" title="Ganze Seite" onClick={() => surface.current?.zoomToFit()}>
             <Icon name="fit" />
           </button>
