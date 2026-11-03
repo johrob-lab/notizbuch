@@ -6,6 +6,12 @@
 /** Startwerte der Körnung: Die Kachel hat `tile` mal `tile` Felder, der Anteil `cover` davon deckt, `seed` wählt welche. */
 export const GRAIN = { tile: 64, cell: 0.8, cover: 0.75, seed: 7 }; // cell: Seiteneinheiten je Feld
 
+/**
+ * Ein Bleistiftstrich, der auf dem Bildschirm schmaler ist als so viele Bildpunkte, wird ohne Körnung gemalt, einfarbig: Ein
+ * feiner Punkt fiele sonst ganz in ein Loch der Körnung und wäre nicht zu sehen. So schmal ist die Körnung ohnehin nicht zu erkennen.
+ */
+export const GRAIN_MIN_PX = 2;
+
 /** Zufallszahlen von 0 bis unter 1, aus demselben `seed` immer dieselbe Folge (mulberry32). */
 function randomFrom(seed: number): () => number {
   let a = seed | 0;

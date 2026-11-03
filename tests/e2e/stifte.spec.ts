@@ -1,5 +1,6 @@
 import { expect, test as base, type Page } from '@playwright/test';
 import { BLEISTIFT_OPACITY, type PenKind } from '../../src/ink/pens';
+import { INK, PAPER, type WidthName } from '../../src/ink/types';
 import { changeStoredSettings, openSeeded, queued } from './helpers/app';
 import { colorAt, inkNear, pen, wheel } from './helpers/pointer';
 
@@ -29,13 +30,63 @@ const LIVE = 'canvas[data-layer="live"]';
 const PREDICTION = 'canvas[data-layer="vorhersage"]';
 
 /** Wählt den Stift über die gespeicherte Werkzeugwahl (alle Felder ausgeschrieben) und lädt neu. */
-async function choosePen(page: Page, chosen: PenKind): Promise<void> {
+async function choosePen(page: Page, chosen: PenKind, width: WidthName = 'mittel'): Promise<void> {
   await changeStoredSettings(page, {
-    ink: { tool: 'pen', pen: chosen, color: 'schwarz', width: 'mittel', eraserSize: 'mittel', eraserMode: 'strich', scribble: true },
+    ink: { tool: 'pen', pen: chosen, color: 'schwarz', width, eraserSize: 'mittel', eraserMode: 'strich', scribble: true },
   });
   await page.reload();
   await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
 }
+
+/** `#rrggbb` als `[rot, grün, blau]`. */
+const rgb = (hex: string): number[] => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+/** So sieht der fertige Bleistift auf dem Papier aus, wo die Körnung deckt: Graphitgrau mit der Deckkraft des Bleistifts. */
+const pencilOnPaper = (): number[] => rgb(INK.grau).map((v, i) => BLEISTIFT_OPACITY * v + (1 - BLEISTIFT_OPACITY) * rgb(PAPER)[i]);
+
+const describe = (c: number[]): string => c.map(Math.round).join(', ');
+
+/**
+ * Die Farben, wie man sie auf dem Bildschirm sieht (alle Ebenen übereinander, jede mit ihrer Deckkraft), im Rechteck
+ * zwischen zwei Orten der Seite: ein Bildschirmfoto, das der Browser zurück in Bildpunkte liest.
+ */
+async function shownColours(page: Page, from: [number, number], to: [number, number]): Promise<number[][]> {
+  const [a, b] = await page.evaluate(
+    ([x0, y0, x1, y1]) => [window.__notizbuch.toClient(x0, y0), window.__notizbuch.toClient(x1, y1)],
+    [...from, ...to],
+  );
+  const png = await page.screenshot({ clip: { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y } });
+  return page.evaluate(async (data) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${data}`;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const ctx = c.getContext('2d')!;
+    ctx.drawImage(img, 0, 0);
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    const out: number[][] = [];
+    for (let i = 0; i < d.length; i += 4) out.push([d[i], d[i + 1], d[i + 2]]);
+    return out;
+  }, png.toString('base64'));
+}
+
+/** Die dunkelste Farbe einer Liste. */
+const darkestOf = (colours: number[][]): number[] => colours.reduce((a, b) => (a[0] + a[1] + a[2] <= b[0] + b[1] + b[2] ? a : b));
+
+/** Der Ort der Seite nahe `at`, der auf den Ebenen genau in die Mitte eines Bildpunkts fällt. */
+const onPixelCentre = (page: Page, at: [number, number]): Promise<[number, number]> =>
+  page.evaluate(([x, y]) => {
+    const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-layer="grund"]')!;
+    const box = canvas.getBoundingClientRect();
+    const k = canvas.width / box.width;
+    const origin = window.__notizbuch.toClient(0, 0);
+    const scale = window.__notizbuch.toClient(1, 0).x - origin.x;
+    const c = window.__notizbuch.toClient(x, y);
+    const centre = (v: number, edge: number) => edge + (Math.floor((v - edge) * k) + 0.5) / k;
+    return [x + (centre(c.x, box.left) - c.x) / scale, y + (centre(c.y, box.top) - c.y) / scale] as [number, number];
+  }, at);
 
 /** Die Seite, wie sie auf dem Gerät gespeichert ist. Ohne Netz bleibt sie in der Warteschlange und wird nicht hochgeladen. */
 const savedPage = async (page: Page): Promise<string> => (await queued(page))[TAG] ?? '';
@@ -136,26 +187,66 @@ test('a pencil stroke is grey and see through', async ({ page }) => {
     samples.some((c) => c.every((v, i) => v > grau[i] + 20)),
     samples.map((c) => c.join(', ')).join(' | '),
   ).toBe(true);
-  // Auch die dunkelste Stelle auf der Mitte des Strichs, wo die Körnung ganz deckt, ist heller als das Graphitgrau selbst.
-  const centre = await Promise.all(line([260, 1010], [440, 1010], 37).map((at) => colorAt(page, at)));
-  const darkest = centre.reduce((a, b) => (a[0] + a[1] + a[2] <= b[0] + b[1] + b[2] ? a : b));
-  expect(darkest[0] + darkest[1] + darkest[2], `dunkelste Stelle ${darkest.join(', ')} ist Tinte`).toBeLessThan(450);
-  expect(darkest.every((v, i) => v > grau[i] + 20), `dunkelste Stelle ${darkest.join(', ')}`).toBe(true);
+  // Auch die dunkelste Stelle auf der Mitte des Strichs, wo die Körnung deckt, ist nur Graphitgrau mit der Deckkraft des
+  // Bleistifts: Das Papier scheint überall durch.
+  const darkest = darkestOf(await Promise.all(line([260, 1010], [440, 1010], 37).map((at) => colorAt(page, at))));
+  const want = pencilOnPaper();
+  expect(darkest.every((v, i) => Math.abs(v - want[i]) <= 3), `dunkelste Stelle ${describe(darkest)}, erwartet ${describe(want)}`).toBe(true);
+});
+
+test('while writing, the pencil is nowhere darker than the finished stroke', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await choosePen(page, 'bleistift', 'breit');
+  // Hineingezoomt ist das Gelenk zwischen Live- und Vorhersage-Ebene einige Bildpunkte groß.
+  await wheel(page, [350, 1010], { dy: -400, ctrl: true });
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+  const pts = line([250, 1010], [450, 1010], 60); // zwischen zwei Linien des Notizfelds
+  const writer = pen(page);
+  await writer.down(...pts[0]);
+  for (const q of pts.slice(1)) await writer.move(...q);
+  await page.waitForTimeout(60); // die Vorhersage ist wieder weg, das Endstück bleibt stehen
+  const shown = await shownColours(page, [250, 1007], [450, 1013]);
+  await writer.up(...pts[pts.length - 1]);
+  // Die Deckkraft wirkt einmal auf den ganzen Strich: Die dunkelste Stelle ist so hell wie beim fertigen Strich, nirgends dunkler.
+  const darkest = darkestOf(shown);
+  const want = pencilOnPaper();
+  expect(darkest.every((v, i) => Math.abs(v - want[i]) <= 3), `dunkelste Stelle ${describe(darkest)}, fertig ${describe(want)}`).toBe(true);
+});
+
+test('a fine pencil tap is visible', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await choosePen(page, 'bleistift', 'fein');
+  // Ein feiner Tipp ist bei ganzer Seitenbreite nur einen Bildpunkt groß. Mit Körnung fiele er an manchen Stellen ganz in ein
+  // Loch. Getippt wird darum an vielen Stellen, jede genau auf die Mitte eines Bildpunkts.
+  const spots = await Promise.all(Array.from({ length: 16 }, (_, i) => onPixelCentre(page, [130 + 30 * i, 1010])));
+  for (const at of spots) await pen(page).tap(...at);
+  await expect.poll(async () => (await strokeTools(page)).length).toBe(spots.length);
+  const hidden: [number, number][] = [];
+  for (const at of spots) if ((await inkNear(page, at, 3)) === 0) hidden.push(at);
+  expect(hidden, 'Tipps ohne sichtbaren Punkt').toEqual([]);
 });
 
 test('the live layers are opaque again after a pencil stroke', async ({ page }) => {
   await openSeeded(page, DAY);
   await choosePen(page, 'bleistift');
   const opacity = (selector: string) => page.evaluate((sel) => document.querySelector<HTMLCanvasElement>(sel)!.style.opacity, selector);
+  /** Mit welcher Deckkraft die Ebene zu sehen ist: ihre eigene mal die aller Elemente, in denen sie liegt. */
+  const shownOpacity = (selector: string) =>
+    page.evaluate((sel) => {
+      let o = 1;
+      for (let el = document.querySelector(sel); el; el = el.parentElement) o *= Number(getComputedStyle(el).opacity);
+      return o;
+    }, selector);
   const writer = pen(page);
   await writer.down(200, 1010);
   await writer.move(230, 1012);
   await writer.move(260, 1010);
-  // Beim Schreiben scheinen Live- und Vorhersage-Ebene als Ganzes durch, so wie der fertige Strich.
-  expect(await opacity(LIVE)).toBe(String(BLEISTIFT_OPACITY));
-  expect(await opacity(PREDICTION)).toBe(String(BLEISTIFT_OPACITY));
+  // Beim Schreiben scheinen Live- und Vorhersage-Ebene durch, so wie der fertige Strich.
+  expect(await shownOpacity(LIVE)).toBeCloseTo(BLEISTIFT_OPACITY, 5);
+  expect(await shownOpacity(PREDICTION)).toBeCloseTo(BLEISTIFT_OPACITY, 5);
   await writer.up(260, 1010);
   expect(await opacity(LIVE)).toBe('');
-  expect(await opacity(PREDICTION)).toBe('');
+  expect(await shownOpacity(LIVE)).toBe(1);
+  expect(await shownOpacity(PREDICTION)).toBe(1);
   await expect.poll(() => strokeTools(page)).toEqual(['bleistift']);
 });

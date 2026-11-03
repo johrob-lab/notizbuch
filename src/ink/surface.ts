@@ -1,12 +1,12 @@
 import { boundsOf, emptyBox, growBox, lineWidth, type Box } from './bounds';
 import { cutStroke, ERASER_PX, ERASER_STEP_PX, hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
 import { clampView, GestureFilter, gestureView, isFingerTap, isTwoFingerTap, SIDE_MARGIN_PX, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
-import { GRAIN, grainMask } from './grain';
+import { GRAIN, GRAIN_MIN_PX, grainMask } from './grain';
 import { History, restore, type Removed } from './history';
 import { fixedSegments, tailStart } from './live';
 import { InkMeter } from './meter';
 import { outlineOf } from './outline';
-import { BLEISTIFT_OPACITY, isShape, type PenKind } from './pens';
+import { BLEISTIFT_OPACITY, BLEISTIFT_PRESSURE, isShape, type PenKind } from './pens';
 import { extrapolate } from './predict';
 import { isScribble, scribbleTargets } from './scribble';
 import { newStrokeId, StrokeBuilder } from './stroke';
@@ -51,15 +51,17 @@ export type SurfaceOptions = {
 };
 
 /**
- * Ein Strich, der entsteht, mit Stift und Farbe des Strichs (beim Bleistift `grau`). `drawn` sagt, was schon fest auf der
- * Live-Ebene steht: bei Linien das erste Segment, das noch fehlt (siehe `live.ts`), bei Formen die Zahl der Punkte, deren
- * Viereck vom vorigen Punkt und deren Kreis dort stehen. `tailArea` ist der Bereich des Endstücks auf der Vorhersage-Ebene.
+ * Ein Strich, der entsteht, mit Stift und Farbe des Strichs (beim Bleistift `grau`). `grain`: Der Bleistift malt mit Körnung,
+ * beim Aufsetzen einmal entschieden. `drawn` sagt, was schon fest auf der Live-Ebene steht: bei Linien das erste Segment, das
+ * noch fehlt (siehe `live.ts`), bei Formen die Zahl der Punkte, deren Viereck vom vorigen Punkt und deren Kreis dort stehen.
+ * `tailArea` ist der Bereich des Endstücks auf der Vorhersage-Ebene.
  */
 type Drawing = {
   id: number;
   builder: StrokeBuilder;
   pen: PenKind;
   color: StrokeColor;
+  grain: boolean;
   box: Box;
   drawn: number;
   tailArea: Box | null;
@@ -168,6 +170,8 @@ export class InkSurface {
   private readonly base: HTMLCanvasElement;
   private readonly live: HTMLCanvasElement;
   private readonly pred: HTMLCanvasElement;
+  /** Live- und Vorhersage-Ebene zusammen: Eine Deckkraft hier gilt einmal für beide, wie bei einem einzigen Bild. */
+  private readonly liveGroup: HTMLElement;
   /** Bild der Grundebene für Gesten auf vollen Seiten. Hat nur während einer solchen Geste eine Größe. */
   private readonly snap = document.createElement('canvas');
   private readonly bctx: CanvasRenderingContext2D;
@@ -244,7 +248,13 @@ export class InkSurface {
     this.bctx = context(this.base);
     this.lctx = context(this.live, { desynchronized: true });
     this.pctx = context(this.pred);
-    el.append(this.base, this.live, this.pred);
+    // Live- und Vorhersage-Ebene liegen in einer Gruppe. Der Bleistift setzt seine Deckkraft auf die Gruppe: Sie wirkt einmal
+    // auf beide zusammen, und wo sich ihre Stücke überlappen, wird es nicht dunkler.
+    this.liveGroup = document.createElement('div');
+    this.liveGroup.dataset.layers = 'live vorhersage';
+    Object.assign(this.liveGroup.style, { position: 'absolute', inset: '0', pointerEvents: 'none', touchAction: 'none' });
+    this.liveGroup.append(this.live, this.pred);
+    el.append(this.base, this.liveGroup);
 
     // Alle Zeiger hören auf `el`: Der Stift (und der Finger) bleibt mit Zeigerfang bei der Fläche, auch außerhalb ihres Rands.
     this.listen(el, 'pointerdown', this.onDown, { passive: false });
@@ -430,6 +440,7 @@ export class InkSurface {
       c.width = 0;
       c.height = 0;
     }
+    this.liveGroup.remove();
   }
 
   // ---------- Aufbau ----------
@@ -441,7 +452,7 @@ export class InkSurface {
     if (!receivesInput) {
       c.style.pointerEvents = 'none';
       c.setAttribute('aria-hidden', 'true');
-    }
+    } else c.style.pointerEvents = 'auto'; // auch in der Gruppe, die selbst keine Zeiger annimmt
     return c;
   }
 
@@ -578,14 +589,15 @@ export class InkSurface {
   /**
    * Füllfeder und Bleistift: alle Vielecke des Umrisses (`outlineOf`) in einem Pfad mit einem `fill` (Regel nonzero), so hat
    * die Form kein Loch. Ist sie überall dünner als ein Bildpunkt, verschwände sie: Dann wird die Mittellinie einen Bildpunkt
-   * breit gezogen. Der Bleistift malt mit dem Kornmuster und seiner Deckkraft in einem Zug, darum wird er dort, wo er sich
-   * selbst überlappt, nicht dunkler.
+   * breit gezogen. Der Bleistift malt mit seiner Deckkraft in einem Zug, darum wird er dort, wo er sich selbst überlappt,
+   * nicht dunkler. Mit Körnung nur, wo er auf dem Bildschirm mindestens `GRAIN_MIN_PX` Bildpunkte breit ist.
    */
   private drawShape(ctx: CanvasRenderingContext2D, s: Stroke): void {
     if (!s.pts.length) return;
+    const pencil = s.tool === 'bleistift';
     ctx.save();
-    if (s.tool === 'bleistift') ctx.globalAlpha = BLEISTIFT_OPACITY;
-    this.shapePaint(ctx, s.tool, s.color);
+    if (pencil) ctx.globalAlpha = BLEISTIFT_OPACITY;
+    this.shapePaint(ctx, s.color, pencil && boundsOf(s).maxW * this.view.s * this.dpr >= GRAIN_MIN_PX);
     const px = this.pixel();
     if (boundsOf(s).maxW < px) this.drawLine(ctx, s.pts, px);
     else {
@@ -601,12 +613,12 @@ export class InkSurface {
   }
 
   /**
-   * Womit eine Form gemalt wird: in der Farbe der Tinte, beim Bleistift mit dem Kornmuster, voll deckend (seine Deckkraft
-   * setzt, wer zeichnet). Das Muster wird nicht geglättet: So deckt jeder Bildpunkt ganz oder gar nicht, auch vergrößert,
-   * und wo sich Stücke auf einer Ebene überlappen, wird es nicht dunkler.
+   * Womit eine Form gemalt wird: in der Farbe des Strichs, mit `grainy` (nur Bleistift) im Kornmuster, voll deckend (die
+   * Deckkraft des Bleistifts setzt, wer zeichnet). Das Muster wird nicht geglättet: So deckt jeder Bildpunkt ganz oder gar
+   * nicht, auch vergrößert, und wo sich Stücke auf einer Ebene überlappen, wird es nicht dunkler.
    */
-  private shapePaint(ctx: CanvasRenderingContext2D, pen: PenKind, color: StrokeColor): void {
-    const grain = pen === 'bleistift' ? this.grain(ctx) : null;
+  private shapePaint(ctx: CanvasRenderingContext2D, color: StrokeColor, grainy: boolean): void {
+    const grain = grainy ? this.grain(ctx) : null;
     ctx.fillStyle = grain ?? INK[color];
     ctx.strokeStyle = grain ?? INK[color];
     ctx.imageSmoothingEnabled = !grain;
@@ -796,7 +808,7 @@ export class InkSurface {
     if (d.drawn < settled) {
       const ctx = this.lctx;
       this.setView(ctx);
-      this.shapePaint(ctx, d.pen, d.color);
+      this.shapePaint(ctx, d.color, d.grain);
       ctx.beginPath();
       count = addShape(ctx, p, d.drawn, settled);
       ctx.fill('nonzero');
@@ -842,7 +854,7 @@ export class InkSurface {
     if (n <= d.drawn) return 0;
     const ctx = this.pctx;
     this.setView(ctx);
-    this.shapePaint(ctx, d.pen, d.color);
+    this.shapePaint(ctx, d.color, d.grain);
     ctx.beginPath();
     const count = addShape(ctx, p, d.drawn, n);
     ctx.fill('nonzero');
@@ -920,7 +932,7 @@ export class InkSurface {
     if (isShape(d.pen)) {
       // Eine Form: Viereck vom letzten Punkt zum vorhergesagten in der Breite des letzten Punkts, ein Kreis am Ende.
       const r = last.w / 2;
-      this.shapePaint(pctx, d.pen, d.color);
+      this.shapePaint(pctx, d.color, d.grain);
       pctx.beginPath();
       addQuad(pctx, last, r, t, r);
       addCircle(pctx, t, r);
@@ -952,19 +964,21 @@ export class InkSurface {
     const pen = this.pen;
     const builder = this.newBuilder(pen);
     const color = builder.stroke().color;
-    this.drawing = { id: e.pointerId, builder, pen, color, box: emptyBox(), drawn: nothingDrawn(pen), tailArea: null, hist: [] };
-    // Der Bleistift malt auf Live- und Vorhersage-Ebene voll deckend, seine Deckkraft gilt für die ganze Ebene. So sieht er
-    // aus wie der fertige Strich, auch wo sich seine Stücke überlappen.
+    // Körnung nur, wenn der Strich auf dem Bildschirm breit genug werden kann: beim Aufsetzen einmal entschieden, mit der
+    // größten Breite, die der Druck zulässt.
+    const grain = pen === 'bleistift' && this.widthMm * MM * BLEISTIFT_PRESSURE.max * this.view.s * this.dpr >= GRAIN_MIN_PX;
+    this.drawing = { id: e.pointerId, builder, pen, color, grain, box: emptyBox(), drawn: nothingDrawn(pen), tailArea: null, hist: [] };
+    // Der Bleistift malt auf Live- und Vorhersage-Ebene voll deckend, seine Deckkraft gilt einmal für beide zusammen. So sieht
+    // er aus wie der fertige Strich, auch wo sich seine Stücke überlappen.
     if (pen === 'bleistift') this.setLiveOpacity(String(BLEISTIFT_OPACITY));
     this.addSample(e);
     this.liveUpdate();
     this.startMeter();
   }
 
-  /** Deckkraft von Live- und Vorhersage-Ebene als Ganzes. Leer heißt: ganz deckend. */
+  /** Deckkraft von Live- und Vorhersage-Ebene zusammen (auf ihrer Gruppe, einmal für beide). Leer heißt: ganz deckend. */
   private setLiveOpacity(value: string): void {
-    this.live.style.opacity = value;
-    this.pred.style.opacity = value;
+    this.liveGroup.style.opacity = value;
   }
 
   private newBuilder(pen: PenKind): StrokeBuilder {
