@@ -1,6 +1,24 @@
-import type { SMOOTHING } from '../ink/types';
+import type { InkColor, SMOOTHING, WidthName } from '../ink/types';
 import type { Store } from '../sync/store';
 import type { Day } from './dates';
+
+/** Größe des Radierers, siehe `ERASER_PX`. */
+export type EraserSize = 'klein' | 'mittel' | 'gross';
+/** Der Radierer nimmt ganze Striche weg (`strich`) oder nur das Stück, über das er fährt (`stueck`). */
+export type EraserMode = 'strich' | 'stueck';
+
+/** Die Wahl in der Werkzeugleiste. Sie gilt für alle Seiten und bleibt über einen Neustart erhalten. */
+export type InkPrefs = {
+  tool: 'pen' | 'eraser';
+  color: InkColor;
+  width: WidthName;
+  eraserSize: EraserSize;
+  eraserMode: EraserMode;
+  /** Kritzeln über Geschriebenem löscht es. */
+  scribble: boolean;
+};
+
+export const DEFAULT_INK: InkPrefs = { tool: 'pen', color: 'schwarz', width: 'mittel', eraserSize: 'mittel', eraserMode: 'strich', scribble: true };
 
 /** Einstellungen dieses Geräts. Sie liegen nur in der IndexedDB des Geräts, der Token nirgends sonst. */
 export type Settings = {
@@ -13,6 +31,10 @@ export type Settings = {
   quickSwitchPos?: [number, number];
   /** Ablaufdatum des Tokens. Der Browser kann es nicht aus der Antwort von GitHub lesen, darum fragt die Einrichtung danach. */
   tokenExpiry?: Day;
+  /** Zeigt über der Seite, wie lange die App je Stiftbewegung braucht (Vergleich mit dem Stift-Test). Ohne Angabe aus. */
+  messung?: boolean;
+  /** Werkzeugwahl, siehe `InkPrefs`. Ohne Angabe `DEFAULT_INK`. */
+  ink?: InkPrefs;
 };
 
 /** Unter diesem Schlüssel liegen die Einstellungen im Bereich `settings` der IndexedDB. */

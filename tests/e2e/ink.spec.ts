@@ -93,7 +93,11 @@ test('toolbar sets color and width', async ({ page }) => {
   await expect.poll(() => strokeCount(page)).toBe(1);
   expect((await currentStrokes(page))[0]).toMatchObject({ color: 'rot', widthMm: 0.4 });
 
+  // Beim Radierer stehen statt Farben und Breiten seine Größen und Arten da. Zurück beim Stift sind die Farben wieder da.
   await button(page, 'Radierer').click();
+  await expect(button(page, 'Blau')).toHaveCount(0);
+  await expect(button(page, 'Radierer mittel')).toHaveAttribute('aria-pressed', 'true');
+  await button(page, 'Kugelschreiber').click();
   await button(page, 'Blau').click();
   await expect(button(page, 'Kugelschreiber')).toHaveAttribute('aria-pressed', 'true');
   await expect(button(page, 'Radierer')).toHaveAttribute('aria-pressed', 'false');
@@ -772,4 +776,204 @@ test('a page that could not be loaded is loaded again when the app comes back to
   await bringToForeground(page);
   await expect.poll(() => strokeIds(page)).toEqual(['a']);
   await expect(page.getByText(NOT_LOADED)).toHaveCount(0);
+});
+
+test('live work per event does not grow with stroke length', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const pts = Array.from({ length: 600 }, (_, i) => [100 + i * 1.5, 900 + Math.sin(i / 8) * 20] as [number, number]);
+  await pen(page).stroke(pts);
+  const s = await page.evaluate(() => window.__notizbuch.liveStats());
+  expect(s.events).toBeGreaterThan(500);
+  expect(s.ptsMax).toBeLessThanOrEqual(10);
+});
+
+/**
+ * Wie viel Tinte auf den Ebenen liegt, als Summe der Deckung je Bildpunkt (1 heißt: ganz bedeckt). Auf durchsichtigen
+ * Ebenen ist das die Deckkraft, auf der Grundebene wie dunkel der Punkt zwischen Papier (#fffefa) und Tinte (#1c1f26) ist.
+ */
+const inkCover = (page: Page, layers: string[]) =>
+  page.evaluate((names) => {
+    let n = 0;
+    for (const name of names) {
+      const c = document.querySelector<HTMLCanvasElement>(`canvas[data-layer="${name}"]`)!;
+      const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+      for (let i = 0; i < d.length; i += 4) {
+        if (name === 'grund') n += Math.max(0, Math.min(1, (764 - (d[i] + d[i + 1] + d[i + 2])) / (764 - 97)));
+        else n += d[i + 3] / 255;
+      }
+    }
+    return n;
+  }, layers);
+
+test('live stroke looks like the committed stroke', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const before = await inkCover(page, ['grund']);
+  const pts = Array.from({ length: 120 }, (_, i) => [150 + i * 3, 1100 + Math.sin(i / 6) * 25] as [number, number]);
+  const p = pen(page);
+  await p.down(...pts[0]);
+  for (const q of pts.slice(1)) await p.move(...q);
+  await page.waitForTimeout(60); // Vorhersage ist nach 40 ms wieder weg
+  const live = await inkCover(page, ['live', 'vorhersage']);
+  await p.up(...pts[pts.length - 1]);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  const committed = (await inkCover(page, ['grund'])) - before;
+  expect(live).toBeGreaterThan(0);
+  expect(Math.abs(live - committed) / committed).toBeLessThanOrEqual(0.15);
+});
+
+test('tool survives page change and reload', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await button(page, 'Rot (offen)').click();
+  await button(page, 'Breit (0,4 mm)').click();
+  await button(page, 'Radierer').click();
+  await button(page, 'Radierer groß').click();
+  await button(page, 'Nur Stück').click();
+  const eraser = async () => ({
+    eraser: await button(page, 'Radierer').getAttribute('aria-pressed'),
+    size: await button(page, 'Radierer groß').getAttribute('aria-pressed'),
+    mode: await button(page, 'Nur Stück').getAttribute('aria-pressed'),
+  });
+  const ink = async () => ({
+    red: await button(page, 'Rot (offen)').getAttribute('aria-pressed'),
+    wide: await button(page, 'Breit (0,4 mm)').getAttribute('aria-pressed'),
+  });
+  await page.goto(`/notizbuch/${NEXT_DAY}`);
+  await expect.poll(eraser).toEqual({ eraser: 'true', size: 'true', mode: 'true' });
+  await page.waitForTimeout(600); // gespeichert wird 500 ms nach der letzten Wahl
+  await page.reload();
+  await expect.poll(eraser).toEqual({ eraser: 'true', size: 'true', mode: 'true' });
+  await pen(page).stroke(LINE);
+  await page.waitForTimeout(100);
+  expect(await strokeCount(page)).toBe(0); // der Radierer schreibt nicht
+  await button(page, 'Kugelschreiber').click();
+  await expect.poll(ink).toEqual({ red: 'true', wide: 'true' });
+});
+
+test('eraser sizes change the hit area', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await pen(page).stroke([
+    [200, 1000],
+    [320, 1000],
+  ]);
+  const { scale } = await viewOf(page);
+  const off = 8 / scale; // 8 Bildschirmpunkte neben dem Strich
+  await button(page, 'Radierer').click();
+  await button(page, 'Radierer klein').click();
+  await pen(page).stroke([
+    [150, 1000 + off],
+    [370, 1000 + off],
+  ]);
+  expect(await strokeCount(page)).toBe(1);
+  await button(page, 'Radierer groß').click();
+  await pen(page).stroke([
+    [150, 1000 + off],
+    [370, 1000 + off],
+  ]);
+  expect(await strokeCount(page)).toBe(0);
+});
+
+test('partial eraser leaves two pieces', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await pen(page).stroke([
+    [200, 1000],
+    [320, 1000],
+  ]);
+  const [orig] = await strokeIds(page);
+  await button(page, 'Radierer').click();
+  await button(page, 'Nur Stück').click();
+  await pen(page).stroke([
+    [260, 960],
+    [260, 1040],
+  ]);
+  const after = await currentStrokes(page);
+  expect(after).toHaveLength(2);
+  expect(after.map((s) => s.id)).not.toContain(orig);
+  expect(Math.max(...after[0].pts.map((q) => q.x))).toBeLessThan(260);
+  expect(Math.min(...after[1].pts.map((q) => q.x))).toBeGreaterThan(260);
+  await button(page, 'Rückgängig').click();
+  expect(await strokeIds(page)).toEqual([orig]);
+  await button(page, 'Wiederholen').click();
+  expect(await strokeCount(page)).toBe(2);
+});
+
+// ---------- Kritzeln zum Löschen ----------
+
+const WORD: [number, number][] = [
+  [200, 1000],
+  [230, 1004],
+  [260, 1000],
+];
+/**
+ * Zickzack, n Mal hin und her, `w` breit, über `h` nach unten verteilt. Wie beim echten Stift liegen viele Punkte auf jeder
+ * Strecke (alle 4 Einheiten): Mit nur den Ecken glättete die Glättung das Zickzack fast weg.
+ */
+const zigzag = (n: number, x0: number, y0: number, w: number, h: number): [number, number][] => {
+  const corners = Array.from({ length: n * 2 + 1 }, (_, i) => [x0 + (i % 2 ? w : 0), y0 + (i * h) / (n * 2)]);
+  const pts: [number, number][] = [[corners[0][0], corners[0][1]]];
+  for (let i = 1; i < corners.length; i++) {
+    const [ax, ay] = corners[i - 1];
+    const [bx, by] = corners[i];
+    const k = Math.ceil(Math.hypot(bx - ax, by - ay) / 4);
+    for (let j = 1; j <= k; j++) pts.push([ax + ((bx - ax) * j) / k, ay + ((by - ay) * j) / k]);
+  }
+  return pts;
+};
+/** Schreibschrift: k Bögen (oder Täler) nebeneinander, je 30 breit und 25 hoch. */
+const arches = (k: number, x0: number, y0: number, up: boolean): [number, number][] =>
+  Array.from({ length: k * 12 + 1 }, (_, i) => {
+    const h = 25 * Math.sin((Math.PI * (i % 12)) / 12);
+    return [x0 + (30 * i) / 12, y0 + (up ? 25 - h : h)];
+  });
+
+test('scribble over a word erases it', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await pen(page).stroke(WORD);
+  const [word] = await strokeIds(page);
+  await pen(page).stroke(zigzag(4, 190, 990, 80, 20));
+  expect(await strokeCount(page)).toBe(0);
+  await button(page, 'Rückgängig').click();
+  expect(await strokeIds(page)).toEqual([word]);
+});
+
+test('writing next to text does not erase', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await pen(page).stroke(WORD);
+  await pen(page).stroke(arches(3, 270, 985, true)); // „mmm“
+  await pen(page).stroke(arches(3, 370, 985, false)); // „www“
+  expect(await strokeCount(page)).toBe(3);
+});
+
+test('zigzag over empty paper stays ink', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await pen(page).stroke(zigzag(4, 190, 1200, 80, 20));
+  expect(await strokeCount(page)).toBe(1);
+});
+
+test('switch off in settings', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await page.getByRole('link', { name: 'Einstellungen', exact: true }).click();
+  await page.getByRole('group', { name: 'Kritzeln löscht' }).getByRole('radio', { name: 'aus', exact: true }).check();
+  await page.getByRole('link', { name: 'Tag', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => typeof window.__notizbuch)).toBe('object');
+  await pen(page).stroke(WORD);
+  await pen(page).stroke(zigzag(4, 190, 990, 80, 20));
+  expect(await strokeCount(page)).toBe(2);
+});
+
+test('a stroke started right after a scribble keeps its end visible', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await pen(page).stroke(WORD);
+  await pen(page).stroke(zigzag(4, 190, 990, 80, 20));
+  expect(await strokeCount(page)).toBe(0);
+  // Gleich danach an derselben Stelle weiterschreiben und den Stift ruhen lassen.
+  const p = pen(page);
+  const pts: [number, number][] = [[205, 1000], [215, 1003], [225, 998], [235, 1001], [245, 999]];
+  await p.down(...pts[0]);
+  for (const q of pts.slice(1)) await p.move(...q);
+  await page.waitForTimeout(60); // die Vorhersage ist weg, das Endstück steht
+  const now = await inkCover(page, ['live', 'vorhersage']);
+  await page.waitForTimeout(400); // länger als der Hinweis auf das Löschen
+  const later = await inkCover(page, ['live', 'vorhersage']);
+  await p.up(...pts[pts.length - 1]);
+  expect(later).toBeGreaterThanOrEqual(now * 0.95);
 });

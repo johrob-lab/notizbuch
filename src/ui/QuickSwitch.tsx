@@ -9,6 +9,8 @@ const INSET = 16;
 type Props = {
   /** Das Werkzeug, das gerade gilt. Der Knopf zeigt sein Symbol. */
   tool: Tool;
+  /** Radiert der Radierer nur das Stück? Dann hat der Knopf einen gestrichelten Rand. */
+  partial?: boolean;
   /** Ort des Knopfs als Anteil (0 bis 1) der Fläche, in der er liegen darf, von links und von oben. Ohne Angabe unten rechts. */
   pos?: [number, number];
   /**
@@ -29,7 +31,7 @@ const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
  * lässt er sich verschieben (ein Tipp mit dem Finger tut nichts, damit die Hand beim Schreiben ihn nicht auslöst).
  * Die Maus bleibt außen vor: Sie schreibt nicht, also wechselt sie auch kein Werkzeug.
  */
-export function QuickSwitch({ tool, pos, filter, onToggle, onMove }: Props) {
+export function QuickSwitch({ tool, partial, pos, filter, onToggle, onMove }: Props) {
   const drag = useRef<Drag | null>(null);
   const moving = useRef<[number, number] | null>(null);
   const [live, setLive] = useState<[number, number] | null>(null);
@@ -103,6 +105,7 @@ export function QuickSwitch({ tool, pos, filter, onToggle, onMove }: Props) {
       class="schnellwechsel"
       data-testid="quick-switch"
       data-tool={tool}
+      data-modus={tool === 'eraser' && partial ? 'stueck' : undefined}
       aria-label="Werkzeug wechseln"
       title="Mit dem Stift antippen: Kugelschreiber oder Radierer. Mit dem Finger verschieben."
       style={{

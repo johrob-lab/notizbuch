@@ -1,5 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { INK, WIDTH_MM, type InkColor, type WidthName } from '../ink/types';
+import type { EraserMode, EraserSize } from '../lib/settings';
 
 export type Tool = 'pen' | 'eraser';
 
@@ -9,7 +10,11 @@ type Props = {
   width: WidthName;
   canUndo: boolean;
   canRedo: boolean;
+  eraserSize: EraserSize;
+  eraserMode: EraserMode;
   onTool(tool: Tool): void;
+  onEraserSize(size: EraserSize): void;
+  onEraserMode(mode: EraserMode): void;
   onColor(color: InkColor): void;
   onWidth(width: WidthName): void;
   onUndo(): void;
@@ -32,6 +37,17 @@ const WIDTHS: { id: WidthName; name: string; dot: number }[] = [
   { id: 'fein', name: 'Fein', dot: 3 },
   { id: 'mittel', name: 'Mittel', dot: 5 },
   { id: 'breit', name: 'Breit', dot: 8 },
+];
+
+const ERASER_SIZES: { id: EraserSize; name: string; dot: number }[] = [
+  { id: 'klein', name: 'Radierer klein', dot: 6 },
+  { id: 'mittel', name: 'Radierer mittel', dot: 11 },
+  { id: 'gross', name: 'Radierer groß', dot: 17 },
+];
+
+const ERASER_MODES: { id: EraserMode; name: string }[] = [
+  { id: 'strich', name: 'Ganzer Strich' },
+  { id: 'stueck', name: 'Nur Stück' },
 ];
 
 const mm = (w: WidthName) => `${String(WIDTH_MM[w]).replace('.', ',')} mm`;
@@ -62,7 +78,7 @@ function Group({ label, children }: { label: string; children: ComponentChildren
   );
 }
 
-/** Werkzeugleiste: Kugelschreiber und Radierer, vier Farben, drei Breiten, Rückgängig und Wiederholen, ganze Seite. */
+/** Werkzeugleiste: Kugelschreiber und Radierer, vier Farben und drei Breiten (beim Radierer drei Größen und zwei Arten), Rückgängig und Wiederholen, ganze Seite. */
 export function Toolbar(p: Props) {
   return (
     <div class="werkzeuge" role="toolbar" aria-label="Werkzeuge">
@@ -75,6 +91,26 @@ export function Toolbar(p: Props) {
         </button>
       </Group>
       <div class="sep" aria-hidden="true" />
+      {p.tool === 'eraser' ? (
+        <>
+          <Group label="Radiergröße">
+            {ERASER_SIZES.map((z) => (
+              <button key={z.id} class="tb" type="button" aria-pressed={p.eraserSize === z.id} aria-label={z.name} title={z.name} onClick={() => p.onEraserSize(z.id)}>
+                <span class="ring" style={{ width: `${z.dot}px`, height: `${z.dot}px` }} />
+              </button>
+            ))}
+          </Group>
+          <div class="sep" aria-hidden="true" />
+          <Group label="Radierart">
+            {ERASER_MODES.map((m) => (
+              <button key={m.id} class="tb text" type="button" aria-pressed={p.eraserMode === m.id} onClick={() => p.onEraserMode(m.id)}>
+                {m.name}
+              </button>
+            ))}
+          </Group>
+        </>
+      ) : (
+        <>
       <Group label="Farbe">
         {COLORS.map((c) => (
           <button
@@ -106,6 +142,8 @@ export function Toolbar(p: Props) {
           </button>
         ))}
       </Group>
+        </>
+      )}
       <div class="sep" aria-hidden="true" />
       <Group label="Verlauf">
         <button class="tb" type="button" aria-label="Rückgängig" title="Rückgängig" disabled={!p.canUndo} onClick={p.onUndo}>

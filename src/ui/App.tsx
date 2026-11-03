@@ -4,6 +4,7 @@ import { AccessChangedError, accessProblem, PendingChangesError, saveAccess, wai
 import { todayVienna, type Day } from '../lib/dates';
 import { expiryWarning, knownExpiry } from '../lib/expiry';
 import { loadSettings, updateSettings, type Settings } from '../lib/settings';
+import { initInkPrefs } from './inkPrefs';
 import { SyncEngine } from '../sync/engine';
 import { GitHubClient, type ListDir } from '../sync/github';
 import { openStore, type Store } from '../sync/store';
@@ -159,6 +160,8 @@ export function App() {
     if (live.current.gone) return null;
     const session = await startSession(store, settings, hold.active);
     if (session === null) return null;
+    // Die Werkzeugwahl gilt für alle Seiten. Gespeichert wird sie nur vom Fenster, das schreiben darf.
+    initInkPrefs(settings, hold.active ? store : undefined);
     return { phase: 'bereit', store, window: hold, ...session };
   };
 
@@ -275,7 +278,7 @@ export function App() {
   // ---------- Einstellungen ----------
 
   /** Eine Wahl der Einstellungen gilt sofort und wird gespeichert, ausgehend vom Stand im Speicher: Nichts anderes geht dabei verloren. */
-  const choose = async (patch: Partial<Pick<Settings, 'smoothing' | 'prediction' | 'device'>>): Promise<void> => {
+  const choose = async (patch: Partial<Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung'>>): Promise<void> => {
     const now = bootNow.current;
     if (now.phase !== 'bereit' || !now.window.active) return;
     const before = Object.fromEntries(Object.keys(patch).map((key) => [key, now.settings[key as keyof Settings]])) as Partial<Settings>;
@@ -419,6 +422,7 @@ export function App() {
                 readOnly={boot.settings.device === 'Firmen-PC'}
                 sigma={SMOOTHING[boot.settings.smoothing] ?? SMOOTHING.mittel}
                 prediction={boot.settings.prediction}
+                messung={boot.settings.messung ?? false}
                 quickSwitchPos={boot.settings.quickSwitchPos}
                 onQuickSwitchMove={moveQuickSwitch}
               />
