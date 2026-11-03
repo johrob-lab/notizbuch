@@ -25,12 +25,12 @@ function rect(left: number, top: number, width: number, height: number): DOMRect
   return { left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) } as DOMRect;
 }
 
-function mount(o: { canRedo?: boolean } = {}) {
+function mount(o: { canRedo?: boolean; canWrite?: boolean } = {}) {
   host = document.createElement('div');
   document.body.append(host);
   const actions = toolActions({
     ink: DEFAULT_INK,
-    canWrite: true,
+    canWrite: o.canWrite ?? true,
     canUndo: true,
     canRedo: o.canRedo ?? false,
     canBack: true,
@@ -106,15 +106,25 @@ afterEach(() => {
 test('the buttons sit where ringLayout puts them, with their name, state and lock', () => {
   mount();
   expect(buttons()).toHaveLength(16);
-  // Der erste Knopf jedes Kreises steht genau über der Mitte.
-  expect(knopf('Kugelschreiber').style.left).toBe(`${ANCHOR.x - HALF}px`);
-  expect(knopf('Kugelschreiber').style.top).toBe(`${ANCHOR.y - RING.outer - HALF}px`);
+  // Heute steht genau unter der Mitte, der erste Knopf des inneren Kreises genau darüber.
+  expect(knopf('Heute').style.left).toBe(`${ANCHOR.x - HALF}px`);
+  expect(knopf('Heute').style.top).toBe(`${ANCHOR.y + RING.outer - HALF}px`);
+  expect(knopf('Schwarz').style.left).toBe(`${ANCHOR.x - HALF}px`);
   expect(knopf('Schwarz').style.top).toBe(`${ANCHOR.y - RING.inner - HALF}px`);
   expect(knopf('Kugelschreiber').getAttribute('aria-pressed')).toBe('true');
   expect(knopf('Radierer').getAttribute('aria-pressed')).toBe('false');
   expect(knopf('Rückgängig').hasAttribute('aria-pressed')).toBe(false);
   expect(knopf('Wiederholen').disabled).toBe(true);
   expect(knopf('Rückgängig').disabled).toBe(false);
+});
+
+test('without writing the ring has five buttons, Heute straight below the centre, ‹ to its left and › to its right', () => {
+  mount({ canWrite: false });
+  expect(buttons().map((b) => b.getAttribute('aria-label'))).toEqual(['Voriger Tag', 'Heute', 'Nächster Tag', 'Ganze Seite', 'Vollbild aus']);
+  expect(knopf('Heute').style.left).toBe(`${ANCHOR.x - HALF}px`);
+  expect(knopf('Heute').style.top).toBe(`${ANCHOR.y + RING.outer - HALF}px`);
+  expect(centre(knopf('Voriger Tag')).x).toBeLessThan(ANCHOR.x);
+  expect(centre(knopf('Nächster Tag')).x).toBeGreaterThan(ANCHOR.x);
 });
 
 test('a pen on a button acts when it lifts, the ring closes, and the gate hears the pen', () => {

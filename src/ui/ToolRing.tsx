@@ -136,7 +136,9 @@ export function ToolRing({ anchor, area, actions, filter, onAction, onClose }: P
     [],
   );
 
-  const layout = ringLayout(anchor, { inner: actions.inner.length, outer: actions.outer.length }, area);
+  // „Heute“ liegt genau unter der Mitte: Dann liest man unten ‹ Heute › von links nach rechts, mit Schreiben wie ohne.
+  const today = actions.outer.findIndex((b) => b.action.kind === 'today');
+  const layout = ringLayout(anchor, { inner: actions.inner.length, outer: actions.outer.length }, area, today >= 0 ? today : undefined);
 
   const activation = useActivation(filter, (b: ActionButton) => {
     onAction(b.action);

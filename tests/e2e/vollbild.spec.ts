@@ -394,6 +394,14 @@ test('on the office PC the ring only has paging and Vollbild aus', async ({ page
   await expect(ring(page).first()).toBeVisible();
   expect(await ringLabels(page)).toEqual(ONLY_VIEW);
   await expect(page.locator(im('Kugelschreiber'))).toHaveCount(0);
+  // Auch dieser Ring liest sich unten ‹ Heute › von links nach rechts, Heute ganz unten.
+  const back = (await page.locator(im('Voriger Tag')).boundingBox())!;
+  const today = (await page.locator(im('Heute')).boundingBox())!;
+  const forward = (await page.locator(im('Nächster Tag')).boundingBox())!;
+  expect(back.x + back.width).toBeLessThanOrEqual(forward.x);
+  expect(back.x + back.width).toBeLessThanOrEqual(today.x);
+  expect(today.x + today.width).toBeLessThanOrEqual(forward.x);
+  expect(today.y).toBeGreaterThan(Math.max(back.y, forward.y));
 
   await page.locator(im('Vollbild aus')).click();
   await expect(page.locator('.ansichten')).toBeVisible();
