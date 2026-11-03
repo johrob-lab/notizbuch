@@ -357,6 +357,18 @@ test('an unreadable page is locked, announced and never written', async () => {
   expect(engine.writes).toEqual([]);
 });
 
+test('a page from a newer version is locked as too new and never written', async () => {
+  const engine = fakeEngine('<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="3" data-seite="tag"/>');
+  const surface = fakeSurface();
+  const { session, phases } = open(engine, surface);
+  await session.reload();
+  expect(phases).toEqual(['zuNeu']);
+  expect(surface.readOnly).toBe(true);
+  session.changed(pageOf(stroke('x', 5)));
+  await settle();
+  expect(engine.writes).toEqual([]);
+});
+
 test('an error while reading is no broken page: it is announced as not loaded, locked and never written', async () => {
   const engine = fakeEngine('egal');
   engine.readError = new Error('GitHub antwortete mit Status 500.');

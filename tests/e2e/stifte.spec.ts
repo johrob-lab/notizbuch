@@ -396,3 +396,15 @@ test('the chosen pen survives a reload', async ({ page }) => {
   await expect(tool(page, 'Fineliner')).toHaveAttribute('aria-pressed', 'true');
   await expect(tool(page, 'Kugelschreiber')).toHaveAttribute('aria-pressed', 'false');
 });
+
+test('a page from a newer version shows the note with a reload button and is never written', async ({ page }) => {
+  const newer = `<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="3" data-seite="tag" data-key="2026-10-29"></svg>`;
+  const repo = await openSeeded(page, DAY, { files: { [TAG]: newer } });
+  await expect(page.getByText('Diese Seite stammt aus einer neueren Version der App. Bitte neu laden.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Neu laden' })).toBeVisible();
+  await pen(page).stroke(line([200, 760], [400, 780], 12));
+  await page.waitForTimeout(500);
+  expect(await savedPage(page)).toBe('');
+  expect((await queued(page))[TAG]).toBeUndefined();
+  expect(repo.puts.filter((put) => put.path === TAG)).toEqual([]);
+});

@@ -17,6 +17,7 @@ import { QuickSwitch } from './QuickSwitch';
 import { retryCues } from './retryCues';
 import { routeHash, type Route } from './router';
 import { Icon, Toolbar } from './Toolbar';
+import { checkForUpdate, reloadApp } from '../lib/appUpdate';
 import { ToolTab } from './ToolTab';
 import { ToolWheel } from './ToolWheel';
 
@@ -93,6 +94,7 @@ type Props = PageProps & {
 };
 
 const UNREADABLE = 'Diese Seite lässt sich nicht lesen und wird nicht verändert.';
+const TOO_NEW = 'Diese Seite stammt aus einer neueren Version der App. Bitte neu laden.';
 const BLOCKED = 'Die App öffnet diese Seite nicht, denn Wörter wie Passwort sind im Dateinamen nicht erlaubt.';
 const NOT_LOADED = 'Diese Seite konnte nicht geladen werden. Neuer Versuch, sobald das Netz da ist.';
 
@@ -129,6 +131,10 @@ export function PageView(p: Props) {
   const [today] = useState(() => todayVienna());
   const days = useMemo(() => tapTargets(layout), [layout]);
   const [phase, setPhase] = useState<Phase>('laden');
+  // Eine Seite aus einer neueren Version: Vielleicht liegt diese schon bereit, dann lädt die App sie im ruhigen Moment.
+  useEffect(() => {
+    if (phase === 'zuNeu') checkForUpdate();
+  }, [phase]);
   // Die Werkzeugwahl gilt für alle Seiten (siehe `inkPrefs`): Wer radiert und weiterblättert, radiert weiter.
   const { tool, pen: chosenPen, color, width, eraserSize, eraserMode } = inkPrefs.value;
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
@@ -237,7 +243,7 @@ export function PageView(p: Props) {
   }, [hasCards, palm]);
 
   const full = p.vollbild != null;
-  const canWrite = !readOnly && phase !== 'unlesbar' && phase !== 'gesperrt' && phase !== 'nichtGeladen';
+  const canWrite = !readOnly && phase !== 'unlesbar' && phase !== 'zuNeu' && phase !== 'gesperrt' && phase !== 'nichtGeladen';
   const wheel = p.vollbild === 'kreis';
   const ink = inkTools({
     surface,
@@ -326,6 +332,14 @@ export function PageView(p: Props) {
         {phase === 'unlesbar' && (
           <p class="hinweis" role="alert">
             {UNREADABLE}
+          </p>
+        )}
+        {phase === 'zuNeu' && (
+          <p class="hinweis" role="alert">
+            {TOO_NEW}{' '}
+            <button type="button" class="pill" onClick={reloadApp}>
+              Neu laden
+            </button>
           </p>
         )}
         {phase === 'gesperrt' && (

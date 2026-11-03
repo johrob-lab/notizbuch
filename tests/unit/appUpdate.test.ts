@@ -1,0 +1,150 @@
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { CHECK_EVERY_MS, QUIET_MS, QUIET_POLL_MS, startAppUpdate, type AppUpdate, type UpdateEnv } from '../../src/lib/appUpdate';
+
+// Die Umgebung ist ganz falsch: ein Service Worker mit auslösbarem Wechsel, Eingaben und Sichtbarkeit als EventTarget.
+
+function setup(o: { controller?: boolean; noSw?: boolean } = {}) {
+  const log: string[] = [];
+  const input = new EventTarget();
+  const visibility = new EventTarget();
+  const worker = new EventTarget();
+  const state = { visible: 'visible', updates: 0, failBefore: false, controller: o.controller === false ? null : {} };
+  const env: UpdateEnv = {
+    sw: o.noSw
+      ? undefined
+      : {
+          get controller() {
+            return state.controller;
+          },
+          register: async () => ({
+            update: async () => {
+              state.updates++;
+            },
+          }),
+          addEventListener: (_type, fn) => worker.addEventListener('controllerchange', fn),
+        },
+    target: { addEventListener: (type, fn) => input.addEventListener(type, fn) },
+    doc: {
+      get visibilityState() {
+        return state.visible;
+      },
+      addEventListener: (_type, fn) => visibility.addEventListener('visibilitychange', fn),
+    },
+    reload: () => void log.push('reload'),
+    beforeReload: async () => {
+      log.push('before');
+      if (state.failBefore) throw new Error('kaputt');
+    },
+    now: () => Date.now(),
+  };
+  const update: AppUpdate = startAppUpdate(env, '/notizbuch/sw.js', '/notizbuch/');
+  const send = (type: string) => input.dispatchEvent(new Event(type));
+  const changeController = () => worker.dispatchEvent(new Event('controllerchange'));
+  const show = () => {
+    state.visible = 'visible';
+    visibility.dispatchEvent(new Event('visibilitychange'));
+  };
+  const hide = () => {
+    state.visible = 'hidden';
+    visibility.dispatchEvent(new Event('visibilitychange'));
+  };
+  return { log, state, update, send, changeController, show, hide };
+}
+
+beforeEach(async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+});
+afterEach(() => vi.useRealTimers());
+
+const tick = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+
+test('a new version is ready only after a controller change when there was a controller before', async () => {
+  const a = setup();
+  await tick(0);
+  expect(a.update.ready).toBe(false);
+  a.changeController();
+  expect(a.update.ready).toBe(true);
+  a.update.stop();
+
+  const first = setup({ controller: false });
+  await tick(0);
+  first.changeController();
+  expect(first.update.ready).toBe(false);
+  await tick(QUIET_MS * 2);
+  expect(first.log).toEqual([]);
+  first.update.stop();
+});
+
+test('it reloads at once when the app comes to the front with a new version ready', async () => {
+  const t = setup();
+  await tick(0);
+  t.send('keydown'); // eben noch getippt: nicht ruhig
+  t.hide();
+  t.changeController();
+  await tick(QUIET_POLL_MS * 3);
+  expect(t.log).toEqual([]);
+  t.show();
+  await tick(0);
+  expect(t.log).toEqual(['before', 'reload']);
+  t.update.stop();
+});
+
+test('it waits 60 seconds without input and never reloads while a pointer is down', async () => {
+  const t = setup();
+  await tick(0);
+  t.send('pointerdown');
+  t.changeController();
+  await tick(120_000);
+  expect(t.log).toEqual([]);
+  t.send('pointerup');
+  await tick(59_000);
+  expect(t.log).toEqual([]);
+  await tick(6_000);
+  expect(t.log).toEqual(['before', 'reload']);
+  await tick(QUIET_MS * 3);
+  expect(t.log).toEqual(['before', 'reload']);
+  t.update.stop();
+});
+
+test('it saves before reloading', async () => {
+  const t = setup();
+  await tick(0);
+  t.changeController();
+  await t.update.reloadNow();
+  expect(t.log).toEqual(['before', 'reload']);
+  t.update.stop();
+
+  const bad = setup();
+  bad.state.failBefore = true;
+  await tick(0);
+  await bad.update.reloadNow();
+  expect(bad.log).toEqual(['before', 'reload']);
+  bad.update.stop();
+});
+
+test('it looks for a new version every hour and when the app comes to the front', async () => {
+  const t = setup();
+  await tick(0);
+  const start = t.state.updates;
+  await tick(CHECK_EVERY_MS);
+  expect(t.state.updates).toBe(start + 1);
+  await tick(CHECK_EVERY_MS);
+  expect(t.state.updates).toBe(start + 2);
+  t.hide();
+  await tick(0);
+  expect(t.state.updates).toBe(start + 2);
+  t.show();
+  await tick(0);
+  expect(t.state.updates).toBe(start + 3);
+  t.update.stop();
+});
+
+test('without a service worker nothing happens and nothing throws', async () => {
+  const t = setup({ noSw: true });
+  await tick(CHECK_EVERY_MS * 2);
+  await t.update.check();
+  expect(t.update.ready).toBe(false);
+  expect(t.log).toEqual([]);
+  t.update.stop();
+});

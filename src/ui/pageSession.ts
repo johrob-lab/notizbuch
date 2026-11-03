@@ -1,4 +1,4 @@
-import { mergePages, parsePage, serializePage } from '../ink/svg';
+import { mergePages, PageTooNewError, parsePage, serializePage } from '../ink/svg';
 import type { FieldBox, Page } from '../ink/types';
 import type { SyncEngine } from '../sync/engine';
 import { normalizePath, PathNotAllowedError } from '../sync/paths';
@@ -20,12 +20,13 @@ export type SessionEngine = Pick<SyncEngine, 'read' | 'write' | 'flush' | 'addRe
 
 /**
  * `bereit`: die Seite ist gelesen. `unlesbar`: die Datei ist kaputt (sie lässt sich nicht als Seite lesen) und wird nie
- * geschrieben. `gesperrt`: Die Pfadsperre lässt die Datei nicht zu (zum Beispiel eine von Hand getippte Adresse einer
+ * geschrieben. `zuNeu`: die Datei stammt aus einer neueren Version der App, die diese nicht lesen kann. Sie wird wie eine
+ * unlesbare nie geschrieben. `gesperrt`: Die Pfadsperre lässt die Datei nicht zu (zum Beispiel eine von Hand getippte Adresse einer
  * Besprechung mit einem Wort wie Passwort im Thema). Sie wird nie gelesen und nie geschrieben, ein neuer Versuch ändert
  * daran nichts. `nichtGeladen`: das Lesen ist gescheitert (zum Beispiel ein Fehler von GitHub). Die Seite bleibt gesperrt,
  * bis ein neuer Versuch gelingt.
  */
-export type Phase = 'laden' | 'bereit' | 'unlesbar' | 'gesperrt' | 'nichtGeladen';
+export type Phase = 'laden' | 'bereit' | 'unlesbar' | 'zuNeu' | 'gesperrt' | 'nichtGeladen';
 
 type Options = {
   engine: SessionEngine;
@@ -292,8 +293,8 @@ export class PageSession {
         }
       }
       if (this.#o.completePage) page = this.#o.completePage(page);
-    } catch {
-      this.#lock('unlesbar');
+    } catch (error) {
+      this.#lock(error instanceof PageTooNewError ? 'zuNeu' : 'unlesbar');
       return;
     }
     this.#phase = 'bereit';
@@ -311,7 +312,7 @@ export class PageSession {
    * Ist die Datei kaputt, bleibt es gesperrt, bis ein anderes Gerät sie ändert. Lässt die Pfadsperre sie nicht zu, bleibt
    * es für immer gesperrt. Ließ sie sich nur nicht laden, wird neu versucht, sobald es Sinn hat.
    */
-  #lock(phase: 'unlesbar' | 'gesperrt' | 'nichtGeladen'): void {
+  #lock(phase: 'unlesbar' | 'zuNeu' | 'gesperrt' | 'nichtGeladen'): void {
     if (this.#stopped()) return;
     this.#phase = phase;
     // Eine Seite, die sich nicht lesen lässt, hat keinen Ausgangspunkt: Was die Fläche zeigt, beruht nicht auf dem, was jetzt
