@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { todayVienna } from '../lib/dates';
 import type { SyncEngine } from '../sync/engine';
-import { nextRoute, prevRoute, routeHash, viewRoute, type Route, type Steps } from './router';
+import { STEP_LABELS, routeHash, stepTargets, viewRoute, type Route, type Steps } from './router';
 import { StatusPill } from './StatusPill';
 
 type Props = {
@@ -45,14 +45,6 @@ const ITEMS: Item[] = [
   { name: 'Tag', view: 'tag' },
   { name: 'To-Dos' },
 ];
-
-const STEP_LABELS: Record<Route['view'], [string, string]> = {
-  tag: ['Voriger Tag', 'Nächster Tag'],
-  woche: ['Vorige Woche', 'Nächste Woche'],
-  monat: ['Voriger Monat', 'Nächster Monat'],
-  besprechung: ['Vorige Seite', 'Nächste Seite'],
-  einstellungen: ['Vorige Seite', 'Nächste Seite'],
-};
 
 /** Zahnrad, 24 x 24, als Linie wie die Symbole der Werkzeugleiste. */
 const GEAR =
@@ -131,8 +123,7 @@ export function TopBar({ route, engine, steps, startNotice, passive, blocked, vo
 
   const [prevLabel, nextLabel] = STEP_LABELS[route.view];
   // Eine Besprechung bestimmt ihre Schritte selbst, `null` ist ein Schritt, den es nicht gibt (der Knopf bleibt grau).
-  const back = steps ? (steps.prev ?? route) : prevRoute(route);
-  const forward = steps ? (steps.next ?? route) : nextRoute(route);
+  const { back, forward } = stepTargets(route, steps);
   // Wer die App über Nacht offen lässt, soll mit „Heute“ im neuen Tag landen: Der Tag wird beim Tippen berechnet.
   const today = () => routeHash({ view: 'tag', key: todayVienna() });
 
