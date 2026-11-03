@@ -797,3 +797,23 @@ test('live stroke looks like the committed stroke', async ({ page }) => {
   expect(live).toBeGreaterThan(0);
   expect(Math.abs(live - committed) / committed).toBeLessThanOrEqual(0.15);
 });
+
+test('tool survives page change and reload', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await button(page, 'Rot (offen)').click();
+  await button(page, 'Breit (0,4 mm)').click();
+  await button(page, 'Radierer').click();
+  const chosen = async () => ({
+    eraser: await button(page, 'Radierer').getAttribute('aria-pressed'),
+    red: await button(page, 'Rot (offen)').getAttribute('aria-pressed'),
+    wide: await button(page, 'Breit (0,4 mm)').getAttribute('aria-pressed'),
+  });
+  await page.goto(`/notizbuch/${NEXT_DAY}`);
+  await expect.poll(chosen).toEqual({ eraser: 'true', red: 'true', wide: 'true' });
+  await page.waitForTimeout(600); // gespeichert wird 500 ms nach der letzten Wahl
+  await page.reload();
+  await expect.poll(chosen).toEqual({ eraser: 'true', red: 'true', wide: 'true' });
+  await pen(page).stroke(LINE);
+  await page.waitForTimeout(100);
+  expect(await strokeCount(page)).toBe(0); // der Radierer schreibt nicht
+});

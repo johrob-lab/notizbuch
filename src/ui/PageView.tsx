@@ -2,6 +2,8 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { GestureFilter, type View } from '../ink/gestures';
 import { meterLabel } from '../ink/meter';
+import { effect } from '@preact/signals';
+import { inkPrefs, setInkPrefs } from './inkPrefs';
 import { InkSurface } from '../ink/surface';
 import type { FieldBox, InkColor, Page, WidthName } from '../ink/types';
 import { todayVienna } from '../lib/dates';
@@ -117,9 +119,8 @@ export function PageView(p: Props) {
   const [today] = useState(() => todayVienna());
   const days = useMemo(() => tapTargets(layout), [layout]);
   const [phase, setPhase] = useState<Phase>('laden');
-  const [tool, setTool] = useState<Tool>('pen');
-  const [color, setColor] = useState<InkColor>('schwarz');
-  const [width, setWidth] = useState<WidthName>('mittel');
+  // Die Werkzeugwahl gilt für alle Seiten (siehe `inkPrefs`): Wer radiert und weiterblättert, radiert weiter.
+  const { tool, color, width } = inkPrefs.value;
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const [saveFailed, setSaveFailed] = useState(false);
   const [meterText, setMeterText] = useState('');
@@ -160,9 +161,14 @@ export function PageView(p: Props) {
     });
     const first = emptyPage();
     view.setPage(first, layout.fields, shownFor(first.meta));
-    view.setTool(tool);
-    view.setColor(color);
-    view.setWidth(width);
+    // Was gewählt ist, gilt sofort auch für die Fläche, gleich wo es gewählt wurde (Leiste, Schnellwechsel). Ein Signal-Effekt
+    // läuft gleich bei der Änderung, nicht erst nach dem nächsten Bild: Der Stift, der danach aufsetzt, hat schon das neue Werkzeug.
+    const stopPrefs = effect(() => {
+      const chosen = inkPrefs.value;
+      view.setTool(chosen.tool);
+      view.setColor(chosen.color);
+      view.setWidth(chosen.width);
+    });
     surface.current = view;
 
     const access: TestAccess = { currentPage: () => view.getPage(), toClient: (x, y) => view.toClient(x, y), liveStats: () => view.liveStats() };
@@ -196,6 +202,7 @@ export function PageView(p: Props) {
     void session.reload();
 
     return () => {
+      stopPrefs();
       if (testAccessHolder().__notizbuch === access) delete testAccessHolder().__notizbuch;
       surface.current = null;
       sessionRef.current = null;
@@ -216,20 +223,11 @@ export function PageView(p: Props) {
     return watchCards({ stage: inStage, host: surfaceHost, frame: around, surface: () => surface.current, filter: palm });
   }, [hasCards, palm]);
 
-  const chooseTool = (t: Tool) => {
-    setTool(t);
-    surface.current?.setTool(t);
-  };
+  const chooseTool = (t: Tool) => setInkPrefs({ tool: t });
   // Wer Farbe oder Breite wählt, will schreiben: Der Kugelschreiber ist dann wieder das Werkzeug.
-  const chooseColor = (c: InkColor) => {
-    setColor(c);
-    surface.current?.setColor(c);
-    chooseTool('pen');
-  };
+  const chooseColor = (c: InkColor) => setInkPrefs({ color: c, tool: 'pen' });
   const chooseWidth = (w: WidthName) => {
-    setWidth(w);
-    surface.current?.setWidth(w);
-    chooseTool('pen');
+    setInkPrefs({ width: w, tool: 'pen' });
   };
 
   const canWrite = !readOnly && phase !== 'unlesbar' && phase !== 'gesperrt' && phase !== 'nichtGeladen';

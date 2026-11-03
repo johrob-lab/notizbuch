@@ -4,6 +4,7 @@ import { AccessChangedError, accessProblem, PendingChangesError, saveAccess, wai
 import { todayVienna, type Day } from '../lib/dates';
 import { expiryWarning, knownExpiry } from '../lib/expiry';
 import { loadSettings, updateSettings, type Settings } from '../lib/settings';
+import { initInkPrefs } from './inkPrefs';
 import { SyncEngine } from '../sync/engine';
 import { GitHubClient, type ListDir } from '../sync/github';
 import { openStore, type Store } from '../sync/store';
@@ -159,6 +160,8 @@ export function App() {
     if (live.current.gone) return null;
     const session = await startSession(store, settings, hold.active);
     if (session === null) return null;
+    // Die Werkzeugwahl gilt für alle Seiten. Gespeichert wird sie nur vom Fenster, das schreiben darf.
+    initInkPrefs(settings, hold.active ? store : undefined);
     return { phase: 'bereit', store, window: hold, ...session };
   };
 
