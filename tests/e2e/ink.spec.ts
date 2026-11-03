@@ -266,14 +266,33 @@ test('mouse drag pans, wheel scrolls, ctrl wheel zooms', async ({ page }) => {
   expect(after.y).toBeCloseTo(cursor.y + (under.y - cursor.y) * factor, 0);
 });
 
-test('zoom stays between 0.3 and 10 times the width of the page', async ({ page }) => {
+test('zoom stays between the normal size and 10 times it', async ({ page }) => {
   await openSeeded(page, DAY);
   // Die Seite füllt die Breite des Bildschirms bis auf 16 px Rand: so viele Bildschirmpunkte je Seiteneinheit.
   const fit = (1200 - 32) / 1192;
   await wheel(page, [600, 800], { dy: -100_000, ctrl: true });
   expect((await viewOf(page)).scale).toBeCloseTo(fit * 10, 3);
   await wheel(page, [600, 800], { dy: 100_000, ctrl: true });
-  expect((await viewOf(page)).scale).toBeCloseTo(fit * 0.3, 3);
+  expect((await viewOf(page)).scale).toBeCloseTo(fit, 3);
+});
+
+test('two fingers pinched together at normal size do not make the page smaller', async ({ page }) => {
+  await openSeeded(page, DAY);
+  const start = await viewOf(page);
+  await pinch(
+    page,
+    [
+      [300, 800],
+      [900, 800],
+    ],
+    [
+      [550, 800],
+      [650, 800],
+    ],
+  );
+  const after = await viewOf(page);
+  expect(after.scale).toBeCloseTo(start.scale, 5);
+  expect(after.x).toBeCloseTo(start.x, 0); // und sie bleibt waagrecht in der Mitte
 });
 
 test('a page with many points keeps its ink while a finger moves it and afterwards', async ({ page }) => {

@@ -50,7 +50,8 @@ type Gesture = { revert: View; ref: View; from: Pt2[]; moved: boolean; snapView:
 const ERASER_RADIUS_PX = 10;
 /** Ab so vielen Punkten auf der Seite zoomt eine Geste nur das Bild und zeichnet erst am Ende neu. */
 const HEAVY_POINTS = 8000;
-const MIN_ZOOM = 0.3;
+/** Zoom als Vielfaches der normalen Größe (`fit`, die Seite füllt die Breite): kleiner als normal wird die Seite nie. */
+const MIN_ZOOM = 1;
 const MAX_ZOOM = 10;
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
