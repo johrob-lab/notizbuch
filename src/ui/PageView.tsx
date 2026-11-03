@@ -3,11 +3,12 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { GestureFilter, type View } from '../ink/gestures';
 import { meterLabel } from '../ink/meter';
 import { effect } from '@preact/signals';
-import { inkPrefs, setInkPrefs } from './inkPrefs';
+import { inkPrefs } from './inkPrefs';
+import { inkTools } from './inkTools';
 import { InkSurface } from '../ink/surface';
-import type { FieldBox, InkColor, Page, WidthName } from '../ink/types';
+import type { FieldBox, Page } from '../ink/types';
 import { todayVienna } from '../lib/dates';
-import type { EraserMode, EraserSize, VollbildWerkzeuge } from '../lib/settings';
+import type { VollbildWerkzeuge } from '../lib/settings';
 import { tapTargetAt, tapTargets, todayMarks, type Layout } from '../pages/layouts';
 import type { SyncEngine } from '../sync/engine';
 import { watchCards } from './cardGestures';
@@ -16,8 +17,6 @@ import { QuickSwitch } from './QuickSwitch';
 import { retryCues } from './retryCues';
 import { routeHash, type Route } from './router';
 import { Icon, Toolbar } from './Toolbar';
-import { toolActions, type ToolAction } from './toolActions';
-import type { Tool } from './toolChoices';
 import { ToolTab } from './ToolTab';
 import { ToolWheel } from './ToolWheel';
 
@@ -236,74 +235,22 @@ export function PageView(p: Props) {
     return watchCards({ stage: inStage, host: surfaceHost, frame: around, surface: () => surface.current, filter: palm });
   }, [hasCards, palm]);
 
-  const chooseTool = (t: Tool) => setInkPrefs({ tool: t });
-  // Wer Farbe oder Breite wählt, will schreiben: Der Kugelschreiber ist dann wieder das Werkzeug. Ebenso Größe oder Art: der Radierer.
-  const chooseColor = (c: InkColor) => setInkPrefs({ color: c, tool: 'pen' });
-  const chooseWidth = (w: WidthName) => {
-    setInkPrefs({ width: w, tool: 'pen' });
-  };
-  const chooseEraserSize = (size: EraserSize) => setInkPrefs({ eraserSize: size, tool: 'eraser' });
-  const chooseEraserMode = (mode: EraserMode) => setInkPrefs({ eraserMode: mode, tool: 'eraser' });
-
   const full = p.vollbild != null;
   const canWrite = !readOnly && phase !== 'unlesbar' && phase !== 'gesperrt' && phase !== 'nichtGeladen';
-
-  /** Ein Knopf des Rads: dieselben Wege wie Werkzeugleiste, Leiste oben und Ersatzknopf. */
-  const runAction = (a: ToolAction): void => {
-    switch (a.kind) {
-      case 'tool':
-        return chooseTool(a.tool);
-      case 'color':
-        return chooseColor(a.color);
-      case 'width':
-        return chooseWidth(a.width);
-      case 'eraserSize':
-        return chooseEraserSize(a.size);
-      case 'eraserMode':
-        return chooseEraserMode(a.mode);
-      case 'undo':
-        return surface.current?.undo();
-      case 'redo':
-        return surface.current?.redo();
-      case 'back':
-      case 'forward': {
-        const to = p.nav?.[a.kind];
-        if (to) window.location.hash = routeHash(to);
-        return;
-      }
-      case 'today':
-        // Wer die App über Nacht offen lässt, soll im neuen Tag landen: Der Tag wird beim Tippen berechnet.
-        window.location.hash = routeHash({ view: 'tag', key: todayVienna() });
-        return;
-      case 'fit':
-        return surface.current?.zoomToFit();
-      case 'exit':
-        return p.onVollbildAus?.();
-    }
-  };
   const wheel = p.vollbild === 'kreis';
-  // Rad und Lasche zeigen dieselben Knöpfe.
-  const actions =
-    full &&
-    toolActions({
-      ink: inkPrefs.value,
-      canWrite,
-      canUndo: history.canUndo,
-      canRedo: history.canRedo,
-      canBack: p.nav?.canBack ?? false,
-      canForward: p.nav?.canForward ?? false,
-      stepLabels: p.nav?.labels ?? ['Zurück', 'Weiter'],
-    });
-
-  /** Rad, Lasche und der einfache Schnellwechsel haben dieselben Angaben. */
-  const quick = {
-    tool,
-    partial: eraserMode === 'stueck',
-    pos: p.quickSwitchPos,
+  const ink = inkTools({
+    surface,
+    canWrite,
+    full,
+    canUndo: history.canUndo,
+    canRedo: history.canRedo,
+    nav: p.nav,
+    onVollbildAus: p.onVollbildAus,
+    quickSwitchPos: p.quickSwitchPos,
+    onQuickSwitchMove: p.onQuickSwitchMove,
     filter: palm,
-    onToggle: () => chooseTool(tool === 'pen' ? 'eraser' : 'pen'),
-    onMove: p.onQuickSwitchMove,
-  };
+  });
+  const { actions, quick } = ink;
 
   // Eine Änderung am Kopf ändert die Kopfdaten der Fläche an Ort und Stelle (dieselbe Seite, dieselben Striche) und geht
   // dann wie ein Strich durch die Sitzung: mit allen Strichen, die die Fläche jetzt hat, und den neuen Kopfdaten.
@@ -338,11 +285,11 @@ export function PageView(p: Props) {
               canRedo={history.canRedo}
               eraserSize={eraserSize}
               eraserMode={eraserMode}
-              onTool={chooseTool}
-              onEraserSize={chooseEraserSize}
-              onEraserMode={chooseEraserMode}
-              onColor={chooseColor}
-              onWidth={chooseWidth}
+              onTool={ink.choose.tool}
+              onEraserSize={ink.choose.eraserSize}
+              onEraserMode={ink.choose.eraserMode}
+              onColor={ink.choose.color}
+              onWidth={ink.choose.width}
               onUndo={() => surface.current?.undo()}
               onRedo={() => surface.current?.redo()}
               onFit={() => surface.current?.zoomToFit()}
@@ -406,10 +353,10 @@ export function PageView(p: Props) {
         )}
         {/* Im Vollbild steht das Rad (Kreis) oder die Lasche (Tab) da, auch ohne Schreiben: Sie bieten dann Blättern, Ganze Seite und den Weg aus dem Vollbild. */}
         {wheel && actions ? (
-          <ToolWheel {...quick} canWrite={canWrite} actions={actions} onAction={runAction} />
+          <ToolWheel {...quick} canWrite={canWrite} actions={actions} onAction={ink.runAction} />
         ) : (
           <>
-            {actions && <ToolTab actions={actions} filter={palm} onAction={runAction} />}
+            {actions && <ToolTab actions={actions} filter={palm} onAction={ink.runAction} />}
             {canWrite && <QuickSwitch {...quick} />}
           </>
         )}
