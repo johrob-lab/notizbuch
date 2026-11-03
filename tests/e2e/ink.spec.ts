@@ -876,3 +876,67 @@ test('partial eraser leaves two pieces', async ({ page }) => {
   await button(page, 'Wiederholen').click();
   expect(await strokeCount(page)).toBe(2);
 });
+
+// ---------- Kritzeln zum Löschen ----------
+
+const WORD: [number, number][] = [
+  [200, 1000],
+  [230, 1004],
+  [260, 1000],
+];
+/**
+ * Zickzack, n Mal hin und her, `w` breit, über `h` nach unten verteilt. Wie beim echten Stift liegen viele Punkte auf jeder
+ * Strecke (alle 4 Einheiten): Mit nur den Ecken glättete die Glättung das Zickzack fast weg.
+ */
+const zigzag = (n: number, x0: number, y0: number, w: number, h: number): [number, number][] => {
+  const corners = Array.from({ length: n * 2 + 1 }, (_, i) => [x0 + (i % 2 ? w : 0), y0 + (i * h) / (n * 2)]);
+  const pts: [number, number][] = [[corners[0][0], corners[0][1]]];
+  for (let i = 1; i < corners.length; i++) {
+    const [ax, ay] = corners[i - 1];
+    const [bx, by] = corners[i];
+    const k = Math.ceil(Math.hypot(bx - ax, by - ay) / 4);
+    for (let j = 1; j <= k; j++) pts.push([ax + ((bx - ax) * j) / k, ay + ((by - ay) * j) / k]);
+  }
+  return pts;
+};
+/** Schreibschrift: k Bögen (oder Täler) nebeneinander, je 30 breit und 25 hoch. */
+const arches = (k: number, x0: number, y0: number, up: boolean): [number, number][] =>
+  Array.from({ length: k * 12 + 1 }, (_, i) => {
+    const h = 25 * Math.sin((Math.PI * (i % 12)) / 12);
+    return [x0 + (30 * i) / 12, y0 + (up ? 25 - h : h)];
+  });
+
+test('scribble over a word erases it', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await pen(page).stroke(WORD);
+  const [word] = await strokeIds(page);
+  await pen(page).stroke(zigzag(4, 190, 990, 80, 20));
+  expect(await strokeCount(page)).toBe(0);
+  await button(page, 'Rückgängig').click();
+  expect(await strokeIds(page)).toEqual([word]);
+});
+
+test('writing next to text does not erase', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await pen(page).stroke(WORD);
+  await pen(page).stroke(arches(3, 270, 985, true)); // „mmm“
+  await pen(page).stroke(arches(3, 370, 985, false)); // „www“
+  expect(await strokeCount(page)).toBe(3);
+});
+
+test('zigzag over empty paper stays ink', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await pen(page).stroke(zigzag(4, 190, 1200, 80, 20));
+  expect(await strokeCount(page)).toBe(1);
+});
+
+test('switch off in settings', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await page.getByRole('link', { name: 'Einstellungen', exact: true }).click();
+  await page.getByRole('group', { name: 'Kritzeln löscht' }).getByRole('radio', { name: 'aus', exact: true }).check();
+  await page.getByRole('link', { name: 'Tag', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => typeof window.__notizbuch)).toBe('object');
+  await pen(page).stroke(WORD);
+  await pen(page).stroke(zigzag(4, 190, 990, 80, 20));
+  expect(await strokeCount(page)).toBe(2);
+});

@@ -5,6 +5,7 @@ import { History, restore, type Removed } from './history';
 import { fixedSegments, tailStart } from './live';
 import { InkMeter } from './meter';
 import { extrapolate } from './predict';
+import { isScribble, scribbleTargets } from './scribble';
 import { newStrokeId, StrokeBuilder } from './stroke';
 import type { EraserMode, EraserSize } from '../lib/settings';
 import { INK, MM, PAGE_H, PAGE_W, PAPER, WIDTH_MM, type FieldBox, type InkColor, type Page, type Pt, type Stroke, type WidthName } from './types';
@@ -117,6 +118,8 @@ export class InkSurface {
   private widthMm = WIDTH_MM.mittel;
   private eraserPx = ERASER_PX.mittel;
   private eraserMode: EraserMode = 'strich';
+  private scribble = true;
+  private flashTimer = 0;
 
   // Ansicht: `view` rechnet Seiteneinheiten in Bildschirmpunkte um (x * s + x), `fit` ist der Maßstab für die Seitenbreite.
   private dpr = 1;
@@ -248,6 +251,11 @@ export class InkSurface {
     this.widthMm = WIDTH_MM[w];
   }
 
+  /** Kritzeln über Geschriebenem löscht es (an) oder bleibt ein Strich (aus). */
+  setScribble(on: boolean): void {
+    this.scribble = on;
+  }
+
   /** Größe und Art des Radierers. Ein Radiervorgang, der gerade läuft, behält seine Art. */
   setEraser(size: EraserSize, mode: EraserMode): void {
     this.eraserPx = ERASER_PX[size];
@@ -334,6 +342,7 @@ export class InkSurface {
     cancelAnimationFrame(this.raf);
     this.stopMeter();
     clearTimeout(this.predTimer);
+    clearTimeout(this.flashTimer);
     for (const c of [this.base, this.live, this.pred, this.snap]) {
       c.remove();
       // Safari gibt den Speicher einer Zeichenfläche erst frei, wenn sie nichts mehr zu halten hat, und deckelt alle zusammen.
@@ -792,15 +801,49 @@ export class InkSurface {
     this.clearPredLayer();
   }
 
-  /** Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. */
+  /** Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. Ein Gekritzel über Geschriebenem löscht es stattdessen. */
   private commitStroke(d: Drawing): void {
     const s = d.builder.stroke();
     if (!s.pts.length) return;
+    if (this.scribble && this.eraseByScribble(s)) return;
     this.strokes.push(s);
     this.setView(this.bctx);
     this.drawStroke(this.bctx, s);
     this.history.push({ type: 'add', stroke: s });
     this.changed();
+  }
+
+  /**
+   * Ist `s` ein Gekritzel über Strichen, verschwinden sie, und das Gekritzel kommt nicht auf die Seite. Rückgängig holt sie
+   * in einem Schritt zurück. Wahr, wenn gelöscht wurde. Ein Gekritzel über leerem Papier bleibt ein Strich.
+   */
+  private eraseByScribble(s: Stroke): boolean {
+    if (!isScribble(s.pts, Date.now() - s.t)) return false;
+    const targets = scribbleTargets(s, this.strokes);
+    if (!targets.length) return false;
+    const before = this.strokes.slice();
+    takeOutIds(this.strokes, new Set(targets));
+    this.history.push({ type: 'swap', before, after: this.strokes.slice() });
+    this.render();
+    this.flash(boundsOf(s).box);
+    this.changed();
+    return true;
+  }
+
+  /** Ein heller Kreis für 300 ms dort, wo das Gekritzel gelöscht hat: So sieht man, dass es kein Strich war. */
+  private flash(b: Box): void {
+    clearTimeout(this.flashTimer);
+    const ctx = this.pctx;
+    const cx = (b[0] + b[2]) / 2;
+    const cy = (b[1] + b[3]) / 2;
+    const r = Math.max(b[2] - b[0], b[3] - b[1]) / 2 + 4 / this.view.s;
+    this.setView(ctx);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(44, 90, 138, 0.15)';
+    ctx.fill();
+    const area = this.screenBox([cx - r, cy - r, cx + r, cy + r], 2 / this.view.s);
+    this.flashTimer = window.setTimeout(() => this.clearArea(this.pctx, area), 300);
   }
 
   /** Der Stift hebt ab. */

@@ -3,6 +3,7 @@ import { formatDay } from '../lib/dates';
 import type { Settings } from '../lib/settings';
 import { AccessForm, type AccessValues } from './AccessForm';
 import { FAILED } from './texts';
+import { inkPrefs, setInkPrefs } from './inkPrefs';
 
 // Die Einstellungen dieses Geräts: Glättung des Stifts, Vorhersage, Gerät und der Zugang zu GitHub. Eine Wahl gilt sofort
 // (der nächste Strich schreibt damit) und wird gespeichert. Der Token steht hier nie: nur, dass er gespeichert ist und bis
@@ -79,6 +80,13 @@ export function SettingsPage({ settings, warning, passive, onChange, onAccess }:
           onPick={(next) => pick({ prediction: next === 'an' })}
         />
         <Choice title="Gerät" name="geraet" value={settings.device} options={DEVICES} onPick={(device) => pick({ device })} />
+        <Choice
+          title="Kritzeln löscht"
+          name="kritzeln"
+          value={inkPrefs.value.scribble ? 'an' : 'aus'}
+          options={ON_OFF}
+          onPick={(next) => setInkPrefs({ scribble: next === 'an' })}
+        />
         <Choice
           title="Messung anzeigen"
           name="messung"
