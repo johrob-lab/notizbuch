@@ -120,6 +120,7 @@ export class InkSurface {
   private eraserMode: EraserMode = 'strich';
   private scribble = true;
   private flashTimer = 0;
+  private flashEl: HTMLElement | null = null;
 
   // Ansicht: `view` rechnet Seiteneinheiten in Bildschirmpunkte um (x * s + x), `fit` ist der Maßstab für die Seitenbreite.
   private dpr = 1;
@@ -343,6 +344,7 @@ export class InkSurface {
     this.stopMeter();
     clearTimeout(this.predTimer);
     clearTimeout(this.flashTimer);
+    this.flashEl?.remove();
     for (const c of [this.base, this.live, this.pred, this.snap]) {
       c.remove();
       // Safari gibt den Speicher einer Zeichenfläche erst frei, wenn sie nichts mehr zu halten hat, und deckelt alle zusammen.
@@ -830,20 +832,34 @@ export class InkSurface {
     return true;
   }
 
-  /** Ein heller Kreis für 300 ms dort, wo das Gekritzel gelöscht hat: So sieht man, dass es kein Strich war. */
+  /**
+   * Ein heller Kreis für 300 ms dort, wo das Gekritzel gelöscht hat: So sieht man, dass es kein Strich war. Er ist ein eigenes
+   * Element über der Fläche, nicht auf einer Zeichenebene: So löscht sein Verschwinden nichts, was inzwischen dort gezeichnet wurde.
+   */
   private flash(b: Box): void {
     clearTimeout(this.flashTimer);
-    const ctx = this.pctx;
-    const cx = (b[0] + b[2]) / 2;
-    const cy = (b[1] + b[3]) / 2;
-    const r = Math.max(b[2] - b[0], b[3] - b[1]) / 2 + 4 / this.view.s;
-    this.setView(ctx);
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(44, 90, 138, 0.15)';
-    ctx.fill();
-    const area = this.screenBox([cx - r, cy - r, cx + r, cy + r], 2 / this.view.s);
-    this.flashTimer = window.setTimeout(() => this.clearArea(this.pctx, area), 300);
+    this.flashEl?.remove();
+    const [x0, y0, x1, y1] = this.screenBox(b, 4 / this.view.s);
+    const d = Math.max(x1 - x0, y1 - y0);
+    const el = document.createElement('div');
+    el.className = 'kritzel-hinweis';
+    el.setAttribute('aria-hidden', 'true');
+    Object.assign(el.style, {
+      position: 'absolute',
+      left: `${(x0 + x1 - d) / 2}px`,
+      top: `${(y0 + y1 - d) / 2}px`,
+      width: `${d}px`,
+      height: `${d}px`,
+      borderRadius: '50%',
+      background: 'rgba(44, 90, 138, 0.15)',
+      pointerEvents: 'none',
+    });
+    this.el.append(el);
+    this.flashEl = el;
+    this.flashTimer = window.setTimeout(() => {
+      el.remove();
+      if (this.flashEl === el) this.flashEl = null;
+    }, 300);
   }
 
   /** Der Stift hebt ab. */

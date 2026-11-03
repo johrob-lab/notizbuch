@@ -50,3 +50,58 @@ test('a stroke inside the box that the scribble never touches stays', () => {
   const gap = strokeFrom([[29, 5], [31, 5]], 'g');
   expect(scribbleTargets(s, [gap])).toEqual([]);
 });
+
+// ---------- Schlussprüfung: eigene Zeichnungen bleiben ----------
+
+/** Hin und her, mit Punkten alle 2 Einheiten auf jeder Strecke (wie ein echter Stift). */
+function dense(corners: [number, number][]): [number, number][] {
+  const pts: [number, number][] = [corners[0]];
+  for (let i = 1; i < corners.length; i++) {
+    const [ax, ay] = corners[i - 1];
+    const [bx, by] = corners[i];
+    const k = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 2));
+    for (let j = 1; j <= k; j++) pts.push([ax + ((bx - ax) * j) / k, ay + ((by - ay) * j) / k]);
+  }
+  return pts;
+}
+
+/** Waagrechte Schraffur in einem Kreis um (cx, cy) mit Radius r: von Rand zu Rand, n Linien, ein Strich. */
+function hatchCircle(cx: number, cy: number, r: number, n: number): [number, number][] {
+  const corners: [number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    const y = cy - r + ((i + 0.5) * 2 * r) / n;
+    const half = Math.sqrt(r * r - (y - cy) ** 2);
+    const [a, b] = i % 2 ? [cx + half, cx - half] : [cx - half, cx + half];
+    corners.push([a, y], [b, y]);
+  }
+  return dense(corners);
+}
+
+const circle = (cx: number, cy: number, r: number, id: string): Stroke =>
+  strokeFrom(Array.from({ length: 73 }, (_, i) => [cx + r * Math.cos((i * Math.PI) / 36), cy + r * Math.sin((i * Math.PI) / 36)] as [number, number]), id);
+
+test('hatching inside a drawn circle keeps the circle', () => {
+  const hatch = strokeFrom(hatchCircle(100, 100, 40, 8), 'h');
+  expect(isScribble(hatch.pts, 900)).toBe(true);
+  expect(scribbleTargets(hatch, [circle(100, 100, 40, 'c')])).toEqual([]);
+});
+
+test('filling a drawn checkbox keeps the box', () => {
+  const box = strokeFrom(dense([[0, 0], [30, 0], [30, 30], [0, 30], [0, 0]]), 'b');
+  const fill: [number, number][] = [];
+  for (let i = 0; i < 8; i++) fill.push(i % 2 ? [28, 3 + i * 3.4] : [2, 3 + i * 3.4], i % 2 ? [2, 3 + i * 3.4] : [28, 3 + i * 3.4]);
+  const s = strokeFrom(dense(fill), 'f');
+  expect(scribbleTargets(s, [box])).toEqual([]);
+});
+
+test('going over an underline again is not a scribble', () => {
+  const corners: [number, number][] = [];
+  for (let i = 0; i < 7; i++) corners.push([i % 2 ? 0 : 120, 50 + (i % 3) * 0.5]);
+  expect(isScribble(dense(corners).map(([x, y]) => ({ x, y })), 900)).toBe(false);
+});
+
+test('a word under a dense scribble is still erased', () => {
+  const word = strokeFrom(dense([[200, 1000], [230, 1004], [260, 1000]]), 'w');
+  const corners: [number, number][] = Array.from({ length: 9 }, (_, i) => [190 + (i % 2 ? 80 : 0), 990 + (i * 20) / 8]);
+  expect(scribbleTargets(strokeFrom(dense(corners), 'z'), [word])).toEqual(['w']);
+});

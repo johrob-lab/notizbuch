@@ -940,3 +940,21 @@ test('switch off in settings', async ({ page }) => {
   await pen(page).stroke(zigzag(4, 190, 990, 80, 20));
   expect(await strokeCount(page)).toBe(2);
 });
+
+test('a stroke started right after a scribble keeps its end visible', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await pen(page).stroke(WORD);
+  await pen(page).stroke(zigzag(4, 190, 990, 80, 20));
+  expect(await strokeCount(page)).toBe(0);
+  // Gleich danach an derselben Stelle weiterschreiben und den Stift ruhen lassen.
+  const p = pen(page);
+  const pts: [number, number][] = [[205, 1000], [215, 1003], [225, 998], [235, 1001], [245, 999]];
+  await p.down(...pts[0]);
+  for (const q of pts.slice(1)) await p.move(...q);
+  await page.waitForTimeout(60); // die Vorhersage ist weg, das Endstück steht
+  const now = await inkCover(page, ['live', 'vorhersage']);
+  await page.waitForTimeout(400); // länger als der Hinweis auf das Löschen
+  const later = await inkCover(page, ['live', 'vorhersage']);
+  await p.up(...pts[pts.length - 1]);
+  expect(later).toBeGreaterThanOrEqual(now * 0.95);
+});

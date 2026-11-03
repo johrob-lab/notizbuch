@@ -82,14 +82,50 @@ export function cutStroke(s: Stroke, at: Pt2, r: number, newId: () => string): S
   if (!hitStroke(s, at.x, at.y, r)) return null;
   if (s.pts.length < 2) return [];
   const reach = r + s.w / 2;
+  const step = Math.max(r / 2, 0.1);
+  // Verdichtet wird nur nah am Kreis: Der Rest des Strichs bleibt, wie er war, und die Datei wächst nicht.
+  const pts: Pt[] = [s.pts[0]];
+  for (let i = 1; i < s.pts.length; i++) {
+    const a = s.pts[i - 1];
+    const b = s.pts[i];
+    pts.push(...densifyNear(a, b, at, reach + step, step));
+  }
   const pieces: Pt[][] = [];
   let run: Pt[] = [];
-  for (const p of densify(s.pts, Math.max(r / 2, 0.1))) {
+  let removed = false;
+  for (const p of pts) {
     if ((p.x - at.x) ** 2 + (p.y - at.y) ** 2 <= reach * reach) {
+      removed = true;
       if (run.length) pieces.push(run);
       run = [];
     } else run.push(p);
   }
   if (run.length) pieces.push(run);
-  return pieces.filter((pts) => pts.length >= 2).map((pts) => ({ ...s, id: newId(), pts }));
+  // Streift der Kreis den Strich nur, ohne einen Punkt zu nehmen, bleibt er unverändert (auch seine id).
+  if (!removed) return null;
+  return pieces.filter((q) => q.length >= 2).map((q) => ({ ...s, id: newId(), pts: q }));
+}
+
+/**
+ * Die Punkte nach `a` bis einschließlich `b`: Nur das Stück der Strecke, das näher als `near` an `p` liegt, bekommt Punkte
+ * höchstens `step` auseinander, davor und dahinter bleibt die Strecke gerade.
+ */
+function densifyNear(a: Pt, b: Pt, p: Pt2, near: number, step: number): Pt[] {
+  const vx = b.x - a.x;
+  const vy = b.y - a.y;
+  const len = Math.hypot(vx, vy);
+  if (!len) return [b];
+  const t = ((p.x - a.x) * vx + (p.y - a.y) * vy) / (len * len);
+  const d = Math.abs((p.x - a.x) * vy - (p.y - a.y) * vx) / len;
+  if (d > near) return [b];
+  const half = Math.sqrt(near * near - d * d) / len;
+  const t0 = Math.max(0, t - half);
+  const t1 = Math.min(1, t + half);
+  if (t0 >= t1) return [b];
+  const at = (u: number): Pt => ({ x: a.x + vx * u, y: a.y + vy * u, w: a.w + (b.w - a.w) * u });
+  const out: Pt[] = [];
+  if (t0 > 0) out.push(at(t0));
+  out.push(...densify([at(t0), at(t1)], step).slice(1));
+  if (t1 < 1) out.push(b);
+  return out;
 }

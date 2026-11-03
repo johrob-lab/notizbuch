@@ -221,3 +221,16 @@ test('undo after partial erase restores the original', () => {
   h.redo(strokes);
   expect(strokes).toHaveLength(3);
 });
+
+test('cut densifies only near the cut', () => {
+  const long = line('L', [0, 0], [1000, 0]);
+  const parts = cutStroke(long, { x: 500, y: 0 }, 0.6, freshId)!;
+  expect(parts).toHaveLength(2);
+  expect(parts[0].pts.length + parts[1].pts.length).toBeLessThan(20);
+  expect(parts[0].pts[0]).toEqual({ x: 0, y: 0, w: 1.2 });
+  expect(parts[1].pts.at(-1)).toEqual({ x: 1000, y: 0, w: 1.2 });
+});
+
+test('grazing the stroke without removing a point changes nothing', () => {
+  expect(cutStroke(straight(), { x: 51.25, y: 5.5 }, 5, freshId)).toBeNull();
+});
