@@ -1,4 +1,5 @@
 import type { GestureFilter } from '../ink/gestures';
+import type { PenKind } from '../ink/pens';
 import type { InkColor, WidthName } from '../ink/types';
 import { todayVienna } from '../lib/dates';
 import type { EraserMode, EraserSize } from '../lib/settings';
@@ -24,17 +25,19 @@ export type InkToolsOptions = {
   filter: GestureFilter;
 };
 
-export type Choose = { tool(t: Tool): void; color(c: InkColor): void; width(w: WidthName): void; eraserSize(s: EraserSize): void; eraserMode(m: EraserMode): void };
+export type Choose = { tool(t: Tool): void; pen(p: PenKind): void; color(c: InkColor): void; width(w: WidthName): void; eraserSize(s: EraserSize): void; eraserMode(m: EraserMode): void };
 
 /** Rad, Lasche und der einfache Schnellwechsel haben dieselben Angaben. */
-export type QuickProps = { tool: Tool; partial: boolean; pos?: [number, number]; filter: GestureFilter; onToggle(): void; onMove(pos: [number, number]): void };
+export type QuickProps = { tool: Tool; pen: PenKind; partial: boolean; pos?: [number, number]; filter: GestureFilter; onToggle(): void; onMove(pos: [number, number]): void };
 
 export type InkTools = { choose: Choose; runAction(a: ToolAction): void; actions: { inner: ActionButton[]; outer: ActionButton[] } | null; quick: QuickProps };
 
 export function inkTools(o: InkToolsOptions): InkTools {
-  const { tool, eraserMode } = inkPrefs.value;
+  const { tool, pen, eraserMode } = inkPrefs.value;
 
   const chooseTool = (t: Tool) => setInkPrefs({ tool: t });
+  // Wer einen Stift wählt, will schreiben. Farbe und Breite bleiben, wie sie sind.
+  const choosePen = (p: PenKind) => setInkPrefs({ tool: 'pen', pen: p });
   // Wer Farbe oder Breite wählt, will schreiben: Der Kugelschreiber ist dann wieder das Werkzeug. Ebenso Größe oder Art: der Radierer.
   const chooseColor = (c: InkColor) => setInkPrefs({ color: c, tool: 'pen' });
   const chooseWidth = (w: WidthName) => {
@@ -48,6 +51,8 @@ export function inkTools(o: InkToolsOptions): InkTools {
     switch (a.kind) {
       case 'tool':
         return chooseTool(a.tool);
+      case 'pen':
+        return choosePen(a.pen);
       case 'color':
         return chooseColor(a.color);
       case 'width':
@@ -92,6 +97,7 @@ export function inkTools(o: InkToolsOptions): InkTools {
 
   const quick: QuickProps = {
     tool,
+    pen,
     partial: eraserMode === 'stueck',
     pos: o.quickSwitchPos,
     filter: o.filter,
@@ -99,5 +105,5 @@ export function inkTools(o: InkToolsOptions): InkTools {
     onMove: o.onQuickSwitchMove ?? (() => {}),
   };
 
-  return { choose: { tool: chooseTool, color: chooseColor, width: chooseWidth, eraserSize: chooseEraserSize, eraserMode: chooseEraserMode }, runAction, actions, quick };
+  return { choose: { tool: chooseTool, pen: choosePen, color: chooseColor, width: chooseWidth, eraserSize: chooseEraserSize, eraserMode: chooseEraserMode }, runAction, actions, quick };
 }

@@ -105,7 +105,7 @@ afterEach(() => {
 
 test('the buttons sit where ringLayout puts them, with their name, state and lock', () => {
   mount();
-  expect(buttons()).toHaveLength(16);
+  expect(buttons()).toHaveLength(19);
   // Heute steht genau unter der Mitte, der erste Knopf des inneren Kreises genau darüber.
   expect(knopf('Heute').style.left).toBe(`${ANCHOR.x - HALF}px`);
   expect(knopf('Heute').style.top).toBe(`${ANCHOR.y + RING.outer - HALF}px`);
@@ -224,13 +224,13 @@ test('a finger next to the ring closes it when it lifts, the hand and a finger t
   send(shield()!, 'pointerdown', { kind: 'touch', t: 3000, x: 50, y: 50 }); // ein Finger, der länger liegt als ein Tipp
   send(shield()!, 'pointerup', { kind: 'touch', t: 3600, x: 50, y: 50 });
   await settle();
-  expect(buttons()).toHaveLength(16);
+  expect(buttons()).toHaveLength(19);
   expect(closes).toBe(0);
 
   const down = send(shield()!, 'pointerdown', { kind: 'touch', t: 4000, x: 50, y: 50 });
   await settle();
   expect(down.defaultPrevented).toBe(true); // nichts darunter bekommt ihn
-  expect(buttons()).toHaveLength(16); // noch könnte er die Hand sein
+  expect(buttons()).toHaveLength(19); // noch könnte er die Hand sein
   expect(closes).toBe(0);
   send(shield()!, 'pointerup', { kind: 'touch', t: 4040, x: 50, y: 50 });
   expect(closes).toBe(1);
@@ -252,14 +252,14 @@ test('a hand resting beside the ring leaves it open, and the pen still chooses a
   const hand = send(shield()!, 'pointerdown', { kind: 'touch', t: 1000, x: 50, y: 50, id: 21 });
   await settle();
   expect(hand.defaultPrevented).toBe(true); // nichts darunter bekommt sie
-  expect(buttons()).toHaveLength(16);
+  expect(buttons()).toHaveLength(19);
   tap('Rückgängig', 'pen', 1200);
   expect(done).toEqual([{ kind: 'undo' }]);
   // Sie hebt erst ab, als der Stift längst gewählt hat: Sie war die Hand, der Ring bleibt offen.
   send(shield()!, 'pointerup', { kind: 'touch', t: 1600, x: 50, y: 50, id: 21 });
   await settle();
   expect(closes).toBe(0);
-  expect(buttons()).toHaveLength(16);
+  expect(buttons()).toHaveLength(19);
   tap('Rot (offen)', 'pen', 2000);
   expect(done).toEqual([{ kind: 'undo' }, { kind: 'color', color: 'rot' }]);
   expect(closes).toBe(1);

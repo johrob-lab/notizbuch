@@ -52,3 +52,22 @@ test('the quick switch toggles between pen and eraser', () => {
   inkTools(o).quick.onToggle();
   expect(inkPrefs.value.tool).toBe('pen');
 });
+
+test('choosing a pen keeps the colour and the width', () => {
+  const { o } = setup();
+  inkPrefs.value = { ...DEFAULT_INK, color: 'blau', width: 'breit', tool: 'eraser' };
+  inkTools(o).choose.pen('fueller');
+  expect(inkPrefs.value).toMatchObject({ pen: 'fueller', tool: 'pen', color: 'blau', width: 'breit' });
+  inkTools(o).runAction({ kind: 'pen', pen: 'fineliner' });
+  expect(inkPrefs.value).toMatchObject({ pen: 'fineliner', tool: 'pen', color: 'blau', width: 'breit' });
+});
+
+test('the quick switch goes back to the last pen', () => {
+  const { o } = setup();
+  inkPrefs.value = { ...DEFAULT_INK, pen: 'bleistift' };
+  inkTools(o).quick.onToggle();
+  expect(inkPrefs.value).toMatchObject({ tool: 'eraser', pen: 'bleistift' });
+  inkTools(o).quick.onToggle();
+  expect(inkPrefs.value).toMatchObject({ tool: 'pen', pen: 'bleistift' });
+  expect(inkTools(o).quick.pen).toBe('bleistift');
+});

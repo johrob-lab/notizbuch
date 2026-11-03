@@ -8,10 +8,28 @@ const base = { ink, canWrite: true, canUndo: true, canRedo: false, canBack: true
 test('pen shows colours and widths inside, everything else outside', () => {
   const { inner, outer } = toolActions(base);
   expect(inner.map((b) => b.label)).toEqual(['Schwarz', 'Blau', 'Rot (offen)', 'Grün (erledigt)', 'Fein (0,1 mm)', 'Mittel (0,2 mm)', 'Breit (0,4 mm)']);
-  expect(outer.map((b) => b.label)).toEqual(['Kugelschreiber', 'Radierer', 'Rückgängig', 'Wiederholen', 'Voriger Tag', 'Heute', 'Nächster Tag', 'Ganze Seite', 'Vollbild aus']);
+  expect(outer.map((b) => b.label)).toEqual(['Kugelschreiber', 'Fineliner', 'Füllfeder', 'Bleistift', 'Radierer', 'Rückgängig', 'Wiederholen', 'Voriger Tag', 'Heute', 'Nächster Tag', 'Ganze Seite', 'Vollbild aus']);
   expect(inner.find((b) => b.label === 'Schwarz')!.pressed).toBe(true);
   expect(outer.find((b) => b.label === 'Wiederholen')!.disabled).toBe(true);
   expect(outer.filter((b) => b.keepsOpen).map((b) => b.label)).toEqual(['Rückgängig', 'Wiederholen']);
+});
+
+test('there are four pens and the eraser, and the chosen pen is pressed', () => {
+  const { outer } = toolActions({ ...base, ink: { ...ink, pen: 'fueller' } });
+  expect(outer.slice(0, 5).map((b) => b.key)).toEqual(['pen:kugel', 'pen:fineliner', 'pen:fueller', 'pen:bleistift', 'tool:eraser']);
+  expect(outer).toHaveLength(12);
+  expect(outer.slice(0, 4).map((b) => b.action)).toEqual([
+    { kind: 'pen', pen: 'kugel' },
+    { kind: 'pen', pen: 'fineliner' },
+    { kind: 'pen', pen: 'fueller' },
+    { kind: 'pen', pen: 'bleistift' },
+  ]);
+  expect(outer.filter((b) => b.pressed).map((b) => b.key)).toEqual(['pen:fueller']);
+});
+
+test('the pencil has widths but no colours', () => {
+  const { inner } = toolActions({ ...base, ink: { ...ink, pen: 'bleistift' } });
+  expect(inner.map((b) => b.label)).toEqual(['Fein (0,1 mm)', 'Mittel (0,2 mm)', 'Breit (0,4 mm)']);
 });
 
 test('eraser shows sizes and modes inside', () => {

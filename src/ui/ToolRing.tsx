@@ -5,7 +5,7 @@ import { RING, ringLayout, type Pt } from './ringLayout';
 import type { ActionButton, ToolAction } from './toolActions';
 import { ERASER_SIZES, WIDTHS } from './toolChoices';
 import { capturePointer, useActivation } from './pointerBits';
-import { Icon } from './Toolbar';
+import { Icon, PEN_ICON } from './Toolbar';
 
 // Der Ring des Rads im Vollbild: zwei Kreise aus Knöpfen um das Rad, darunter ein Schutzfeld über der ganzen Bühne. Was die Knöpfe
 // tun, entscheidet die Seite (`onAction`), hier geht es nur darum, wer sie trifft: Stift, Maus, ein Finger, den das Tor gegen
@@ -31,6 +31,8 @@ export function ActionFace({ action }: { action: ToolAction }) {
   switch (action.kind) {
     case 'tool':
       return <Icon name={action.tool === 'eraser' ? 'eraser' : 'pen'} />;
+    case 'pen':
+      return <Icon name={PEN_ICON[action.pen]} />;
     case 'color':
       return <span class="farbe" style={{ background: INK[action.color] }} />;
     case 'width': {

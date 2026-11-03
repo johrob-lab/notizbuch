@@ -1,8 +1,8 @@
 import { expect, test as base, type Page } from '@playwright/test';
 import { BLEISTIFT_OPACITY, type PenKind } from '../../src/ink/pens';
 import { INK, PAPER, type WidthName } from '../../src/ink/types';
-import { changeStoredSettings, openSeeded, queued } from './helpers/app';
-import { colorAt, inkNear, pen, wheel } from './helpers/pointer';
+import { changeStoredSettings, openSeeded, queued, savedSettings } from './helpers/app';
+import { colorAt, inkNear, pen, touch, wheel } from './helpers/pointer';
 
 // Die neuen Stifte auf der Schreibfläche. Bis die Werkzeugleiste den Stift wählen kann, wählt ihn jeder Test über die
 // gespeicherte Werkzeugwahl und lädt die App neu.
@@ -249,4 +249,150 @@ test('the live layers are opaque again after a pencil stroke', async ({ page }) 
   expect(await shownOpacity(LIVE)).toBe(1);
   expect(await shownOpacity(PREDICTION)).toBe(1);
   await expect.poll(() => strokeTools(page)).toEqual(['bleistift']);
+});
+
+// Die Wahl des Stifts in Leiste, Rad, Lasche und Schnellwechsel.
+
+const QUICK = '[data-testid="quick-switch"]';
+const NAMES: Record<PenKind, string> = { kugel: 'Kugelschreiber', fineliner: 'Fineliner', fueller: 'Füllfeder', bleistift: 'Bleistift' };
+const COLOUR_LABELS = ['Schwarz', 'Blau', 'Rot (offen)', 'Grün (erledigt)'];
+const ring = (page: Page) => page.locator('.ring-knopf');
+
+/** Ein Knopf der Werkzeugleiste. */
+const tool = (page: Page, label: string) => page.locator(`.werkzeuge button[aria-label="${label}"]`);
+const savedPen = async (page: Page) => ((await savedSettings(page))?.ink as { pen?: string } | undefined)?.pen;
+const lastColour = async (page: Page): Promise<string | undefined> => {
+  const paths = strokePaths(await savedPage(page));
+  return attr(paths[paths.length - 1] ?? '', 'data-farbe');
+};
+
+test('the toolbar shows five tools and the pencil hides the colours', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  const toolGroup = page.locator('.werkzeuge [role="group"][aria-label="Werkzeug"] button');
+  expect(await toolGroup.evaluateAll((els) => els.map((el) => [el.getAttribute('aria-label'), el.getAttribute('title')]))).toEqual(
+    [...Object.values(NAMES), 'Radierer'].map((name) => [name, name]),
+  );
+  await expect(tool(page, 'Kugelschreiber')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.werkzeuge [aria-label="Farbe"]')).toBeVisible();
+  const separators = await page.locator('.werkzeuge .sep').count();
+
+  await tool(page, 'Bleistift').click();
+  await expect(tool(page, 'Bleistift')).toHaveAttribute('aria-pressed', 'true');
+  await expect(tool(page, 'Kugelschreiber')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('.werkzeuge [aria-label="Farbe"]')).toHaveCount(0);
+  for (const label of COLOUR_LABELS) await expect(tool(page, label)).toHaveCount(0);
+  await expect(page.locator('.werkzeuge [aria-label="Breite"] button')).toHaveCount(3);
+  expect(await page.locator('.werkzeuge .sep').count()).toBe(separators - 1); // ohne Farbe auch ohne ihren Trennstrich
+  for (const box of await toolGroup.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().width))) expect(box).toBeGreaterThanOrEqual(44);
+});
+
+test('the colour stays when you switch pens', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await tool(page, 'Blau').click();
+  await tool(page, 'Füllfeder').click();
+  await pen(page).stroke(line([200, 800], [400, 820], 12));
+  await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(1);
+  expect(await lastColour(page)).toBe('blau');
+
+  await tool(page, 'Bleistift').click();
+  await pen(page).stroke(line([200, 900], [400, 920], 12));
+  await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(2);
+  expect(await lastColour(page)).toBe('grau');
+
+  await tool(page, 'Fineliner').click();
+  await expect(tool(page, 'Blau')).toHaveAttribute('aria-pressed', 'true');
+  await pen(page).stroke(line([200, 1000], [400, 1020], 12));
+  await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(3);
+  expect(await lastColour(page)).toBe('blau');
+});
+
+test('the toolbar stays on one line at 834 points, also with the eraser', async ({ page }) => {
+  await page.setViewportSize({ width: 834, height: 1194 });
+  await openSeeded(page, DAY, { offline: true });
+  const height = () => page.locator('.werkzeuge').evaluate((el) => el.getBoundingClientRect().height);
+  expect(await height()).toBeLessThanOrEqual(46);
+  await tool(page, 'Radierer').click();
+  await expect(page.locator('.werkzeuge [aria-label="Radierart"] button')).toHaveCount(2);
+  expect(await height()).toBeLessThanOrEqual(46);
+  await tool(page, 'Bleistift').click();
+  expect(await height()).toBeLessThanOrEqual(46);
+});
+
+test('a pen tap on the quick switch goes between the last pen and the eraser', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await tool(page, 'Bleistift').click();
+  const quick = page.getByTestId('quick-switch');
+  const icon = (selector: string) => page.locator(`${selector} svg path`).first().getAttribute('d');
+  // Das Symbol des Schnellwechsels ist das des gewählten Stifts.
+  expect(await icon(QUICK)).toBe(await icon('.werkzeuge button[aria-label="Bleistift"]'));
+  expect(await icon(QUICK)).not.toBe(await icon('.werkzeuge button[aria-label="Kugelschreiber"]'));
+
+  await pen(page).tapOn(QUICK);
+  await expect(quick).toHaveAttribute('data-tool', 'eraser');
+  await expect(tool(page, 'Radierer')).toHaveAttribute('aria-pressed', 'true');
+  await pen(page).tapOn(QUICK);
+  await expect(quick).toHaveAttribute('data-tool', 'pen');
+  await expect(tool(page, 'Bleistift')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => savedPen(page)).toBe('bleistift');
+});
+
+const ringLabels = (page: Page) => ring(page).evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
+const ringButton = (label: string) => `.ring-knopf[aria-label="${label}"]`;
+
+test('the ring has 12 outer buttons with Heute at the bottom and only widths for the pencil', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true, settings: { vollbild: { an: true, werkzeuge: 'kreis' } } });
+  await touch(page).tapOn(QUICK);
+  await expect(ring(page).first()).toBeVisible();
+  // Mit Kugelschreiber: 4 Farben und 3 Breiten innen, 12 Knöpfe außen.
+  await expect(ring(page)).toHaveCount(4 + 3 + 12);
+  const all = await ringLabels(page);
+  for (const name of [...Object.values(NAMES), 'Radierer', 'Heute']) expect(all, name).toContain(name);
+
+  await touch(page).tapOn(ringButton('Bleistift'));
+  await expect(ring(page)).toHaveCount(0); // eine Wahl schließt den Ring
+  await expect.poll(() => savedPen(page)).toBe('bleistift');
+
+  await touch(page).tapOn(QUICK);
+  await expect(ring(page).first()).toBeVisible();
+  await expect(ring(page)).toHaveCount(3 + 12); // beim Bleistift nur die drei Breiten innen
+  const labels = await ringLabels(page);
+  for (const colour of COLOUR_LABELS) expect(labels).not.toContain(colour);
+  expect(labels.filter((l) => l?.includes(' mm)'))).toHaveLength(3);
+  await expect(page.locator(ringButton('Bleistift'))).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator(ringButton('Kugelschreiber'))).toHaveAttribute('aria-pressed', 'false');
+
+  // Heute liegt unten: tiefer als jeder andere Knopf.
+  const boxes = await ring(page).evaluateAll((els) =>
+    els.map((el) => {
+      const r = el.getBoundingClientRect();
+      return { label: el.getAttribute('aria-label'), x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    }),
+  );
+  const today = boxes.find((b) => b.label === 'Heute')!;
+  for (const b of boxes) expect(b.y, b.label ?? '').toBeLessThanOrEqual(today.y + 1);
+  for (const b of boxes) expect(b.y, b.label ?? '').toBeGreaterThan(0);
+});
+
+test('the tab shows the five tools', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true, settings: { vollbild: { an: true, werkzeuge: 'tab' } } });
+  await touch(page).tapOn('button.lasche');
+  await expect(page.locator('.lasche-leiste')).toBeVisible();
+  const group = page.locator('.lasche-knopf[data-gruppe="werkzeug"]');
+  expect(await group.evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')))).toEqual([...Object.values(NAMES), 'Radierer']);
+  await touch(page).tapOn('.lasche-knopf[aria-label="Füllfeder"]');
+  await expect(page.locator('.lasche-knopf[aria-label="Füllfeder"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => savedPen(page)).toBe('fueller');
+  await touch(page).tapOn('.lasche-knopf[aria-label="Bleistift"]');
+  await expect(page.locator('.lasche-knopf[data-gruppe="farbe"]')).toHaveCount(0);
+  await expect(page.locator('.lasche-knopf[data-gruppe="breite"]')).toHaveCount(3);
+});
+
+test('the chosen pen survives a reload', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await tool(page, 'Fineliner').click();
+  await expect.poll(() => savedPen(page)).toBe('fineliner');
+  await page.reload();
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await expect(tool(page, 'Fineliner')).toHaveAttribute('aria-pressed', 'true');
+  await expect(tool(page, 'Kugelschreiber')).toHaveAttribute('aria-pressed', 'false');
 });

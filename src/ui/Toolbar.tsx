@@ -1,4 +1,5 @@
 import type { ComponentChildren } from 'preact';
+import { PEN_NAMES, PENS, type PenKind } from '../ink/pens';
 import { INK, type InkColor, type WidthName } from '../ink/types';
 import type { EraserMode, EraserSize } from '../lib/settings';
 
@@ -8,6 +9,7 @@ export type { Tool };
 
 type Props = {
   tool: Tool;
+  pen: PenKind;
   color: InkColor;
   width: WidthName;
   canUndo: boolean;
@@ -15,6 +17,7 @@ type Props = {
   eraserSize: EraserSize;
   eraserMode: EraserMode;
   onTool(tool: Tool): void;
+  onPen(pen: PenKind): void;
   onEraserSize(size: EraserSize): void;
   onEraserMode(mode: EraserMode): void;
   onColor(color: InkColor): void;
@@ -31,6 +34,13 @@ type Props = {
 /** Symbole als Pfade, 24 x 24. */
 export const ICONS = {
   pen: 'M4 20l1-4L16.5 4.5a2 2 0 0 1 2.8 0l.2.2a2 2 0 0 1 0 2.8L8 19z M14 7l3 3',
+  // schräg wie ein Stift im Griff: Kugelschreiber mit Clip. Die anderen drei stehen aufrecht, damit man sie auch klein auseinanderhält.
+  // Fineliner: Schaft mit Kappenlinie und stumpfer, breiter Spitze
+  fineliner: 'M8 3h8v11l-2.2 6.5h-3.6L8 14z M8 8h8',
+  // Füllfeder: Feder mit Atemloch und Schlitz bis zur Spitze
+  fueller: 'M9 3h6l2.5 8.5c0 3.4-2.6 6.4-5.5 9.5c-2.9-3.1-5.5-6.1-5.5-9.5z M12 9.6a1.3 1.3 0 1 0 0 2.6a1.3 1.3 0 1 0 0-2.6 M12 12.2V21',
+  // Bleistift: sechskantiger Schaft (die Kante in der Mitte), gespitzter Kegel mit Mine
+  bleistift: 'M8 3h8v12l-4 6-4-6z M8 7h8 M12 7v8 M10.1 18h3.8',
   eraser: 'M14.6 4.6a2 2 0 0 1 2.8 0l2 2a2 2 0 0 1 0 2.8L11 17.8H7l-2.4-2.4a2 2 0 0 1 0-2.8z M9.5 9.7l5 5 M11 17.8h8.5',
   undo: 'M9 14L4 9l5-5 M4 9h10.5a5.5 5.5 0 0 1 0 11H11',
   redo: 'M15 14l5-5-5-5 M20 9H9.5a5.5 5.5 0 0 0 0 11H13',
@@ -41,6 +51,9 @@ export const ICONS = {
 };
 
 export type IconName = keyof typeof ICONS;
+
+/** Das Symbol je Stift. Der Kugelschreiber behält `pen`. */
+export const PEN_ICON: Record<PenKind, IconName> = { kugel: 'pen', fineliner: 'fineliner', fueller: 'fueller', bleistift: 'bleistift' };
 
 export function Icon({ name }: { name: IconName }) {
   return (
@@ -58,14 +71,16 @@ function Group({ label, children }: { label: string; children: ComponentChildren
   );
 }
 
-/** Werkzeugleiste: Kugelschreiber und Radierer, vier Farben und drei Breiten (beim Radierer drei Größen und zwei Arten), Rückgängig und Wiederholen, ganze Seite. */
+/** Werkzeugleiste: vier Stifte und Radierer, vier Farben (nicht beim Bleistift) und drei Breiten (beim Radierer drei Größen und zwei Arten), Rückgängig und Wiederholen, ganze Seite. */
 export function Toolbar(p: Props) {
   return (
     <div class="werkzeuge" role="toolbar" aria-label="Werkzeuge">
       <Group label="Werkzeug">
-        <button class="tb" type="button" aria-pressed={p.tool === 'pen'} aria-label="Kugelschreiber" title="Kugelschreiber" onClick={() => p.onTool('pen')}>
-          <Icon name="pen" />
-        </button>
+        {PENS.map((k) => (
+          <button key={k} class="tb" type="button" aria-pressed={p.tool === 'pen' && p.pen === k} aria-label={PEN_NAMES[k]} title={PEN_NAMES[k]} onClick={() => p.onPen(k)}>
+            <Icon name={PEN_ICON[k]} />
+          </button>
+        ))}
         <button class="tb" type="button" aria-pressed={p.tool === 'eraser'} aria-label="Radierer" title="Radierer" onClick={() => p.onTool('eraser')}>
           <Icon name="eraser" />
         </button>
@@ -91,6 +106,8 @@ export function Toolbar(p: Props) {
         </>
       ) : (
         <>
+      {p.pen !== 'bleistift' && (
+        <>
       <Group label="Farbe">
         {COLORS.map((c) => (
           <button
@@ -107,6 +124,8 @@ export function Toolbar(p: Props) {
         ))}
       </Group>
       <div class="sep" aria-hidden="true" />
+        </>
+      )}
       <Group label="Breite">
         {WIDTHS.map((w) => (
           <button

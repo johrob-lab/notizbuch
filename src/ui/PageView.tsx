@@ -130,7 +130,7 @@ export function PageView(p: Props) {
   const days = useMemo(() => tapTargets(layout), [layout]);
   const [phase, setPhase] = useState<Phase>('laden');
   // Die Werkzeugwahl gilt für alle Seiten (siehe `inkPrefs`): Wer radiert und weiterblättert, radiert weiter.
-  const { tool, color, width, eraserSize, eraserMode } = inkPrefs.value;
+  const { tool, pen: chosenPen, color, width, eraserSize, eraserMode } = inkPrefs.value;
   const [history, setHistory] = useState({ canUndo: false, canRedo: false });
   const [saveFailed, setSaveFailed] = useState(false);
   const [meterText, setMeterText] = useState('');
@@ -280,6 +280,7 @@ export function PageView(p: Props) {
           {canWrite && (
             <Toolbar
               tool={tool}
+              pen={chosenPen}
               color={color}
               width={width}
               canUndo={history.canUndo}
@@ -287,6 +288,7 @@ export function PageView(p: Props) {
               eraserSize={eraserSize}
               eraserMode={eraserMode}
               onTool={ink.choose.tool}
+              onPen={ink.choose.pen}
               onEraserSize={ink.choose.eraserSize}
               onEraserMode={ink.choose.eraserMode}
               onColor={ink.choose.color}
