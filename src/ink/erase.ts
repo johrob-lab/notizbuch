@@ -1,6 +1,7 @@
 import type { Pt2 } from './gestures';
 import { boundsOf, lineWidth } from './bounds';
 import type { Removed } from './history';
+import { isShape } from './pens';
 import { hitStroke } from './stroke';
 import type { EraserSize } from '../lib/settings';
 import type { Pt, Stroke } from './types';
@@ -36,7 +37,9 @@ export function hitIndexes(strokes: readonly Stroke[], at: Pt2, radius: number, 
     const m = radius + Math.max(maxW, w);
     if (at.x < box[0] - m || at.x > box[2] + m || at.y < box[1] - m || at.y > box[3] + m) continue;
     // `hitStroke` rechnet mit der Breite des Strichs, gezeichnet wird er aber mindestens einen Bildpunkt breit.
-    if (hitStroke(s, at.x, at.y, radius + Math.max(0, w - s.w) / 2)) hits.push(i);
+    // Bei Formen zählt die Breite je Punkt, dort kommt nur die Mindestbreite dazu.
+    const extra = isShape(s.tool) ? minW / 2 : Math.max(0, w - s.w) / 2;
+    if (hitStroke(s, at.x, at.y, radius + extra)) hits.push(i);
   }
   return hits;
 }
@@ -75,25 +78,29 @@ export function densify(pts: readonly Pt[], step: number): Pt[] {
 /**
  * Radiert aus einem Strich, was der Kreis um `at` mit Radius `r` (Seiteneinheiten) berührt. `null`: nichts berührt, der
  * Strich bleibt, wie er ist. Sonst die Reststücke in ihrer Reihenfolge, jedes mit neuer `id` und sonst wie das Original
- * (auch dieselbe Breite `w`). Stücke mit weniger als zwei Punkten fallen weg, ein Strich aus einem Punkt verschwindet ganz.
+ * (bei Formen mit der Breite je Punkt, `w` ist dann der Mittelwert der Punkte des Stücks). Stücke mit weniger als zwei Punkten fallen weg, ein Strich aus einem Punkt verschwindet ganz.
  * Die Punkte werden vorher verdichtet (höchstens r / 2 auseinander), damit der Schnitt nah am Kreis liegt.
  */
 export function cutStroke(s: Stroke, at: Pt2, r: number, newId: () => string): Stroke[] | null {
   if (!hitStroke(s, at.x, at.y, r)) return null;
   if (s.pts.length < 2) return [];
-  const reach = r + s.w / 2;
+  const shape = isShape(s.tool);
+  // Reichweite je Punkt: bei Formen mit der Breite an dieser Stelle, sonst mit der Breite des Strichs.
+  const reachAt = (p: Pt): number => r + (shape ? p.w : s.w) / 2;
+  const maxReach = shape ? r + boundsOf(s).maxW / 2 : r + s.w / 2;
   const step = Math.max(r / 2, 0.1);
   // Verdichtet wird nur nah am Kreis: Der Rest des Strichs bleibt, wie er war, und die Datei wächst nicht.
   const pts: Pt[] = [s.pts[0]];
   for (let i = 1; i < s.pts.length; i++) {
     const a = s.pts[i - 1];
     const b = s.pts[i];
-    pts.push(...densifyNear(a, b, at, reach + step, step));
+    pts.push(...densifyNear(a, b, at, maxReach + step, step));
   }
   const pieces: Pt[][] = [];
   let run: Pt[] = [];
   let removed = false;
   for (const p of pts) {
+    const reach = reachAt(p);
     if ((p.x - at.x) ** 2 + (p.y - at.y) ** 2 <= reach * reach) {
       removed = true;
       if (run.length) pieces.push(run);
@@ -103,7 +110,9 @@ export function cutStroke(s: Stroke, at: Pt2, r: number, newId: () => string): S
   if (run.length) pieces.push(run);
   // Streift der Kreis den Strich nur, ohne einen Punkt zu nehmen, bleibt er unverändert (auch seine id).
   if (!removed) return null;
-  return pieces.filter((q) => q.length >= 2).map((q) => ({ ...s, id: newId(), pts: q }));
+  return pieces
+    .filter((q) => q.length >= 2)
+    .map((q) => ({ ...s, id: newId(), w: shape ? q.reduce((a, p) => a + p.w, 0) / q.length : s.w, pts: q }));
 }
 
 /**

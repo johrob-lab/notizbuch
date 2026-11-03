@@ -1,5 +1,6 @@
 import { boundsOf } from './bounds';
 import { densify } from './erase';
+import { isShape } from './pens';
 import { hitStroke } from './stroke';
 import { MM, type Stroke } from './types';
 
@@ -124,7 +125,7 @@ export function scribbleTargets(scribble: Stroke, strokes: readonly Stroke[]): s
     if (s.id === scribble.id) continue;
     const b = boundsOf(s).box;
     if (covered([b[0], b[1], b[2], b[3]], area) < MIN_COVER) continue;
-    const m = r + s.w / 2;
+    const m = r + (isShape(s.tool) ? boundsOf(s).maxW : s.w) / 2;
     const pts = densify(s.pts, 2);
     const under = pts.filter((p) => {
       const c = cols.get(Math.floor((alongX ? p.x : p.y) / COLUMN));

@@ -234,3 +234,45 @@ test('cut densifies only near the cut', () => {
 test('grazing the stroke without removing a point changes nothing', () => {
   expect(cutStroke(straight(), { x: 51.25, y: 5.5 }, 5, freshId)).toBeNull();
 });
+
+// ---------- Radieren nach der Breite an jeder Stelle (Füllfeder, Bleistift) ----------
+
+/** Gerade von (0, 0) nach (100, 0) mit 11 Punkten, die Breite steigt gleichmäßig von 1 auf 12. */
+function ramp(tool: 'fueller' | 'bleistift' = 'fueller'): Stroke {
+  const pts = Array.from({ length: 11 }, (_, i) => ({ x: i * 10, y: 0, w: 1 + i * 1.1 }));
+  return { id: 'r', tool, color: tool === 'bleistift' ? 'grau' : 'schwarz', widthMm: 0.4, t: 1, w: 6.5, pts };
+}
+
+test('the eraser hits a fountain pen stroke where it is wide and misses it where it is thin', () => {
+  const s = ramp();
+  expect(hitIndexes([s], { x: 95, y: 5 }, 1, 0.5)).toEqual([0]);
+  expect(hitIndexes([s], { x: 5, y: 5 }, 1, 0.5)).toEqual([]);
+});
+
+test('cutting a fountain pen stroke keeps the tool, the colour and the width of every point', () => {
+  const s = ramp();
+  const pieces = cutStroke(s, { x: 50, y: 0 }, 2, () => 'n' + Math.random());
+  expect(pieces).not.toBeNull();
+  expect(pieces!.length).toBe(2);
+  for (const p of pieces!) {
+    expect(p.tool).toBe('fueller');
+    expect(p.color).toBe('schwarz');
+    expect(p.w).toBeCloseTo(p.pts.reduce((a, q) => a + q.w, 0) / p.pts.length, 9);
+    // Original-Punkte behalten ihre Breite
+    for (const q of p.pts) {
+      const orig = s.pts.find((o) => o.x === q.x);
+      if (orig) expect(q.w).toBe(orig.w);
+    }
+  }
+  expect(pieces![0].pts[0].w).toBe(1);
+  expect(pieces![1].pts[pieces![1].pts.length - 1].w).toBeCloseTo(12, 9);
+});
+
+test('cutting a pencil stroke keeps it grey', () => {
+  const pieces = cutStroke(ramp('bleistift'), { x: 50, y: 0 }, 2, () => 'x');
+  expect(pieces!.length).toBe(2);
+  for (const p of pieces!) {
+    expect(p.tool).toBe('bleistift');
+    expect(p.color).toBe('grau');
+  }
+});

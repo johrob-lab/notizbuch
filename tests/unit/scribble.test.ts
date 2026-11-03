@@ -105,3 +105,19 @@ test('a word under a dense scribble is still erased', () => {
   const corners: [number, number][] = Array.from({ length: 9 }, (_, i) => [190 + (i % 2 ? 80 : 0), 990 + (i * 20) / 8]);
   expect(scribbleTargets(strokeFrom(dense(corners), 'z'), [word])).toEqual(['w']);
 });
+
+test('a scribble over fountain pen and pencil writing removes it', () => {
+  const shape = (tool: 'fueller' | 'bleistift', id: string, y: number): Stroke => ({
+    id,
+    tool,
+    color: tool === 'bleistift' ? 'grau' : 'schwarz',
+    widthMm: 0.4,
+    t: 1,
+    w: 2.4,
+    pts: [10, 20, 30, 40, 50].map((x) => ({ x, y, w: 2.4 })),
+  });
+  const pen = shape('fueller', 'f', 10);
+  const pencil = shape('bleistift', 'b', 12);
+  const s = strokeFrom(zig(4, 60, 20).map((p) => [p.x, p.y]), 'z');
+  expect(scribbleTargets(s, [pen, pencil]).sort()).toEqual(['b', 'f']);
+});

@@ -12,6 +12,7 @@ import {
   type Doubled,
   type PenKind,
 } from './pens';
+import { isShape } from './pens';
 import { MM, type InkColor, type Pt, type Stroke } from './types';
 
 /** Punkt zwischen `range.min` und `range.max`, `t` von 0 bis 1. */
@@ -258,6 +259,15 @@ function segDist2(px: number, py: number, a: Pt, b: Pt): number {
  */
 export function hitStroke(s: Stroke, x: number, y: number, r: number): boolean {
   const q = s.pts;
+  // Füllfeder und Bleistift: Die Breite gilt an jeder Stelle einzeln, je Strecke die größere halbe Breite ihrer zwei Punkte.
+  if (isShape(s.tool)) {
+    if (q.length === 1) return (q[0].x - x) ** 2 + (q[0].y - y) ** 2 <= (r + q[0].w / 2) ** 2;
+    for (let i = 1; i < q.length; i++) {
+      const rr = r + Math.max(q[i - 1].w, q[i].w) / 2;
+      if (segDist2(x, y, q[i - 1], q[i]) <= rr * rr) return true;
+    }
+    return false;
+  }
   const rr = r + s.w / 2;
   if (q.length === 1) return (q[0].x - x) ** 2 + (q[0].y - y) ** 2 <= rr * rr;
   for (let i = 1; i < q.length; i++) if (segDist2(x, y, q[i - 1], q[i]) <= rr * rr) return true;
