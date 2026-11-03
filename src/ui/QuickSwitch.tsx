@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { TAP_SLOP_PX, type GestureFilter } from '../ink/gestures';
+import { capturePointer, inside } from './pointerBits';
 import { Icon, type IconName } from './Toolbar';
 import type { Tool } from './toolChoices';
 
@@ -54,7 +55,6 @@ type Drag = {
 };
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-const inside = (e: PointerEvent, box: DOMRect) => e.clientX >= box.left && e.clientX <= box.right && e.clientY >= box.top && e.clientY <= box.bottom;
 
 /**
  * Runder Knopf, der zwischen Kugelschreiber und Radierer wechselt. Ein Tipp mit dem Stift wechselt, mit dem Finger
@@ -115,11 +115,7 @@ export function QuickSwitch({ tool, partial, pos, filter, onToggle, onMove, onOp
       far: false,
       spent: false,
     };
-    try {
-      button.setPointerCapture(e.pointerId);
-    } catch {
-      // ein künstliches Ereignis hat keinen aktiven Zeiger
-    }
+    capturePointer(button, e.pointerId);
     if (kind === 'tap' && onOpen) {
       const id = e.pointerId;
       hold.current = setTimeout(() => {

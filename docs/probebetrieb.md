@@ -332,6 +332,25 @@ Das Notizbuch schreibt nur in einem Fenster. Ein zweites Fenster liest nur und s
 
 - [ ] Klappt
 
+### 3.10 Vollbild
+
+Vollbild blendet alle Leisten aus, die Seite füllt den Bildschirm. Die Werkzeuge stehen dann in einem Ring um einen runden Knopf (Kreis) oder in einer Lasche am linken Rand (Tab). Ring und Lasche sind neu, prüfe sie gründlich. Der letzte Punkt gilt für den Firmen-PC; am iPad stellst du ihn mit der Einstellung **Gerät** nach.
+
+1. Öffne den 29.10.2026 und tippe oben auf **Vollbild**. Erwartet: Leisten und Zahnrad sind weg, nur der runde Knopf unten rechts bleibt.
+2. Prüfe den Ring mit dem Stift. Tippe kurz mit dem Stift auf den runden Knopf. Erwartet: Er wechselt zwischen Kugelschreiber und Radierer, es geht nichts auf. Halte dann den Stift etwa eine halbe Sekunde auf dem Knopf. Erwartet: Der Ring geht auf, und der Knopf hat nichts gewechselt.
+3. Tippe mit dem Finger auf den runden Knopf. Erwartet: Der Ring geht auf. Tippe auf eine Farbe, zum Beispiel **Rot (offen)**. Erwartet: Der Ring schließt sich, und der nächste Strich ist rot.
+4. Öffne den Ring noch einmal und tippe auf die Seite neben den Ring, am besten auf ein Kästchen der Karte **Morgenbriefing**. Erwartet: Der Ring schließt sich, auf dem Papier entsteht kein Strich, und das Kästchen darunter ist nicht abgehakt.
+5. Öffne den Ring und tippe auf **›** (nächster Tag), dann wieder auf den Knopf und auf **Heute**. Erwartet: Die Seite wechselt, der Ring schließt sich, und du kannst gleich schreiben. Öffne den Ring und tippe auf **Ganze Seite**. Erwartet: Die Seite ist wieder ganz im Bild.
+6. Öffne den Ring und tippe auf **Vollbild aus**. Erwartet: Die Leisten sind wieder da.
+7. Tippe auf das Zahnrad, dann auf **Werkzeuge im Vollbild** und auf **Tab**. Tippe oben auf **Heute** und dann auf **Vollbild**. Erwartet: Am linken Rand, in der Mitte der Höhe, steht ein kleiner Griff, und der runde Knopf unten rechts wechselt nur noch das Werkzeug.
+8. Tippe auf den Griff. Erwartet: Eine Leiste klappt aus, mit Kugelschreiber und Radierer ganz oben, darunter Farben und Breiten, dann Rückgängig und Wiederholen, ‹, **Heute**, ›, **Ganze Seite** und **Vollbild aus**. Tippe noch einmal auf den Griff. Erwartet: Die Leiste klappt wieder zu.
+9. Klappe die Leiste aus und tippe auf eine Farbe. Erwartet: Die Leiste bleibt offen. Schreib einen Strich auf die Seite. Erwartet: Der Strich ist da, und die Leiste bleibt offen. Passt die Leiste nicht ganz auf den Bildschirm, schiebe sie mit dem Finger auf und ab.
+10. Prüfe die Hand. Schreib im Rad-Modus (Zahnrad, **Werkzeuge im Vollbild**, **Kreis**) mehrere Zeilen und leg die Hand dabei auf den runden Knopf. Erwartet: Der Ring geht nicht auf. Mach dasselbe im Tab-Modus mit der Hand auf dem Griff und auf der ausgeklappten Leiste. Erwartet: Nichts klappt auf oder zu, nichts wird gewählt, und geschrieben ist trotzdem.
+11. Tippe in der Leiste auf **Vollbild aus**. Erwartet: Die Leisten sind wieder da. Stelle zum Schluss **Werkzeuge im Vollbild** wieder auf die Wahl, die dir besser gefällt.
+12. Am Firmen-PC: Stelle bei **Gerät** **Firmen-PC** ein, tippe auf **Vollbild** und klicke mit der Maus auf den runden Knopf. Erwartet: Der Ring zeigt nur ‹, **Heute**, ›, **Ganze Seite** und **Vollbild aus**. Klicke auf **Vollbild aus**. Stelle **Gerät** danach wieder auf **iPad**.
+
+- [ ] Klappt
+
 ## 4. Die 1 bis 2 Wochen und die Entscheidung
 
 Im Alltag brauchst du nichts Besonderes zu tun. Schreib im Notizbuch, wie du es später willst, und lass GoodNotes nebenher laufen. Wenn etwas nicht klappt, schreib dir jedes Mal auf:

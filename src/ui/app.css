@@ -182,7 +182,9 @@ body {
 
 .tb svg,
 .schnellwechsel svg,
-.ring-knopf svg {
+.ring-knopf svg,
+.lasche svg,
+.lasche-knopf svg {
   width: 24px;
   height: 24px;
   fill: none;
@@ -880,7 +882,8 @@ body {
   outline-offset: 2px;
 }
 
-.ring-knopf .farbe {
+.ring-knopf .farbe,
+.lasche-knopf .farbe {
   display: block;
   width: 22px;
   height: 22px;
@@ -888,16 +891,123 @@ body {
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.2);
 }
 
-.ring-knopf .rand {
+.ring-knopf .rand,
+.lasche-knopf .rand {
   display: block;
   border: 1.5px solid currentColor;
   border-radius: 50%;
 }
 
-.ring-knopf .zeichen {
+.ring-knopf .zeichen,
+.lasche-knopf .zeichen {
   font-size: 26px;
   font-weight: 400;
   line-height: 1;
+}
+
+/*
+ * Die Lasche im Vollbild: ein Griff am linken Rand, senkrecht in der Mitte der Bühne, und rechts daneben die Leiste mit den Knöpfen
+ * (Werkzeug, Wahl, Verlauf, Blättern, Ansicht untereinander). Sie hat kein Schutzfeld, nur Griff und Leiste fangen Zeiger. Passt die
+ * Leiste nicht in die Höhe, lässt sie sich mit dem Finger blättern. Alle Ziele sind mindestens 44 x 44 Punkte.
+ */
+.lasche {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  z-index: 4;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 44px;
+  height: 72px;
+  padding: 0;
+  border: 1px solid var(--linie);
+  border-left: 0;
+  border-radius: 0 14px 14px 0;
+  background: var(--leiste);
+  color: #2e3630;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  touch-action: manipulation;
+  cursor: pointer;
+}
+
+.lasche[aria-expanded='true'] {
+  background: var(--gruen);
+  color: #fff;
+}
+
+.lasche:focus-visible,
+.lasche-knopf:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+.lasche-leiste {
+  position: absolute;
+  left: 44px;
+  top: 50%;
+  max-height: calc(100% - 16px);
+  transform: translateY(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--linie);
+  border-radius: 14px;
+  background: var(--leiste);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  touch-action: pan-y;
+}
+
+/* Die Gruppen schrumpfen nicht: Ist die Bühne zu niedrig, blättert die Leiste. */
+.lasche-gruppe {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--linie);
+}
+
+.lasche-gruppe:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.lasche-knopf {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--linie);
+  border-radius: 50%;
+  background: var(--leiste);
+  color: #2e3630;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  touch-action: pan-y;
+  cursor: pointer;
+}
+
+.lasche-knopf[aria-pressed='true'] {
+  border-color: var(--gruen);
+  box-shadow: inset 0 0 0 2px var(--gruen);
+}
+
+.lasche-knopf:disabled {
+  color: rgb(46 54 48 / 0.35);
+  cursor: default;
 }
 
 /*

@@ -4,6 +4,7 @@ import { INK } from '../ink/types';
 import { RING, ringLayout, type Pt } from './ringLayout';
 import type { ActionButton, ToolAction } from './toolActions';
 import { ERASER_SIZES, WIDTHS } from './toolChoices';
+import { capturePointer, useActivation } from './pointerBits';
 import { Icon } from './Toolbar';
 
 // Der Ring des Rads im Vollbild: zwei Kreise aus Knöpfen um das Rad, darunter ein Schutzfeld über der ganzen Bühne. Was die Knöpfe
@@ -24,19 +25,6 @@ type Props = {
 
 /** Vier Ecken, die nach innen zeigen: zurück aus dem Vollbild. 24 x 24 wie die Symbole der Werkzeugleiste. */
 const EXIT = 'M9 4v4a1 1 0 0 1-1 1H4 M15 4v4a1 1 0 0 0 1 1h4 M20 15h-4a1 1 0 0 0-1 1v4 M4 15h4a1 1 0 0 1 1 1v4';
-
-const capture = (el: Element, id: number) => {
-  try {
-    el.setPointerCapture(id);
-  } catch {
-    // ein künstliches Ereignis hat keinen aktiven Zeiger
-  }
-};
-
-const inside = (e: PointerEvent, el: Element) => {
-  const box = el.getBoundingClientRect();
-  return e.clientX >= box.left && e.clientX <= box.right && e.clientY >= box.top && e.clientY <= box.bottom;
-};
 
 /** Was ein Knopf zeigt: Symbol, Farbe, Punkt oder ein kurzes Wort. Den ganzen Namen tragen `aria-label` und `title`. */
 export function ActionFace({ action }: { action: ToolAction }) {
@@ -85,8 +73,6 @@ export function ToolRing({ anchor, area, actions, filter, onAction, onClose }: P
   // Die Ereignisse eines Zeigers kommen auch nach einem neuen Zeichnen an: Sie rufen immer die neuesten Angaben auf.
   const latest = useRef({ filter, onClose });
   latest.current = { filter, onClose };
-  /** Welcher Zeiger auf welchem Knopf liegt (sein `key`). */
-  const pressed = useRef(new Map<number, string>());
   /** Der Zeiger, der neben den Ring tippte, und wie man das Warten auf sein Abheben beendet. */
   const leaving = useRef<{ id: number; stop(): void } | null>(null);
   const [closing, setClosing] = useState(false);
@@ -108,28 +94,10 @@ export function ToolRing({ anchor, area, actions, filter, onAction, onClose }: P
 
   const layout = ringLayout(anchor, { inner: actions.inner.length, outer: actions.outer.length }, area);
 
-  function act(b: ActionButton) {
+  const activation = useActivation(filter, (b: ActionButton) => {
     onAction(b.action);
     if (!b.keepsOpen) onClose();
-  }
-
-  function press(e: PointerEvent, b: ActionButton) {
-    if (e.pointerType === 'pen') filter.penDown(e.timeStamp);
-    else if (e.pointerType === 'touch' ? !filter.acceptTouch(e, e.timeStamp) : e.button !== 0) return;
-    if (b.disabled) return;
-    pressed.current.set(e.pointerId, b.key);
-    capture(e.currentTarget as Element, e.pointerId);
-  }
-
-  function release(e: PointerEvent, b: ActionButton) {
-    if (e.pointerType === 'pen') filter.penUp(e.timeStamp);
-    const key = pressed.current.get(e.pointerId);
-    pressed.current.delete(e.pointerId);
-    if (key !== b.key || e.type !== 'pointerup' || b.disabled) return;
-    // Kam der Stift, während der Finger auf dem Knopf lag, war der Finger die Hand.
-    if (e.pointerType === 'touch' && !filter.acceptTouch(e, e.timeStamp)) return;
-    if (inside(e, e.currentTarget as Element)) act(b);
-  }
+  });
 
   function shieldDown(e: PointerEvent) {
     if (e.target !== e.currentTarget) return; // ein Knopf
@@ -137,7 +105,7 @@ export function ToolRing({ anchor, area, actions, filter, onAction, onClose }: P
     if (e.pointerType === 'pen') filter.penDown(e.timeStamp);
     else if (e.pointerType === 'touch' && !filter.acceptTouch(e, e.timeStamp)) return; // die Hand neben dem Ring schließt ihn nicht
     if (leaving.current) return;
-    capture(e.currentTarget as Element, e.pointerId);
+    capturePointer(e.currentTarget as Element, e.pointerId);
     // Der Ring schließt, sobald dieser Zeiger abhebt, wo auch immer: Das Schutzfeld bleibt nie liegen.
     const id = e.pointerId;
     function stop() {
@@ -171,13 +139,7 @@ export function ToolRing({ anchor, area, actions, filter, onAction, onClose }: P
       aria-pressed={b.pressed}
       disabled={b.disabled}
       style={{ left: `${at.x - RING.item / 2}px`, top: `${at.y - RING.item / 2}px`, width: `${RING.item}px`, height: `${RING.item}px` }}
-      onPointerDown={(e) => press(e, b)}
-      onPointerUp={(e) => release(e, b)}
-      onPointerCancel={(e) => release(e, b)}
-      // Tastatur (und Hilfen wie Sprachsteuerung) lösen einen Klick ohne Zeigerereignisse aus, `detail` ist dann 0.
-      onClick={(e) => {
-        if (e.detail === 0) act(b);
-      }}
+      {...activation(b)}
     >
       <ActionFace action={b.action} />
     </button>

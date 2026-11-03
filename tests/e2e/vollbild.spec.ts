@@ -2,7 +2,7 @@ import { expect, test as base, type Page } from '@playwright/test';
 import { serializePage } from '../../src/ink/svg';
 import { besprechungLayout } from '../../src/pages/layouts';
 import { openSeeded, savedSettings, shareRepos } from './helpers/app';
-import { centerOf, palm, pen, touch, viewOf } from './helpers/pointer';
+import { centerOf, mouse, palm, pen, touch, viewOf } from './helpers/pointer';
 
 // Das Vollbild: Ein Knopf blendet alle Leisten aus, die Seite füllt den Bildschirm. GitHub antwortet aus einem Repo im
 // Speicher (tests/e2e/helpers/app.ts). Alles hier ist erfunden. Heute ist in allen Tests der 29.10.2026 (Wiener Zeit).
@@ -480,4 +480,164 @@ test('a window that only reads can leave fullscreen without saving', async ({ co
   expect((await savedSettings(page))?.vollbild).toEqual({ an: true, werkzeuge: 'kreis' });
   await expect(page.locator('main#app')).toHaveClass(/vollbild/);
   expect(errors, 'unbehandelte Fehler im zweiten Fenster').toEqual([]);
+});
+
+// ---------- Die Lasche ----------
+
+const TAB = { vollbild: { an: true, werkzeuge: 'tab' } };
+const GRIFF = 'button.lasche';
+const LEISTE = '.lasche-leiste';
+const LASCHE_KNOPF = '.lasche-knopf';
+const laBtn = (label: string) => `${LASCHE_KNOPF}[aria-label="${label}"]`;
+const laLabels = (page: Page) => page.locator(LASCHE_KNOPF).evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
+
+test('the tab sits at the left edge and opens and closes', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: TAB });
+  const handle = page.locator(GRIFF);
+  await expect(handle).toHaveAttribute('aria-label', 'Werkzeuge');
+  await expect(handle).toHaveAttribute('aria-expanded', 'false');
+  const box = (await handle.boundingBox())!;
+  expect(box.x).toBeLessThanOrEqual(8);
+  const stage = (await page.locator('.buehne').boundingBox())!;
+  expect(Math.abs(box.y + box.height / 2 - (stage.y + stage.height / 2))).toBeLessThanOrEqual(stage.height * 0.1);
+  await expect(page.locator(LEISTE)).toHaveCount(0);
+
+  await touch(page).tapOn(GRIFF);
+  await expect(page.locator(LEISTE)).toBeVisible();
+  await expect(page.locator(LEISTE)).toHaveAttribute('role', 'toolbar');
+  await expect(page.locator(LEISTE)).toHaveAttribute('aria-label', 'Werkzeuge im Vollbild');
+  await expect(handle).toHaveAttribute('aria-expanded', 'true');
+  expect((await handle.boundingBox())!.x).toBeLessThanOrEqual(8);
+  await touch(page).tapOn(GRIFF);
+  await expect(page.locator(LEISTE)).toHaveCount(0);
+  await expect(handle).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('a choice in the tab applies and keeps it open', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: TAB });
+  await touch(page).tapOn(GRIFF);
+  await expect(page.locator(LEISTE)).toBeVisible();
+  await touch(page).tapOn(laBtn('Blau'));
+  await expect.poll(async () => ((await savedSettings(page))?.ink as { color?: string } | undefined)?.color).toBe('blau');
+  await expect(page.locator(LEISTE)).toBeVisible();
+  await expect(page.locator(laBtn('Blau'))).toHaveAttribute('aria-pressed', 'true');
+  // Die Wahl zum Werkzeug wechselt mit ihm: Beim Radierer gibt es Größe und Art.
+  await touch(page).tapOn(laBtn('Radierer'));
+  await expect(page.locator(laBtn('Blau'))).toHaveCount(0);
+  await expect(page.locator(LEISTE)).toBeVisible();
+});
+
+test('the tab shows the groups top to bottom', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: TAB });
+  await touch(page).tapOn(GRIFF);
+  expect(await laLabels(page)).toEqual([
+    'Kugelschreiber', 'Radierer',
+    'Schwarz', 'Blau', 'Rot (offen)', 'Grün (erledigt)',
+    ...(await page.locator(`${LASCHE_KNOPF}[data-gruppe="breite"]`).evaluateAll((els) => els.map((el) => el.getAttribute('aria-label') as string))),
+    'Rückgängig', 'Wiederholen',
+    'Voriger Tag', 'Heute', 'Nächster Tag',
+    'Ganze Seite', 'Vollbild aus',
+  ]);
+});
+
+test('writing on the page leaves the tab open', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: TAB });
+  await touch(page).tapOn(GRIFF);
+  await expect(page.locator(LEISTE)).toBeVisible();
+  await strokeTop(page, 'pen', LINE);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  await expect(page.locator(LEISTE)).toBeVisible();
+  await expect(page.locator(SCHUTZ)).toHaveCount(0);
+});
+
+test('the quick switch stays in tab mode', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: TAB });
+  const wheel = page.getByTestId('quick-switch');
+  await expect(wheel).toHaveAttribute('aria-label', 'Werkzeug wechseln');
+  await expect(wheel).toHaveAttribute('data-tool', 'pen');
+  await pen(page).tapOn(QUICK);
+  await expect(wheel).toHaveAttribute('data-tool', 'eraser');
+  await afterPalmWindow(page);
+  await touch(page).tapOn(QUICK); // ein Fingertipp öffnet hier nichts
+  await expect(ring(page)).toHaveCount(0);
+  await expect(wheel).toHaveAttribute('data-tool', 'eraser');
+  await pen(page).tapOn(QUICK);
+  await expect(wheel).toHaveAttribute('data-tool', 'pen');
+});
+
+test('a palm on the tab while the pen is down does nothing', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: TAB });
+  const c = await centerOf(page, GRIFF);
+  const hand = touch(page);
+  const writer = pen(page);
+  await hand.downOn(GRIFF, c.x, c.y); // die Hand liegt schon auf dem Griff, dann setzt der Stift auf der Seite auf
+  await writer.down(200, 1000);
+  await writer.move(260, 1020);
+  await hand.upOn(GRIFF, c.x, c.y);
+  await touch(page, 1).tapOn(GRIFF); // noch eine Berührung, während der Stift schreibt
+  await writer.up(260, 1020);
+  await expect(page.locator(LEISTE)).toHaveCount(0);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+
+  await afterPalmWindow(page);
+  await palm(page).tapOn(GRIFF); // eine große Auflagefläche ist ein Handballen
+  await expect(page.locator(LEISTE)).toHaveCount(0);
+  await touch(page).tapOn(GRIFF);
+  await expect(page.locator(LEISTE)).toBeVisible();
+
+  // Dasselbe auf einem Knopf der Leiste: Während der Stift schreibt, wählt die Hand nichts.
+  const blue = await centerOf(page, laBtn('Blau'));
+  await writer.down(200, 1000);
+  await touch(page).downOn(laBtn('Blau'), blue.x, blue.y);
+  await touch(page).upOn(laBtn('Blau'), blue.x, blue.y);
+  await writer.up(200, 1000);
+  await afterPalmWindow(page);
+  await palm(page).tapOn(laBtn('Blau'));
+  expect(((await savedSettings(page))?.ink as { color?: string } | undefined)?.color).not.toBe('blau');
+});
+
+test('on the office PC the tab only has paging and Vollbild aus', async ({ page }) => {
+  await openSeeded(page, DAY, { device: 'Firmen-PC', settings: TAB });
+  await expect(page.getByTestId('quick-switch')).toHaveCount(0);
+  await page.locator(GRIFF).click();
+  await expect(page.locator(LEISTE)).toBeVisible();
+  expect(await laLabels(page)).toEqual(ONLY_VIEW);
+  await page.locator(laBtn('Vollbild aus')).click();
+  await expect(page.locator('.ansichten')).toBeVisible();
+  await expect(page.locator(GRIFF)).toHaveCount(0);
+  await expect.poll(async () => (await savedSettings(page))?.vollbild).toEqual({ an: false, werkzeuge: 'tab' });
+});
+
+test('paging in the tab changes the page and keeps the tab open', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: TAB });
+  await touch(page).tapOn(GRIFF);
+  await mouse(page).tapOn(laBtn('Nächster Tag'));
+  await waitForPageOf(page, '2026-10-30');
+  await expect(page.locator(LEISTE)).toBeVisible();
+});
+
+test('every button in the tab is at least 44 points', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: TAB });
+  await touch(page).tapOn(GRIFF);
+  const sizes = await page.evaluate(() =>
+    [...document.querySelectorAll('button.lasche, .lasche-knopf')].map((el) => {
+      const r = el.getBoundingClientRect();
+      return [r.width, r.height];
+    }),
+  );
+  expect(sizes.length).toBeGreaterThan(10);
+  for (const [w, h] of sizes) {
+    expect(w).toBeGreaterThanOrEqual(44);
+    expect(h).toBeGreaterThanOrEqual(44);
+  }
+});
+
+test('a tall strip scrolls and the tab does not block the page', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 500 });
+  await openSeeded(page, DAY, { settings: TAB });
+  await touch(page).tapOn(GRIFF);
+  const strip = page.locator(LEISTE);
+  expect(await strip.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  expect(await strip.evaluate((el) => getComputedStyle(el).overflowY)).toBe('auto');
+  expect((await topmost(page, { x: 600, y: 250 })) ?? '').not.toContain('lasche');
 });

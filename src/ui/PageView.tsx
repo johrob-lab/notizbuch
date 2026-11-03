@@ -18,6 +18,7 @@ import { routeHash, type Route } from './router';
 import { Icon, Toolbar } from './Toolbar';
 import { toolActions, type ToolAction } from './toolActions';
 import type { Tool } from './toolChoices';
+import { ToolTab } from './ToolTab';
 import { ToolWheel } from './ToolWheel';
 
 // Eine Seite zum Schreiben, ganz gleich ob Tag, Woche oder Monat: Das Layout sagt, welche Felder und welchen Hintergrund
@@ -281,8 +282,9 @@ export function PageView(p: Props) {
     }
   };
   const wheel = p.vollbild === 'kreis';
+  // Rad und Lasche zeigen dieselben Knöpfe.
   const actions =
-    wheel &&
+    full &&
     toolActions({
       ink: inkPrefs.value,
       canWrite,
@@ -292,6 +294,16 @@ export function PageView(p: Props) {
       canForward: p.nav?.canForward ?? false,
       stepLabels: p.nav?.labels ?? ['Zurück', 'Weiter'],
     });
+
+  /** Rad, Lasche und der einfache Schnellwechsel haben dieselben Angaben. */
+  const quick = {
+    tool,
+    partial: eraserMode === 'stueck',
+    pos: p.quickSwitchPos,
+    filter: palm,
+    onToggle: () => chooseTool(tool === 'pen' ? 'eraser' : 'pen'),
+    onMove: p.onQuickSwitchMove,
+  };
 
   // Eine Änderung am Kopf ändert die Kopfdaten der Fläche an Ort und Stelle (dieselbe Seite, dieselben Striche) und geht
   // dann wie ein Strich durch die Sitzung: mit allen Strichen, die die Fläche jetzt hat, und den neuen Kopfdaten.
@@ -392,30 +404,14 @@ export function PageView(p: Props) {
             <Icon name="fit" />
           </button>
         )}
-        {/* Im Vollbild mit Kreis steht das Rad da, auch ohne Schreiben: Es bietet dann Blättern, Ganze Seite und den Weg aus dem Vollbild. */}
-        {actions ? (
-          <ToolWheel
-            tool={tool}
-            partial={eraserMode === 'stueck'}
-            pos={p.quickSwitchPos}
-            filter={palm}
-            canWrite={canWrite}
-            actions={actions}
-            onToggle={() => chooseTool(tool === 'pen' ? 'eraser' : 'pen')}
-            onMove={p.onQuickSwitchMove}
-            onAction={runAction}
-          />
+        {/* Im Vollbild steht das Rad (Kreis) oder die Lasche (Tab) da, auch ohne Schreiben: Sie bieten dann Blättern, Ganze Seite und den Weg aus dem Vollbild. */}
+        {wheel && actions ? (
+          <ToolWheel {...quick} canWrite={canWrite} actions={actions} onAction={runAction} />
         ) : (
-          canWrite && (
-            <QuickSwitch
-              tool={tool}
-              partial={eraserMode === 'stueck'}
-              pos={p.quickSwitchPos}
-              filter={palm}
-              onToggle={() => chooseTool(tool === 'pen' ? 'eraser' : 'pen')}
-              onMove={p.onQuickSwitchMove}
-            />
-          )
+          <>
+            {actions && <ToolTab actions={actions} filter={palm} onAction={runAction} />}
+            {canWrite && <QuickSwitch {...quick} />}
+          </>
         )}
       </div>
     </div>
