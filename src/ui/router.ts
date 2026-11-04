@@ -133,3 +133,23 @@ export function viewRoute(r: Route, view: 'tag' | 'woche' | 'monat', today: Day 
   if (view === 'tag') return { view, key: day };
   return { view, key: view === 'woche' ? isoWeekKey(day) : monthKey(day) };
 }
+
+/** Die Beschriftung von ‹ und › je Ansicht. */
+export const STEP_LABELS: Record<Route['view'], [string, string]> = {
+  tag: ['Voriger Tag', 'Nächster Tag'],
+  woche: ['Vorige Woche', 'Nächste Woche'],
+  monat: ['Voriger Monat', 'Nächster Monat'],
+  besprechung: ['Vorige Seite', 'Nächste Seite'],
+  einstellungen: ['Vorige Seite', 'Nächste Seite'],
+};
+
+/**
+ * Wohin ‹ und › führen: Eine Seite, die ihre Schritte selbst bestimmt (`steps`), gibt sie vor, `null` ergibt die Seite selbst
+ * (ein Schritt, den es nicht gibt). Sonst geht es einen Tag, eine Woche oder einen Monat weiter.
+ */
+export function stepTargets(route: Route, steps?: Steps): { back: Route; forward: Route } {
+  return {
+    back: steps ? (steps.prev ?? route) : prevRoute(route),
+    forward: steps ? (steps.next ?? route) : nextRoute(route),
+  };
+}

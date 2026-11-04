@@ -20,6 +20,23 @@ export type InkPrefs = {
 
 export const DEFAULT_INK: InkPrefs = { tool: 'pen', color: 'schwarz', width: 'mittel', eraserSize: 'mittel', eraserMode: 'strich', scribble: true };
 
+/** Womit man im Vollbild die Werkzeuge erreicht: ein Kreis um den Stift (`kreis`) oder eine Lasche am linken Rand (`tab`). */
+export type VollbildWerkzeuge = 'kreis' | 'tab';
+/** Das Vollbild: Alle Leisten sind weg, die Seite füllt den Bildschirm. Es gilt nur auf Seiten, nie in den Einstellungen. */
+export type Vollbild = { an: boolean; werkzeuge: VollbildWerkzeuge };
+
+export const DEFAULT_VOLLBILD: Vollbild = { an: false, werkzeuge: 'kreis' };
+
+/** Das Vollbild aus den Einstellungen; jedes fehlende oder ungültige Feld kommt aus `DEFAULT_VOLLBILD`. */
+export function vollbildOf(s: { vollbild?: unknown } | null | undefined): Vollbild {
+  const raw = s?.vollbild;
+  const v = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  return {
+    an: typeof v.an === 'boolean' ? v.an : DEFAULT_VOLLBILD.an,
+    werkzeuge: v.werkzeuge === 'kreis' || v.werkzeuge === 'tab' ? v.werkzeuge : DEFAULT_VOLLBILD.werkzeuge,
+  };
+}
+
 /** Einstellungen dieses Geräts. Sie liegen nur in der IndexedDB des Geräts, der Token nirgends sonst. */
 export type Settings = {
   token: string;
@@ -35,6 +52,8 @@ export type Settings = {
   messung?: boolean;
   /** Werkzeugwahl, siehe `InkPrefs`. Ohne Angabe `DEFAULT_INK`. */
   ink?: InkPrefs;
+  /** Vollbild, siehe `Vollbild`. Ohne Angabe `DEFAULT_VOLLBILD`. */
+  vollbild?: Vollbild;
 };
 
 /** Unter diesem Schlüssel liegen die Einstellungen im Bereich `settings` der IndexedDB. */

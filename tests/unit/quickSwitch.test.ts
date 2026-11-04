@@ -1,8 +1,9 @@
 import { h, render } from 'preact';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { GestureFilter } from '../../src/ink/gestures';
-import { QuickSwitch } from '../../src/ui/QuickSwitch';
-import type { Tool } from '../../src/ui/Toolbar';
+import { GestureFilter, TAP_SLOP_PX } from '../../src/ink/gestures';
+import { HOLD_MS, QuickSwitch } from '../../src/ui/QuickSwitch';
+import type { Tool } from '../../src/ui/toolChoices';
+import { ICONS } from '../../src/ui/Toolbar';
 
 // Der Schnellwechsel teilt das Tor gegen Handballen mit der Schreibfläche: Er nimmt keine Hand an, solange der Stift
 // aufliegt, und der Stift auf ihm eröffnet die Pause für die Seite. Die Zeit der Ereignisse gibt der Test vor.
@@ -17,17 +18,20 @@ let button: HTMLButtonElement;
 let filter: GestureFilter;
 let toggles: number;
 let moves: [number, number][];
+let opens: number;
 
 function rect(left: number, top: number, width: number, height: number): DOMRect {
   return { left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) } as DOMRect;
 }
 
-function mount(tool: Tool = 'pen') {
+/** Mit `open` bekommt der Knopf `onOpen`, wie das Rad im Vollbild, mit `face` ein anderes Gesicht als das Werkzeug. */
+function mount(tool: Tool = 'pen', o: { open?: boolean; partial?: boolean; face?: { icon: 'menu'; label: string } } = {}) {
   host = document.createElement('div');
   document.body.append(host);
   render(
     h(QuickSwitch, {
       tool,
+      partial: o.partial,
       filter,
       onToggle: () => {
         toggles++;
@@ -35,6 +39,12 @@ function mount(tool: Tool = 'pen') {
       onMove: (pos) => {
         moves.push(pos);
       },
+      onOpen: o.open
+        ? () => {
+            opens++;
+          }
+        : undefined,
+      face: o.face,
     }),
     host,
   );
@@ -81,11 +91,13 @@ beforeEach(() => {
   filter = new GestureFilter();
   toggles = 0;
   moves = [];
+  opens = 0;
 });
 
 afterEach(() => {
   render(null, host);
   host.remove();
+  vi.useRealTimers();
 });
 
 test('a tap with the pen toggles, and the gate hears the pen go down and up', () => {
@@ -262,4 +274,177 @@ test('the keyboard toggles through a click without a pointer, a click that follo
 test('it shows the tool that is in use', () => {
   mount('eraser');
   expect(button.dataset.tool).toBe('eraser');
+  expect(button.getAttribute('aria-label')).toBe('Werkzeug wechseln');
+  expect(button.querySelector('path')!.getAttribute('d')).toBe(ICONS.eraser);
+});
+
+test('with a face it shows that icon and name instead of the tool, and nothing of the tool', () => {
+  mount('eraser', { open: true, partial: true, face: { icon: 'menu', label: 'Blättern und Ansicht' } });
+  expect(button.getAttribute('aria-label')).toBe('Blättern und Ansicht');
+  expect(button.title).toBe('Blättern und Ansicht');
+  expect(ICONS.menu).toBeTruthy();
+  expect(button.querySelector('path')!.getAttribute('d')).toBe(ICONS.menu);
+  expect(button.dataset.tool).toBeUndefined();
+  expect(button.dataset.modus).toBeUndefined();
+});
+
+test('without onOpen a pen that stays long on the button still toggles when it lifts', () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  mount();
+  send('pointerdown', { kind: 'pen', t: 1000 });
+  vi.advanceTimersByTime(HOLD_MS * 3);
+  send('pointerup', { kind: 'pen', t: 1000 + HOLD_MS * 3 });
+  expect(toggles).toBe(1);
+});
+
+// ---------- Mit onOpen: das Rad im Vollbild ----------
+
+test('with onOpen a pen that stays HOLD_MS on the button opens, small wobbles included, and switches nothing when it lifts', () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  mount('pen', { open: true });
+  const up = vi.spyOn(filter, 'penUp');
+  send('pointerdown', { kind: 'pen', t: 1000 });
+  vi.advanceTimersByTime(HOLD_MS - 100);
+  send('pointermove', { kind: 'pen', t: 1300, x: MIDDLE.x + 4, y: MIDDLE.y - 3 }); // der Stift zittert ein wenig, er bleibt auf dem Knopf
+  vi.advanceTimersByTime(99);
+  expect(opens).toBe(0);
+  vi.advanceTimersByTime(1);
+  expect(opens).toBe(1);
+  send('pointerup', { kind: 'pen', t: 1500, x: MIDDLE.x + 4, y: MIDDLE.y - 3 });
+  expect(toggles).toBe(0);
+  expect(opens).toBe(1);
+  expect(up).toHaveBeenCalledWith(1500);
+});
+
+test('with onOpen a pen that lifts before HOLD_MS toggles and opens nothing', () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  mount('pen', { open: true });
+  send('pointerdown', { kind: 'pen', t: 1000 });
+  vi.advanceTimersByTime(HOLD_MS - 1);
+  send('pointerup', { kind: 'pen', t: 1000 + HOLD_MS - 1 });
+  expect(toggles).toBe(1);
+  vi.advanceTimersByTime(HOLD_MS);
+  expect(opens).toBe(0);
+});
+
+test('with onOpen a pen that leaves the button ends the hold: no ring, and no switch when it lifts', () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  mount('pen', { open: true });
+  send('pointerdown', { kind: 'pen', t: 1000 });
+  send('pointermove', { kind: 'pen', t: 1100, x: MIDDLE.x - 60, y: MIDDLE.y }); // links neben dem Knopf
+  vi.advanceTimersByTime(HOLD_MS * 2);
+  send('pointermove', { kind: 'pen', t: 1900 }); // zurück auf den Knopf: Das Halten ist trotzdem vorbei
+  vi.advanceTimersByTime(HOLD_MS * 2);
+  send('pointerup', { kind: 'pen', t: 2800 });
+  expect(opens).toBe(0);
+  expect(toggles).toBe(0);
+});
+
+test('with onOpen a pen that the system takes away ends the hold: no ring, no switch, and the gate hears it is up', () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  mount('pen', { open: true });
+  const up = vi.spyOn(filter, 'penUp');
+  send('pointerdown', { kind: 'pen', t: 1000 });
+  vi.advanceTimersByTime(HOLD_MS - 100);
+  send('pointercancel', { kind: 'pen', t: 1300 });
+  vi.advanceTimersByTime(HOLD_MS);
+  expect(opens).toBe(0);
+  expect(toggles).toBe(0);
+  expect(up).toHaveBeenCalledWith(1300);
+});
+
+test('with onOpen nothing opens after the button is gone', () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  mount('pen', { open: true });
+  send('pointerdown', { kind: 'pen', t: 1000 });
+  render(null, host);
+  vi.advanceTimersByTime(HOLD_MS * 2);
+  expect(opens).toBe(0);
+});
+
+test('with onOpen a finger tap opens instead of moving, also when it wobbles less than the slop', async () => {
+  mount('pen', { open: true });
+  const rest = place();
+  send('pointerdown', { kind: 'touch', t: 1000 });
+  send('pointerup', { kind: 'touch', t: 1040 });
+  await settle();
+  expect(opens).toBe(1);
+
+  send('pointerdown', { kind: 'touch', t: 2000 });
+  send('pointermove', { kind: 'touch', t: 2010, x: MIDDLE.x + TAP_SLOP_PX - 2, y: MIDDLE.y });
+  await settle();
+  expect(place()).toEqual(rest); // ein Tipp verschiebt den Knopf nicht, auch nicht ein wenig
+  send('pointerup', { kind: 'touch', t: 2040, x: MIDDLE.x + TAP_SLOP_PX - 2, y: MIDDLE.y });
+  await settle();
+  expect(opens).toBe(2);
+  expect(place()).toEqual(rest);
+  expect(moves).toEqual([]);
+  expect(toggles).toBe(0);
+});
+
+test('with onOpen a finger that goes further still moves the button and opens nothing', async () => {
+  mount('pen', { open: true });
+  drag(1000, -300, -200);
+  await settle();
+  expect(moves).toHaveLength(1);
+  expect(opens).toBe(0);
+
+  // Auch ein Finger, der weit zieht und zurückkommt, hat verschoben und nicht getippt.
+  send('pointerdown', { kind: 'touch', t: 2000 });
+  send('pointermove', { kind: 'touch', t: 2010, x: MIDDLE.x - 100, y: MIDDLE.y });
+  send('pointermove', { kind: 'touch', t: 2020 });
+  send('pointerup', { kind: 'touch', t: 2030 });
+  await settle();
+  expect(opens).toBe(0);
+});
+
+test('with onOpen the hand opens nothing: not while the pen is down, not in the pause, not when the pen came while it lay there, not a palm', async () => {
+  mount('pen', { open: true });
+  filter.penDown(900);
+  send('pointerdown', { kind: 'touch', t: 1000 });
+  send('pointerup', { kind: 'touch', t: 1040 });
+  filter.penUp(1100);
+  send('pointerdown', { kind: 'touch', t: 1200 }); // in der Pause nach dem Stift
+  send('pointerup', { kind: 'touch', t: 1240 });
+
+  send('pointerdown', { kind: 'touch', t: 2000 }); // die Hand liegt auf dem Knopf, dann setzt der Stift auf der Seite auf
+  filter.penDown(2010);
+  send('pointerup', { kind: 'touch', t: 2040 });
+  filter.penUp(2100);
+
+  send('pointerdown', { kind: 'touch', t: 3000, size: 150 });
+  send('pointerup', { kind: 'touch', t: 3040, size: 150 });
+  await settle();
+  expect(opens).toBe(0);
+  expect(moves).toEqual([]);
+
+  send('pointerdown', { kind: 'touch', t: 4000 });
+  send('pointerup', { kind: 'touch', t: 4040 });
+  expect(opens).toBe(1);
+});
+
+test('with onOpen a mouse click opens, a mouse that drags does not, and neither moves or toggles', async () => {
+  mount('pen', { open: true });
+  const rest = place();
+  send('pointerdown', { kind: 'mouse', t: 1000 });
+  send('pointerup', { kind: 'mouse', t: 1040 });
+  expect(opens).toBe(1);
+
+  send('pointerdown', { kind: 'mouse', t: 2000 });
+  send('pointermove', { kind: 'mouse', t: 2010, x: MIDDLE.x - 200, y: MIDDLE.y - 100 });
+  send('pointerup', { kind: 'mouse', t: 2020, x: MIDDLE.x - 200, y: MIDDLE.y - 100 });
+  await settle();
+  expect(opens).toBe(1);
+  expect(place()).toEqual(rest);
+  expect(toggles).toBe(0);
+  expect(moves).toEqual([]);
+});
+
+test('with onOpen the keyboard opens the tools like a click, so every tool and the way out of fullscreen stay reachable', () => {
+  mount('pen', { open: true });
+  button.click(); // detail 0
+  expect(opens).toBe(1);
+  expect(toggles).toBe(0);
+  button.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true })); // der Klick nach einem Zeiger: Der Zeiger hat schon gewirkt
+  expect(opens).toBe(1);
 });

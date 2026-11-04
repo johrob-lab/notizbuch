@@ -5,6 +5,7 @@ import {
   parseRoute,
   prevRoute,
   routeHash,
+  stepTargets,
   shownDay,
   shownMonth,
   viewRoute,
@@ -304,4 +305,11 @@ test('the route a button leads to is always one that parseRoute reads back', () 
       expect(parseRoute(routeHash(target)), `${routeHash(route)} nach ${view}`).toEqual(target);
     }
   }
+});
+
+test('stepTargets', () => {
+  const day = { view: 'tag', key: '2026-10-29' } as const;
+  expect(stepTargets(day)).toEqual({ back: prevRoute(day), forward: nextRoute(day) });
+  const m = { view: 'besprechung', key: 'x', n: 1 } as const;
+  expect(stepTargets(m, { prev: null, next: { ...m, n: 2 } })).toEqual({ back: m, forward: { ...m, n: 2 } });
 });

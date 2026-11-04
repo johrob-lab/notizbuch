@@ -181,7 +181,10 @@ body {
 }
 
 .tb svg,
-.schnellwechsel svg {
+.schnellwechsel svg,
+.ring-knopf svg,
+.lasche svg,
+.lasche-knopf svg {
   width: 24px;
   height: 24px;
   fill: none;
@@ -352,6 +355,20 @@ body {
   }
 }
 
+/*
+ * Das iPad im Hochformat (834 Punkte) ist am engsten: Mit dem Knopf für das Vollbild rücken die Knöpfe näher zusammen, damit der
+ * Stand nicht auf mehr Zeilen umbricht und die Leiste höher wird (die Seite würde springen). Die Knöpfe bleiben 44 Punkte hoch.
+ */
+@media (max-width: 900px) {
+  .topbar {
+    gap: 4px;
+  }
+
+  .pill {
+    padding: 0 8px;
+  }
+}
+
 /* Erst wenn es gar nicht mehr passt, bricht die Leiste um. */
 @media (max-width: 670px) {
   .topbar {
@@ -430,6 +447,53 @@ body {
 /* Mit Hinweis (das Fenster liest nur, oder der Zugang wird umgestellt) schweben die Meldungen unter dem Hinweis, damit sie ihn nicht verdecken. */
 .mit-hinweis .meldungen {
   margin-top: 48px;
+}
+
+/*
+ * Vollbild: Die Leiste oben nimmt keine Höhe, die Seite füllt das Fenster. Die Meldungen und der Stand (nur wenn etwas nicht
+ * gesichert ist, oben rechts) liegen über der Seite. Der Stand fängt keine Berührung ab, nur sein Link zu den Einstellungen.
+ */
+#app.vollbild {
+  position: relative;
+}
+
+.vollbild .topbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  pointer-events: none;
+}
+
+.vollbild .status {
+  position: absolute;
+  top: max(8px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 0.9);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.15);
+}
+
+.vollbild .status a {
+  pointer-events: auto;
+}
+
+.vollbild .meldungen {
+  top: 0;
+  margin-top: 44px;
+}
+
+.vollbild.mit-hinweis .status {
+  top: 52px;
+}
+
+.vollbild.mit-hinweis .meldungen {
+  margin-top: 92px;
 }
 
 /* Solange der Zugang umgestellt wird, ist die Leiste und die Seite gesperrt (`inert`): blasser, denn die App ist nicht kaputt, sie wartet. */
@@ -765,6 +829,185 @@ body {
 
 .schnellwechsel[data-tool='eraser'] {
   background: #7a3b36;
+}
+
+/*
+ * Das Rad im Vollbild: Der Schnellwechsel öffnet einen Ring aus Knöpfen. Die Hülle `.rad` hat keine eigene Box, Rad und Ring liegen
+ * direkt auf der Bühne. Das Schutzfeld deckt die ganze Bühne ab (Fläche, Karten, Rad, Hinweise) und fängt jeden Zeiger daneben,
+ * die Knöpfe liegen darauf.
+ */
+.rad {
+  display: contents;
+}
+
+.ring-schutz {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: rgb(0 0 0 / 0.08);
+  touch-action: none;
+}
+
+.ring-knopf {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 0;
+  border: 1px solid var(--linie);
+  border-radius: 50%;
+  background: var(--leiste);
+  color: #2e3630;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  touch-action: none;
+  cursor: pointer;
+}
+
+.ring-knopf[aria-pressed='true'] {
+  border-color: var(--gruen);
+  box-shadow: inset 0 0 0 2px var(--gruen), 0 2px 8px rgb(0 0 0 / 0.25);
+}
+
+.ring-knopf:disabled {
+  color: rgb(46 54 48 / 0.35);
+  cursor: default;
+}
+
+.ring-knopf:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+.ring-knopf .farbe,
+.lasche-knopf .farbe {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.2);
+}
+
+.ring-knopf .rand,
+.lasche-knopf .rand {
+  display: block;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+.ring-knopf .zeichen,
+.lasche-knopf .zeichen {
+  font-size: 26px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+/*
+ * Die Lasche im Vollbild: ein Griff am linken Rand, senkrecht in der Mitte der Bühne, und rechts daneben die Leiste mit den Knöpfen
+ * (Werkzeug, Wahl, Verlauf, Blättern, Ansicht untereinander). Sie hat kein Schutzfeld, nur Griff und Leiste fangen Zeiger. Passt die
+ * Leiste nicht in die Höhe, lässt sie sich mit dem Finger blättern. Alle Ziele sind mindestens 44 x 44 Punkte.
+ */
+.lasche {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  z-index: 4;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 44px;
+  height: 72px;
+  padding: 0;
+  border: 1px solid var(--linie);
+  border-left: 0;
+  border-radius: 0 14px 14px 0;
+  background: var(--leiste);
+  color: #2e3630;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  touch-action: manipulation;
+  cursor: pointer;
+}
+
+.lasche[aria-expanded='true'] {
+  background: var(--gruen);
+  color: #fff;
+}
+
+.lasche:focus-visible,
+.lasche-knopf:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+.lasche-leiste {
+  position: absolute;
+  left: 44px;
+  top: 50%;
+  max-height: calc(100% - 16px);
+  transform: translateY(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--linie);
+  border-radius: 14px;
+  background: var(--leiste);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+  touch-action: pan-y;
+}
+
+/* Die Gruppen schrumpfen nicht: Ist die Bühne zu niedrig, blättert die Leiste. */
+.lasche-gruppe {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--linie);
+}
+
+.lasche-gruppe:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.lasche-knopf {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--linie);
+  border-radius: 50%;
+  background: var(--leiste);
+  color: #2e3630;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  touch-action: pan-y;
+  cursor: pointer;
+}
+
+.lasche-knopf[aria-pressed='true'] {
+  border-color: var(--gruen);
+  box-shadow: inset 0 0 0 2px var(--gruen);
+}
+
+.lasche-knopf:disabled {
+  color: rgb(46 54 48 / 0.35);
+  cursor: default;
 }
 
 /*

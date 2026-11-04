@@ -1,8 +1,10 @@
 import type { ComponentChildren } from 'preact';
-import { INK, WIDTH_MM, type InkColor, type WidthName } from '../ink/types';
+import { INK, type InkColor, type WidthName } from '../ink/types';
 import type { EraserMode, EraserSize } from '../lib/settings';
 
-export type Tool = 'pen' | 'eraser';
+import { COLORS, ERASER_MODES, ERASER_SIZES, WIDTHS, mm, type Tool } from './toolChoices';
+
+export type { Tool };
 
 type Props = {
   tool: Tool;
@@ -26,32 +28,6 @@ type Props = {
   onFit(): void;
 };
 
-const COLORS: { id: InkColor; label: string }[] = [
-  { id: 'schwarz', label: 'Schwarz' },
-  { id: 'blau', label: 'Blau' },
-  { id: 'rot', label: 'Rot (offen)' },
-  { id: 'gruen', label: 'Grün (erledigt)' },
-];
-
-const WIDTHS: { id: WidthName; name: string; dot: number }[] = [
-  { id: 'fein', name: 'Fein', dot: 3 },
-  { id: 'mittel', name: 'Mittel', dot: 5 },
-  { id: 'breit', name: 'Breit', dot: 8 },
-];
-
-const ERASER_SIZES: { id: EraserSize; name: string; dot: number }[] = [
-  { id: 'klein', name: 'Radierer klein', dot: 6 },
-  { id: 'mittel', name: 'Radierer mittel', dot: 11 },
-  { id: 'gross', name: 'Radierer groß', dot: 17 },
-];
-
-const ERASER_MODES: { id: EraserMode; name: string }[] = [
-  { id: 'strich', name: 'Ganzer Strich' },
-  { id: 'stueck', name: 'Nur Stück' },
-];
-
-const mm = (w: WidthName) => `${String(WIDTH_MM[w]).replace('.', ',')} mm`;
-
 /** Symbole als Pfade, 24 x 24. */
 export const ICONS = {
   pen: 'M4 20l1-4L16.5 4.5a2 2 0 0 1 2.8 0l.2.2a2 2 0 0 1 0 2.8L8 19z M14 7l3 3',
@@ -60,9 +36,13 @@ export const ICONS = {
   redo: 'M15 14l5-5-5-5 M20 9H9.5a5.5 5.5 0 0 0 0 11H13',
   // vier Ecken, die nach außen zeigen: die Seite im ganzen Bild
   fit: 'M4 9V5a1 1 0 0 1 1-1h4 M15 4h4a1 1 0 0 1 1 1v4 M20 15v4a1 1 0 0 1-1 1h-4 M9 20H5a1 1 0 0 1-1-1v-4',
+  // drei Punkte: mehr dahinter (das Rad, wenn es kein Werkzeug zu wechseln gibt)
+  menu: 'M4.8 12a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0 M10.8 12a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0 M16.8 12a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0',
 };
 
-export function Icon({ name }: { name: keyof typeof ICONS }) {
+export type IconName = keyof typeof ICONS;
+
+export function Icon({ name }: { name: IconName }) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d={ICONS[name]} />

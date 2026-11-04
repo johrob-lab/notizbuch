@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks';
 import { formatDay } from '../lib/dates';
-import type { Settings } from '../lib/settings';
+import { vollbildOf, type Settings } from '../lib/settings';
 import { AccessForm, type AccessValues } from './AccessForm';
 import { FAILED } from './texts';
 import { inkPrefs, setInkPrefs } from './inkPrefs';
@@ -9,7 +9,7 @@ import { inkPrefs, setInkPrefs } from './inkPrefs';
 // (der nächste Strich schreibt damit) und wird gespeichert. Der Token steht hier nie: nur, dass er gespeichert ist und bis
 // wann er gilt. „Zugang ändern“ öffnet dasselbe Formular wie die Einrichtung, immer leer.
 
-type Choices = Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung'>;
+type Choices = Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung' | 'vollbild'>;
 
 type Props = {
   settings: Settings;
@@ -34,6 +34,10 @@ const SMOOTHING: Option<Settings['smoothing']>[] = [
 const ON_OFF: Option<'an' | 'aus'>[] = [
   { value: 'an', label: 'an' },
   { value: 'aus', label: 'aus' },
+];
+const VOLLBILD_TOOLS: Option<'kreis' | 'tab'>[] = [
+  { value: 'kreis', label: 'Kreis' },
+  { value: 'tab', label: 'Tab' },
 ];
 const DEVICES: Option<Settings['device']>[] = [
   { value: 'iPad', label: 'iPad' },
@@ -80,6 +84,13 @@ export function SettingsPage({ settings, warning, passive, onChange, onAccess }:
           onPick={(next) => pick({ prediction: next === 'an' })}
         />
         <Choice title="Gerät" name="geraet" value={settings.device} options={DEVICES} onPick={(device) => pick({ device })} />
+        <Choice
+          title="Werkzeuge im Vollbild"
+          name="vollbild-werkzeuge"
+          value={vollbildOf(settings).werkzeuge}
+          options={VOLLBILD_TOOLS}
+          onPick={(werkzeuge) => pick({ vollbild: { ...vollbildOf(settings), werkzeuge } })}
+        />
         <Choice
           title="Kritzeln löscht"
           name="kritzeln"
