@@ -114,6 +114,10 @@ test('the settings page shows the choices of this device and the access, without
   await toSettings(page);
   await expect(page.getByRole('heading', { name: 'Einstellungen' })).toBeVisible();
   await expect(group(page, 'Glättung').locator('label')).toHaveText(['aus', 'leicht', 'mittel', 'stark']);
+  // Die Füllfeder glättet mit ihren eigenen Reglern: Die Zeile unter der Glättung sagt es und wie man sie erreicht.
+  const smoothingHint = 'Gilt für Kugelschreiber und Fineliner. Die Füllfeder hat eigene Regler: zweimal auf die Füllfeder tippen.';
+  await expect(group(page, 'Glättung').getByText(smoothingHint, { exact: true })).toBeVisible();
+  await expect(group(page, 'Glättung')).toHaveAccessibleDescription(smoothingHint);
   await expect(group(page, 'Vorhersage').locator('label')).toHaveText(['an', 'aus']);
   await expect(group(page, 'Gerät').locator('label')).toHaveText(['iPad', 'Firmen-PC']);
   await expect(group(page, 'Glättung').getByRole('radio', { name: 'mittel' })).toBeChecked();

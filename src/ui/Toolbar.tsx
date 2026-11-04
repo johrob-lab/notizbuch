@@ -19,6 +19,8 @@ type Props = {
   onTool(tool: Tool): void;
   /** Ein Stift wurde angetippt. `from` ist das Rechteck seines Knopfs: Darunter öffnet ein zweiter Tipp das Fenster der Füllfeder. */
   onPen(pen: PenKind, from: ButtonRect): void;
+  /** Das Regler-Fenster der Füllfeder ist offen. Ihr Knopf sagt es (`aria-expanded`), solange sie gewählt ist: Dann öffnet und schließt er es. */
+  fuellerOpen: boolean;
   onEraserSize(size: EraserSize): void;
   onEraserMode(mode: EraserMode): void;
   onColor(color: InkColor): void;
@@ -77,19 +79,23 @@ export function Toolbar(p: Props) {
   return (
     <div class="werkzeuge" role="toolbar" aria-label="Werkzeuge">
       <Group label="Werkzeug">
-        {PEN_CHOICES.map((k) => (
-          <button
-            key={k}
-            class="tb"
-            type="button"
-            aria-pressed={p.tool === 'pen' && p.pen === k}
-            aria-label={PEN_NAMES[k]}
-            title={PEN_NAMES[k]}
-            onClick={(e) => p.onPen(k, e.currentTarget.getBoundingClientRect())}
-          >
-            <Icon name={PEN_ICON[k]} />
-          </button>
-        ))}
+        {PEN_CHOICES.map((k) => {
+          const chosen = p.tool === 'pen' && p.pen === k;
+          return (
+            <button
+              key={k}
+              class="tb"
+              type="button"
+              aria-pressed={chosen}
+              aria-expanded={k === 'fueller' && chosen ? p.fuellerOpen : undefined}
+              aria-label={PEN_NAMES[k]}
+              title={PEN_NAMES[k]}
+              onClick={(e) => p.onPen(k, e.currentTarget.getBoundingClientRect())}
+            >
+              <Icon name={PEN_ICON[k]} />
+            </button>
+          );
+        })}
         <button class="tb" type="button" aria-pressed={p.tool === 'eraser'} aria-label="Radierer" title="Radierer" onClick={() => p.onTool('eraser')}>
           <Icon name="eraser" />
         </button>

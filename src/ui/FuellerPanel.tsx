@@ -20,9 +20,9 @@ export type ButtonRect = { left: number; top: number; bottom: number; width: num
 export type PanelAt = { at: 'leiste'; rect: ButtonRect } | { at: 'mitte' };
 
 /**
- * Das offene Fenster, `null`, wenn keines offen ist. Es schließt bei einem Tipp daneben, wenn ein anderes Werkzeug oder ein anderer
- * Stift gilt und wenn die App in den Hintergrund geht (hier), bei einem weiteren Tipp auf die Füllfeder (`inkTools`), mit seiner
- * Seite und wenn das Vollbild wechselt (`PageView`).
+ * Das offene Fenster, `null`, wenn keines offen ist. Es schließt bei einem Tipp daneben, mit Escape, wenn ein anderes Werkzeug oder
+ * ein anderer Stift gilt und wenn die App in den Hintergrund geht (hier), bei einem weiteren Tipp auf die Füllfeder (`inkTools`),
+ * mit seiner Seite und wenn das Vollbild wechselt (`PageView`).
  */
 export const fuellerPanel = signal<PanelAt | null>(null);
 
@@ -175,6 +175,16 @@ function Panel({ at, filter }: { at: PanelAt; filter: GestureFilter }) {
     return () => document.removeEventListener('visibilitychange', hidden);
   }, []);
 
+  // Escape schließt das Fenster, wo auch immer der Fokus steht: im Fenster oder noch auf dem Knopf, der es geöffnet hat. Hat schon
+  // jemand anderes Escape verbraucht (ein Eingabefeld, das seine Änderung verwirft), bleibt es offen.
+  useLayoutEffect(() => {
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) close();
+    };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, []);
+
   // Geht das Fenster, während ein Zeiger noch aufliegt, wartet nichts mehr auf ihn. Was ein Regler bis dahin bekam, bleibt.
   useLayoutEffect(
     () => () => {
@@ -286,8 +296,11 @@ function Panel({ at, filter }: { at: PanelAt; filter: GestureFilter }) {
       onPointerDown={shieldDown}
       onPointerUp={shieldUp}
       onPointerCancel={shieldUp}
-      // Ohne das machte der Browser aus einer Berührung hier einen Klick auf das, was nach dem Schließen darunter liegt.
-      onTouchStart={(e) => e.preventDefault()}
+      // Ohne das machte der Browser aus einer Berührung hier einen Klick auf das, was nach dem Schließen darunter liegt. Nur auf dem
+      // Schutzfeld selbst: Im Fenster schließt eine Berührung nichts, und ist es höher als die Bühne, blättert der Finger darin.
+      onTouchStart={(e) => {
+        if (e.target === e.currentTarget) e.preventDefault();
+      }}
       onContextMenu={(e) => e.preventDefault()}
       // Unter dem Schutzfeld blättert und zoomt die Seite nicht. Ist das Fenster höher als die Bühne, blättert es selbst.
       onWheel={(e) => {

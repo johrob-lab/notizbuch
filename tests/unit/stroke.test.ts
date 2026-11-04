@@ -479,21 +479,38 @@ function feed(b: StrokeBuilder, pts: XY[], pressure = 0.45, tilt: [number, numbe
 const widths = (pts: readonly { w: number }[]): number[] => pts.map((p) => p.w);
 
 test('a resting, jittering pen does not grow a blob', () => {
-  const b = fueller();
-  const start = { x: 100, y: 100 };
-  const line = straight(start, [1, 1], 20, 0.1);
-  feed(b, [start, ...line]);
-  const moving = b.points()[b.points().length - 1].w;
-  const n = b.points().length;
-  // Der Stift bleibt am Ende stehen und zittert: 200 Punkte im Umkreis von 0,3 Einheiten (3 Bildschirmpunkte).
-  feed(b, around(line[line.length - 1], 0.3, 200, random(4711)));
-  // Beim Schreiben (points und stroke): Die Verjüngung am Ende kommt erst beim Abheben dazu.
-  const resting = widths(b.points().slice(n));
+  /**
+   * Der Stift zieht 20 Einheiten in Richtung `dir`, bleibt am Ende stehen und zittert: 200 Punkte im Umkreis von 0,3 Einheiten
+   * (3 Bildschirmpunkte). Die Breite in der Bewegung davor und die Breiten im Stand, beim Schreiben (points und stroke): Die
+   * Verjüngung am Ende kommt erst beim Abheben dazu.
+   */
+  const rest = (dir: [number, number], seed: number) => {
+    const b = fueller();
+    const start = { x: 100, y: 100 };
+    const line = straight(start, dir, 20, 0.1);
+    feed(b, [start, ...line]);
+    const moving = b.points()[b.points().length - 1].w;
+    const n = b.points().length;
+    feed(b, around(line[line.length - 1], 0.3, 200, random(seed)));
+    return { moving, resting: widths(b.points().slice(n)), stroked: widths(b.stroke().pts.slice(n)) };
+  };
+  // Entlang der Feder (nach rechts unten).
+  const { moving, resting, stroked } = rest([1, 1], 4711);
   expect(resting.length).toBeGreaterThan(100);
   expect(Math.max(...resting)).toBeLessThanOrEqual(1.05 * Math.min(...resting));
   // Kein Klecks: Im Stand wird die Linie auch nicht breiter als in der Bewegung davor.
   expect(Math.max(...resting)).toBeLessThanOrEqual(1.05 * moving);
-  expect(widths(b.stroke().pts.slice(n))).toEqual(resting);
+  expect(stroked).toEqual(resting);
+  // Quer zur Feder (nach rechts oben) ist die Breite am empfindlichsten: Nach der geraden Bewegung ist das Seil der Richtung
+  // straff, das Zittern zieht den Anker noch um höchstens seine eigene Breite nach und dreht die Richtung dabei ein wenig.
+  // Über 200 Startwerte gemessen: höchstens 4,0 % breiter als in der Bewegung, Spanne im Stand höchstens 3,6 %.
+  for (let seed = 1; seed <= 200; seed++) {
+    const across = rest([1, -1], seed);
+    const widest = Math.max(...across.resting);
+    expect(across.resting.length, `Startwert ${seed}`).toBeGreaterThan(100);
+    expect(widest, `Startwert ${seed}`).toBeLessThanOrEqual(1.05 * across.moving);
+    expect(widest, `Startwert ${seed}`).toBeLessThanOrEqual(1.05 * Math.min(...across.resting));
+  }
 });
 
 test('jitter at the start does not eat the taper', () => {

@@ -306,6 +306,7 @@ export function PageView(p: Props) {
               eraserMode={eraserMode}
               onTool={ink.choose.tool}
               onPen={ink.choose.pen}
+              fuellerOpen={fuellerPanel.value !== null}
               onEraserSize={ink.choose.eraserSize}
               onEraserMode={ink.choose.eraserMode}
               onColor={ink.choose.color}

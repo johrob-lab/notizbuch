@@ -29,7 +29,6 @@ test.use({ serviceWorkers: 'block', viewport: { width: 1200, height: 1700 } });
 const DAY = '#/tag/2026-10-29';
 const TAG = '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg';
 const LIVE = 'canvas[data-layer="live"]';
-const PREDICTION = 'canvas[data-layer="vorhersage"]';
 
 /** Wählt den Stift über die gespeicherte Werkzeugwahl (alle Felder ausgeschrieben) und lädt neu. */
 async function choosePen(page: Page, chosen: PenKind, width: WidthName = 'mittel'): Promise<void> {
@@ -47,32 +46,6 @@ const rgb = (hex: string): number[] => [1, 3, 5].map((i) => parseInt(hex.slice(i
 const pencilOnPaper = (): number[] => rgb(INK.grau).map((v, i) => BLEISTIFT_OPACITY * v + (1 - BLEISTIFT_OPACITY) * rgb(PAPER)[i]);
 
 const describe = (c: number[]): string => c.map(Math.round).join(', ');
-
-/**
- * Die Farben, wie man sie auf dem Bildschirm sieht (alle Ebenen übereinander, jede mit ihrer Deckkraft), im Rechteck
- * zwischen zwei Orten der Seite: ein Bildschirmfoto, das der Browser zurück in Bildpunkte liest.
- */
-async function shownColours(page: Page, from: [number, number], to: [number, number]): Promise<number[][]> {
-  const [a, b] = await page.evaluate(
-    ([x0, y0, x1, y1]) => [window.__notizbuch.toClient(x0, y0), window.__notizbuch.toClient(x1, y1)],
-    [...from, ...to],
-  );
-  const png = await page.screenshot({ clip: { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y } });
-  return page.evaluate(async (data) => {
-    const img = new Image();
-    img.src = `data:image/png;base64,${data}`;
-    await img.decode();
-    const c = document.createElement('canvas');
-    c.width = img.width;
-    c.height = img.height;
-    const ctx = c.getContext('2d')!;
-    ctx.drawImage(img, 0, 0);
-    const d = ctx.getImageData(0, 0, c.width, c.height).data;
-    const out: number[][] = [];
-    for (let i = 0; i < d.length; i += 4) out.push([d[i], d[i + 1], d[i + 2]]);
-    return out;
-  }, png.toString('base64'));
-}
 
 /** Die dunkelste Farbe einer Liste. */
 const darkestOf = (colours: number[][]): number[] => colours.reduce((a, b) => (a[0] + a[1] + a[2] <= b[0] + b[1] + b[2] ? a : b));

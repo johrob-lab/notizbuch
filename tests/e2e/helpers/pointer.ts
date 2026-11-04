@@ -5,6 +5,8 @@ import type { Page } from '@playwright/test';
 // Weg zu Bildschirmkoordinaten kennt die App (`window.__notizbuch.toClient`).
 
 export type Kind = 'pen' | 'touch' | 'mouse';
+/** Ein Punkt eines Wegs in Seiteneinheiten. Mit `pressure` meldet der Zeiger dort diesen Druck statt seines eigenen. */
+export type PathPoint = [x: number, y: number, pressure?: number];
 /** `hover` ist eine Bewegung ohne Berührung (`pointermove` ohne gedrückte Taste). */
 type Phase = 'down' | 'move' | 'up' | 'hover';
 /** Druck und Neigung, die ein Zeiger mit jedem Ereignis meldet. */
@@ -117,8 +119,8 @@ export function centerOf(page: Page, selector: string): Promise<{ x: number; y: 
 }
 
 export type Pointer = {
-  /** Zeichnet einen Weg: aufsetzen am ersten Punkt, zu jedem weiteren bewegen, am letzten abheben. */
-  stroke(points: [number, number][]): Promise<void>;
+  /** Zeichnet einen Weg: aufsetzen am ersten Punkt, zu jedem weiteren bewegen, am letzten abheben. Ein Punkt kann seinen Druck mitbringen. */
+  stroke(points: PathPoint[]): Promise<void>;
   tap(x: number, y: number): Promise<void>;
   down(x: number, y: number): Promise<void>;
   move(x: number, y: number): Promise<void>;
@@ -147,8 +149,17 @@ const BASE_ID: Record<Kind, number> = { mouse: 1, pen: 11, touch: 21 };
 
 function pointer(page: Page, kind: Kind, n: number, size = FINGER_SIZE, feel = PLAIN): Pointer {
   const id = BASE_ID[kind] + n;
-  const step = (phase: Phase, [x, y]: [number, number]): Step => ({ kind, id, primary: n === 0, phase, x, y, size, feel });
-  const path = (points: [number, number][]): Step[] => [
+  const step = (phase: Phase, [x, y, pressure]: PathPoint): Step => ({
+    kind,
+    id,
+    primary: n === 0,
+    phase,
+    x,
+    y,
+    size,
+    feel: pressure === undefined ? feel : { ...feel, pressure },
+  });
+  const path = (points: PathPoint[]): Step[] => [
     step('down', points[0]),
     ...points.slice(1).map((p) => step('move', p)),
     step('up', points[points.length - 1]),

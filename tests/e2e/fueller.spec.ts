@@ -1,9 +1,11 @@
 import { expect, test as base, type Page } from '@playwright/test';
 import { DEFAULT_FUELLER, DEFAULT_PEN_ANGLE, nibShape, penAngle, pressureFactor, type FuellerSettings, type PenKind } from '../../src/ink/pens';
+import { serializePage } from '../../src/ink/svg';
 import { INK, MM, WIDTH_MM } from '../../src/ink/types';
 import type { InkPrefs } from '../../src/lib/settings';
-import { bringToForeground, changeStoredSettings, openSeeded, queued, savedSettings, sendToBackground } from './helpers/app';
-import { centerOf, inkNear, mouse, onPixelCentre, palm, pen, touch, viewOf, wheel } from './helpers/pointer';
+import { bringToForeground, changeStoredSettings, lastHead, openSeeded, queued, savedSettings, sendToBackground } from './helpers/app';
+import { centerOf, inkNear, mouse, onPixelCentre, palm, pen, touch, viewOf, wheel, type PathPoint } from './helpers/pointer';
+import { touchscreen } from './helpers/touch';
 
 // Die Füllfeder mit ihren Einstellungen auf der Schreibfläche, ihre Spitze, wenn der Stift über der Seite schwebt, und ihr
 // Regler-Fenster. Jeder Test wählt Stift und Einstellungen über die gespeicherte Werkzeugwahl und lädt die App neu.
@@ -32,6 +34,11 @@ const TIP = 'div.spitze';
 const TIP_MIN = 8;
 /** Nennbreite „mittel“ in Seiteneinheiten. */
 const NOM_W = WIDTH_MM.mittel * MM;
+/** › in der Leiste oben: der nächste Tag. */
+const NEXT_DAY = 'a[aria-label="Nächster Tag"]';
+/** Der Anfang einer Datei, die sich nicht lesen lässt, wie ein anderes Gerät sie hinterlassen könnte. */
+const BROKEN = '<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="1"';
+const UNREADABLE = 'Diese Seite lässt sich nicht lesen und wird nicht verändert.';
 
 /** Die ganze Werkzeugwahl, alle Felder ausgeschrieben: der Stift `chosen`, schwarz, mittel, mit den Einstellungen `fueller`. */
 const inkWith = (fueller: FuellerSettings, chosen: PenKind = 'fueller'): InkPrefs => ({
@@ -60,13 +67,20 @@ const strokePaths = (svg: string): string[] => svg.match(/<path data-id=[^>]*>/g
 
 const attr = (path: string, name: string): string | undefined => new RegExp(` ${name}="([^"]*)"`).exec(path)?.[1];
 
-/** Die Breite je Punkt aus `data-linie` (dort stehen x, y und Breite je Punkt). */
-const widthsOf = (path: string): number[] =>
-  (attr(path, 'data-linie') ?? '')
-    .trim()
-    .split(/\s+/)
-    .map(Number)
-    .filter((_, i) => i % 3 === 2);
+/** Die Mittellinie aus `data-linie`: x, y und Breite je Punkt. */
+function pointsOf(path: string): { x: number; y: number; w: number }[] {
+  const nums = (attr(path, 'data-linie') ?? '').trim().split(/\s+/).map(Number);
+  return Array.from({ length: Math.floor(nums.length / 3) }, (_, i) => ({ x: nums[3 * i], y: nums[3 * i + 1], w: nums[3 * i + 2] }));
+}
+
+/** Die Breite je Punkt aus `data-linie`. */
+const widthsOf = (path: string): number[] => pointsOf(path).map((p) => p.w);
+
+/** Die Breiten, die mehr als 2 % vom Mittel abweichen. Leer heißt: überall dieselbe Breite. */
+function uneven(widths: number[]): number[] {
+  const mean = widths.reduce((sum, w) => sum + w, 0) / widths.length;
+  return widths.filter((w) => Math.abs(w / mean - 1) > 0.02);
+}
 
 const strokeCount = (page: Page) => page.evaluate(() => window.__notizbuch.currentPage().strokes.length);
 
@@ -132,6 +146,23 @@ const tipStays = (page: Page) =>
     TIP,
   );
 
+/** Was `installHover` im Browser anlegt. */
+type Hovering = { __hover(): void };
+
+/**
+ * Legt im Browser `window.__hover()` an: eine Schwebe-Meldung des Stifts über `at` (Seiteneinheiten) an die Fläche, die gerade
+ * offen ist. So lassen sich Meldungen im Takt des Browsers schicken, ohne Umweg über Playwright.
+ */
+const installHover = (page: Page, at: [number, number]) =>
+  page.evaluate(([x, y]) => {
+    const live = document.querySelector('canvas[data-layer="live"]')!;
+    const c = window.__notizbuch.toClient(x, y);
+    const init = { pointerId: 11, pointerType: 'pen', isPrimary: true, pressure: 0, clientX: c.x, clientY: c.y, button: -1, buttons: 0 };
+    (window as unknown as Hovering).__hover = () => live.dispatchEvent(new PointerEvent('pointermove', { ...init, bubbles: true, cancelable: true, composed: true }));
+  }, at);
+
+const waitForPageOf = (page: Page, key: string) => page.waitForFunction((day) => window.__notizbuch?.currentPage?.().key === day, key);
+
 /**
  * Wie viele Bildpunkte rund um einen Ort der Seite auf der Live- oder der Vorhersage-Ebene mehr als halb decken. Dort steht
  * der Strich, solange er entsteht. `radius` in Bildschirmpunkten.
@@ -163,8 +194,7 @@ test('a new stroke uses the stored settings', async ({ page }) => {
   await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(1);
   const even = widthsOf(strokePaths(await savedPage(page))[0]);
   expect(even.length, 'Punkte in data-linie').toBeGreaterThan(20);
-  const mean = even.reduce((sum, w) => sum + w, 0) / even.length;
-  expect(even.filter((w) => Math.abs(w / mean - 1) > 0.02), `Breiten ${even.join(' ')}`).toEqual([]);
+  expect(uneven(even), `Breiten ${even.join(' ')}`).toEqual([]);
 
   // Flache, scharfe Spitze: spitze Enden, breite Mitte.
   await choose(page, { schaerfe: 1, druck: 0.25, rundung: 0, stabil: 0.14 });
@@ -174,6 +204,56 @@ test('a new stroke uses the stored settings', async ({ page }) => {
   const middle = sharp[Math.floor(sharp.length / 2)];
   expect(sharp[0], `Breiten ${sharp.join(' ')}`).toBeLessThan(middle / 2);
   expect(sharp[sharp.length - 1], `Breiten ${sharp.join(' ')}`).toBeLessThan(middle / 2);
+});
+
+// Jeder Regler kommt aus der gespeicherten Wahl beim Strich an, nicht nur die Schärfe: je zwei Striche auf demselben Weg, einer
+// mit dem Regler ganz links, einer ganz rechts. Die Schärfe ist dabei 0, damit keine Verjüngung an den Enden mitspielt.
+
+/**
+ * Wählt die Füllfeder mit den Reglern `fueller`, schreibt den Weg `points` und gibt die gespeicherte Mittellinie des neuen Strichs
+ * zurück. `count` ist, wie viele Striche die Seite danach hat: Der neue ist der letzte.
+ */
+async function writeWith(page: Page, fueller: FuellerSettings, points: PathPoint[], count: number): Promise<{ x: number; y: number; w: number }[]> {
+  await choose(page, fueller);
+  await pen(page).stroke(points);
+  await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(count);
+  return pointsOf(strokePaths(await savedPage(page))[count - 1]);
+}
+
+test('the stored roundness reaches the stroke', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  // Ein Halbkreis oben herum, von links nach rechts, mit gleichem Druck: Die Richtung dreht um 180 Grad, kommt also einmal
+  // entlang und einmal quer zur Feder.
+  const arc = (cy: number): PathPoint[] =>
+    Array.from({ length: 61 }, (_, i): PathPoint => [300 + 80 * Math.cos(Math.PI * (1 + i / 60)), cy + 80 * Math.sin(Math.PI * (1 + i / 60))]);
+  const round = (await writeWith(page, { ...DEFAULT_FUELLER, schaerfe: 0, rundung: 1 }, arc(900), 1)).map((p) => p.w);
+  expect(round.length, 'Punkte in data-linie').toBeGreaterThan(40);
+  expect(uneven(round), `runde Spitze, Breiten ${round.join(' ')}`).toEqual([]);
+  const flat = (await writeWith(page, { ...DEFAULT_FUELLER, schaerfe: 0, rundung: 0 }, arc(1150), 2)).map((p) => p.w);
+  expect(Math.max(...flat) / Math.min(...flat), `flache Spitze, Breiten ${flat.join(' ')}`).toBeGreaterThanOrEqual(1.3);
+});
+
+test('the stored pressure sensitivity reaches the stroke', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  // Eine Gerade, der Druck steigt gleichmäßig von 0,2 auf 0,9.
+  const rising = (y: number): PathPoint[] => line([200, y], [400, y + 60], 40).map(([x, py], i): PathPoint => [x, py, 0.2 + (0.7 * i) / 39]);
+  const deaf = (await writeWith(page, { ...DEFAULT_FUELLER, schaerfe: 0, druck: 0 }, rising(800), 1)).map((p) => p.w);
+  expect(deaf.length, 'Punkte in data-linie').toBeGreaterThan(20);
+  expect(uneven(deaf), `ohne Druckempfindlichkeit, Breiten ${deaf.join(' ')}`).toEqual([]);
+  const keen = (await writeWith(page, { ...DEFAULT_FUELLER, schaerfe: 0, druck: 1 }, rising(1000), 2)).map((p) => p.w);
+  expect(Math.max(...keen) / Math.min(...keen), `volle Druckempfindlichkeit, Breiten ${keen.join(' ')}`).toBeGreaterThanOrEqual(1.5);
+});
+
+test('the stored stabilisation reaches the stroke', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  // Eine waagrechte Gerade mit Zittern quer dazu: jeder Punkt abwechselnd eine Einheit darüber und darunter.
+  const jagged = (y: number): PathPoint[] => Array.from({ length: 101 }, (_, i): PathPoint => [200 + 2 * i, y + (i % 2 ? 1 : -1)]);
+  /** Wie weit die gespeicherten Punkte im Mittel von der Geraden bei `y` abweichen (Seiteneinheiten). */
+  const offLine = (pts: { y: number }[], y: number): number => pts.reduce((sum, p) => sum + Math.abs(p.y - y), 0) / pts.length;
+  const rough = offLine(await writeWith(page, { ...DEFAULT_FUELLER, schaerfe: 0, stabil: 0 }, jagged(900), 1), 900);
+  const calm = offLine(await writeWith(page, { ...DEFAULT_FUELLER, schaerfe: 0, stabil: 1 }, jagged(1100), 2), 1100);
+  expect(rough, 'ohne Stabilisierung bleibt das Zittern').toBeGreaterThan(0.8);
+  expect(calm, `Abweichung mit voller Stabilisierung, ohne ${rough}`).toBeLessThanOrEqual(0.7 * rough);
 });
 
 test('old strokes keep their shape when the settings change', async ({ page }) => {
@@ -312,6 +392,165 @@ test('the tip turns like the last stroke and goes away on touch and leave', asyn
   expect(stays, 'so lange stand die Spitze noch (ms)').toBeLessThan(500);
 });
 
+test('the tip stays while the pen keeps hovering and goes 300 ms after the last report', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await choose(page, DEFAULT_FUELLER);
+  await installHover(page, [400, 1000]);
+  // Schwebe-Meldungen bei 0, 200 und 400 ms, dann keine mehr. Alles im Browser gemessen: wann gemeldet wurde, ob die Spitze
+  // 50 ms nach der letzten Meldung (450 ms) noch steht, und wann sie ging. Ging sie zwischendurch, stünde das in `gone`.
+  const run = await page.evaluate(
+    (selector) =>
+      new Promise<{ hovers: number[]; check: number; shown: boolean; gone: number[] }>((done) => {
+        const surface = document.querySelector('[data-testid="surface"]')!;
+        const t0 = performance.now();
+        const gone: number[] = [];
+        const watch = new MutationObserver((records) => {
+          for (const r of records) for (const node of r.removedNodes) if (node instanceof Element && node.matches(selector)) gone.push(performance.now() - t0);
+        });
+        watch.observe(surface, { childList: true });
+        const hovers: number[] = [];
+        const hover = () => {
+          (window as unknown as Hovering).__hover();
+          hovers.push(performance.now() - t0);
+        };
+        const finish = (check: number, shown: boolean) => {
+          if (document.querySelector(selector)) return void setTimeout(() => finish(check, shown), 5);
+          watch.disconnect();
+          done({ hovers, check, shown, gone });
+        };
+        hover();
+        setTimeout(() => {
+          hover();
+          setTimeout(() => {
+            hover();
+            setTimeout(() => finish(performance.now() - t0, document.querySelector(selector) !== null), 50);
+          }, 200);
+        }, 200);
+      }),
+    TIP,
+  );
+  const report = JSON.stringify(run);
+  const [, second, last] = run.hovers;
+  // Damit der Test etwas sagt: Keine Pause zwischen zwei Meldungen war so lang wie die Haltezeit.
+  expect(Math.max(second, last - second), report).toBeLessThan(300);
+  // Bei 450 ms steht sie noch, länger als 300 ms nach der ersten Meldung: Jede Meldung hat die Zeit neu gestartet.
+  expect(run.shown, report).toBe(true);
+  expect(run.check, report).toBeGreaterThan(300);
+  // Sie ging genau einmal, erst nach dieser Prüfung, und spätestens 350 ms nach der letzten Meldung (nach Plan bei 750 ms).
+  expect(run.gone, report).toHaveLength(1);
+  expect(run.gone[0] - last, report).toBeGreaterThan(250);
+  expect(run.gone[0] - last, report).toBeLessThanOrEqual(350);
+});
+
+test('turning the page takes the tip along', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await choose(page, DEFAULT_FUELLER);
+  await installHover(page, [400, 1000]);
+  // Schweben und gleich danach mit › blättern, alles im Browser gemessen ab der Schwebe-Meldung: wann die alte Fläche aus der
+  // Seite ist und ob dann noch eine Spitze zu sehen ist, und wann die alte Fläche ihre Spitze selbst entfernt hat. Das tut sie
+  // beim Abbau, den Preact einen Augenblick nach dem Entfernen ausführt.
+  const turn = await page.evaluate(
+    ({ selector, next }) =>
+      new Promise<{ before: boolean; gone: number; shown: boolean; removed: number | null }>((done) => {
+        const surface = document.querySelector('[data-testid="surface"]')!;
+        const start = performance.now();
+        (window as unknown as Hovering).__hover();
+        const tip = document.querySelector(selector);
+        document.querySelector<HTMLAnchorElement>(next)!.click();
+        const removed = (gone: number, shown: boolean) => {
+          const ms = performance.now() - start;
+          if (tip?.parentNode === null || ms > 1000) return done({ before: tip !== null, gone, shown, removed: tip?.parentNode === null ? ms : null });
+          setTimeout(() => removed(gone, shown), 5);
+        };
+        const away = () => {
+          if (surface.isConnected) return void requestAnimationFrame(away);
+          removed(performance.now() - start, tip?.isConnected === true || document.querySelector(selector) !== null);
+        };
+        away();
+      }),
+    { selector: TIP, next: NEXT_DAY },
+  );
+  const report = JSON.stringify(turn);
+  expect(turn.before, report).toBe(true);
+  // Die alte Fläche ist schneller weg als die Haltezeit von 300 ms, und mit ihr ist keine Spitze mehr zu sehen.
+  expect(turn.gone, report).toBeLessThan(300);
+  expect(turn.shown, report).toBe(false);
+  // Sie hat ihre Spitze auch selbst entfernt, lange bevor die Haltezeit sie entfernt hätte: Der Abbau räumt sie weg.
+  expect(turn.removed, report).not.toBeNull();
+  expect(turn.removed!, report).toBeLessThan(250);
+  await waitForPageOf(page, '2026-10-30');
+  expect(await tipCount(page), 'auf der neuen Seite').toBe(0);
+});
+
+test('the tip keeps the direction of the last stroke on the next page', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await choose(page, DEFAULT_FUELLER);
+  const nib = pen(page, { tiltX: -40, tiltY: 40 });
+  await nib.stroke(line([200, 800], [400, 860], 30));
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  // Die neue Seite baut ihre eigene Fläche. Die Spitze steht trotzdem wie beim letzten Strich, nicht wie bei einem Rechtshänder.
+  await page.locator(NEXT_DAY).click();
+  await waitForPageOf(page, '2026-10-30');
+  await nib.hover(300, 1000);
+  await expect(page.locator(TIP)).toBeVisible();
+  expect(axisApart((await tipOf(page))!.angle, penAngle(-40, 40)! + Math.PI / 2), 'nach dem Blättern').toBeLessThanOrEqual(3);
+});
+
+test('hovering measures the surface once, not with every report', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await choose(page, DEFAULT_FUELLER);
+  await installHover(page, [400, 1000]);
+  // Wo die Fläche auf dem Bildschirm liegt, zu messen, erzwingt ein Layout. Gezählt wird bei 20 Schwebe-Meldungen hintereinander.
+  const measured = await page.evaluate(() => {
+    const surface = document.querySelector<HTMLElement>('[data-testid="surface"]')!;
+    const measure = surface.getBoundingClientRect.bind(surface);
+    let count = 0;
+    surface.getBoundingClientRect = () => {
+      count++;
+      return measure();
+    };
+    for (let i = 0; i < 20; i++) (window as unknown as Hovering).__hover();
+    delete (surface as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+    return count;
+  });
+  expect(measured, 'Messungen bei 20 Schwebe-Meldungen').toBeLessThanOrEqual(1);
+  // Die Spitze steht trotzdem dort, wo der Stift ist.
+  const where = await clientOf(page, [400, 1000]);
+  const tip = (await tipOf(page))!;
+  expect(Math.hypot(tip.x - where.x, tip.y - where.y), 'Abstand der Mitte vom Stift').toBeLessThanOrEqual(2);
+});
+
+test('the tip goes at once when the page can no longer be written', async ({ page }) => {
+  // Mit Netz und einer Datei der Seite: Ein anderes Gerät macht sie kaputt, und die App merkt es, wenn sie in den Vordergrund kommt.
+  const empty = serializePage({ kind: 'tag', key: '2026-10-29', meta: {}, strokes: [] }, [], '');
+  const repo = await openSeeded(page, DAY, { files: { [TAG]: empty }, settings: { ink: inkWith(DEFAULT_FUELLER) } });
+  await expect.poll(() => lastHead(page)).not.toBeNull();
+  await installHover(page, [400, 1000]);
+  // Der Stift schwebt weiter, alle 50 ms eine Meldung. In dem Moment, in dem die Seite zeigt, dass sie sich nicht lesen lässt
+  // (dann ist sie gesperrt), wird festgehalten, ob die Spitze noch steht. Ohne Meldung dazwischen ginge sie erst nach 300 ms.
+  await page.evaluate(
+    ({ selector, text }) => {
+      const w = window as unknown as Hovering & { __tipWhenLocked?: boolean };
+      const timer = setInterval(w.__hover, 50);
+      w.__hover();
+      const watch = new MutationObserver(() => {
+        if (!document.body.textContent?.includes(text)) return;
+        w.__tipWhenLocked = document.querySelector(selector) !== null;
+        watch.disconnect();
+        clearInterval(timer);
+      });
+      watch.observe(document.body, { childList: true, subtree: true, characterData: true });
+    },
+    { selector: TIP, text: UNREADABLE },
+  );
+  expect(await tipCount(page), 'beim Schweben').toBe(1);
+  repo.commit(TAG, BROKEN);
+  await bringToForeground(page);
+  await expect(page.getByText(UNREADABLE)).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __tipWhenLocked?: boolean }).__tipWhenLocked), 'Spitze, als die Seite gesperrt wurde').toBe(false);
+  expect(await tipCount(page)).toBe(0);
+});
+
 // ---------- Das Regler-Fenster ----------
 
 const PANEL = '.fueller-fenster';
@@ -330,7 +569,6 @@ const valueText = (page: Page, key: Regler) => page.locator(`${row(key)} .fuelle
 const previewOf = (page: Page) => page.locator(`${PANEL} .fueller-vorschau path`).getAttribute('d');
 const toolbarButton = (page: Page, label: string) => page.locator(`.werkzeuge button[aria-label="${label}"]`);
 const savedFueller = async (page: Page) => ((await savedSettings(page))?.ink as InkPrefs | undefined)?.fueller;
-const waitForPageOf = (page: Page, key: string) => page.waitForFunction((day) => window.__notizbuch?.currentPage?.().key === day, key);
 /** Stift und Handballen: Finger gelten erst 250 ms nach dem Abheben des Stifts wieder (siehe `GestureFilter`). */
 const afterPalmWindow = (page: Page) => page.waitForTimeout(300);
 
@@ -510,8 +748,7 @@ test('moving a slider changes the preview and the next stroke', async ({ page })
   await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(1);
   const widths = widthsOf(strokePaths(await savedPage(page))[0]);
   expect(widths.length, 'Punkte in data-linie').toBeGreaterThan(20);
-  const mean = widths.reduce((sum, w) => sum + w, 0) / widths.length;
-  expect(widths.filter((w) => Math.abs(w / mean - 1) > 0.02), `Breiten ${widths.join(' ')}`).toEqual([]);
+  expect(uneven(widths), `Breiten ${widths.join(' ')}`).toEqual([]);
 });
 
 test('a tap next to the panel closes it and writes nothing', async ({ page }) => {
@@ -660,4 +897,77 @@ test('the panel never stays over the page', async ({ page }) => {
   await expect(page.locator(PANEL)).toHaveCount(0);
   await bringToForeground(page);
   await writesAgain(page, 1200);
+});
+
+test('Escape closes the panel, and the toolbar button says whether it is open', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await choose(page, DEFAULT_FUELLER);
+  const button = toolbarButton(page, 'Füllfeder');
+  // Die gewählte Füllfeder öffnet und schließt ihr Fenster: Ihr Knopf sagt, ob es offen ist.
+  await expect(button).toHaveAttribute('aria-expanded', 'false');
+  await openFromToolbar(page);
+  await expect(button).toHaveAttribute('aria-expanded', 'true');
+
+  // Escape, während der Fokus noch auf dem Knopf steht (wie nach Enter auf ihm).
+  await button.focus();
+  await page.keyboard.press('Escape');
+  await expect(page.locator(PANEL)).toHaveCount(0);
+  await expect(page.locator(SHIELD)).toHaveCount(0);
+  await expect(button).toHaveAttribute('aria-expanded', 'false');
+
+  // Mit Enter wieder auf, Escape auf einem Regler: zu, und der Regler bleibt, wie er war.
+  await button.press('Enter');
+  await expect(page.locator(PANEL)).toBeVisible();
+  await expect(button).toHaveAttribute('aria-expanded', 'true');
+  await slider(page, 'druck').press('Escape');
+  await expect(page.locator(PANEL)).toHaveCount(0);
+  await expect(button).toHaveAttribute('aria-expanded', 'false');
+  expect(await savedFueller(page)).toEqual(DEFAULT_FUELLER);
+  // Escape schreibt nichts, und danach liegt wieder das Papier oben.
+  expect(await strokeCount(page)).toBe(0);
+  expect(await savedPage(page)).toBe('');
+  await writesAgain(page, 1000);
+
+  // Ist ein anderer Stift gewählt, wählt ein Tipp auf die Füllfeder nur: Dann sagt ihr Knopf nichts über ein Fenster.
+  await toolbarButton(page, 'Kugelschreiber').click();
+  await expect(button).not.toHaveAttribute('aria-expanded');
+});
+
+test('a touch is held back on the shield, not in the panel', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await choose(page, DEFAULT_FUELLER);
+  await openFromToolbar(page);
+  /** Ob `touchstart` an diesem Element verhindert wird: Dann blättert der Browser nicht und macht aus der Berührung keinen Klick. */
+  const heldBack = (selector: string) =>
+    page.evaluate((sel) => {
+      const ev = new Event('touchstart', { bubbles: true, cancelable: true });
+      document.querySelector(sel)!.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    }, selector);
+  expect(await heldBack(field('rundung')), 'auf einem Regler').toBe(false);
+  expect(await heldBack(`${PANEL} .fueller-vorschau`), 'auf der Vorschau').toBe(false);
+  expect(await heldBack(PANEL), 'im Fenster').toBe(false);
+  expect(await heldBack(SHIELD), 'auf dem Schutzfeld').toBe(true);
+  await expect(page.locator(PANEL)).toBeVisible();
+});
+
+test.describe('with a touch screen', () => {
+  // So niedrig, dass das Fenster an der Werkzeugleiste höher ist, als die Bühne Platz hat.
+  test.use({ hasTouch: true, viewport: { width: 1200, height: 420 } });
+
+  test('a finger scrolls a panel that is taller than the stage', async ({ page }) => {
+    await openSeeded(page, DAY, { offline: true });
+    await choose(page, DEFAULT_FUELLER);
+    await openFromToolbar(page);
+    const panel = page.locator(PANEL);
+    expect(await panel.evaluate((el) => el.scrollHeight - el.clientHeight), 'so viel ist das Fenster zu hoch (Punkte)').toBeGreaterThan(40);
+    // Ein Finger zieht auf der Vorschau nach oben, wie man eine Liste blättert. Das Fenster blättert, es bleibt offen.
+    const preview = (await page.locator(`${PANEL} .fueller-vorschau`).boundingBox())!;
+    const x = preview.x + preview.width / 2;
+    const y = preview.y + preview.height / 2;
+    await (await touchscreen(page)).swipe([x, y], [x, y - 60]);
+    await expect.poll(() => panel.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    await expect(panel).toBeVisible();
+    expect(await savedFueller(page)).toEqual(DEFAULT_FUELLER);
+  });
 });

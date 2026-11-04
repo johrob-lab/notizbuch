@@ -31,6 +31,8 @@ const SMOOTHING: Option<Settings['smoothing']>[] = [
   { value: 'mittel', label: 'mittel' },
   { value: 'stark', label: 'stark' },
 ];
+/** Die Füllfeder glättet nicht mit der Glättung, sondern mit der Strich-Stabilisierung in ihrem Regler-Fenster. */
+const SMOOTHING_HINT = 'Gilt für Kugelschreiber und Fineliner. Die Füllfeder hat eigene Regler: zweimal auf die Füllfeder tippen.';
 const ON_OFF: Option<'an' | 'aus'>[] = [
   { value: 'an', label: 'an' },
   { value: 'aus', label: 'aus' },
@@ -44,10 +46,25 @@ const DEVICES: Option<Settings['device']>[] = [
   { value: 'Firmen-PC', label: 'Firmen-PC' },
 ];
 
-/** Eine Wahl aus wenigen Möglichkeiten: Jede ist eine große Fläche, die ein Finger trifft. */
-function Choice<T extends string>({ title, name, value, options, onPick }: { title: string; name: string; value: T; options: Option<T>[]; onPick(value: T): void }) {
+/** Eine Wahl aus wenigen Möglichkeiten: Jede ist eine große Fläche, die ein Finger trifft. `hint` steht als Zeile darunter. */
+function Choice<T extends string>({
+  title,
+  name,
+  value,
+  options,
+  hint,
+  onPick,
+}: {
+  title: string;
+  name: string;
+  value: T;
+  options: Option<T>[];
+  hint?: string;
+  onPick(value: T): void;
+}) {
+  const hintId = hint ? `${name}-hinweis` : undefined;
   return (
-    <fieldset class="wahl">
+    <fieldset class="wahl" aria-describedby={hintId}>
       <legend>{title}</legend>
       <div class="wahl-flaechen">
         {options.map((option) => (
@@ -57,6 +74,11 @@ function Choice<T extends string>({ title, name, value, options, onPick }: { tit
           </label>
         ))}
       </div>
+      {hint && (
+        <p id={hintId} class="wahl-hinweis">
+          {hint}
+        </p>
+      )}
     </fieldset>
   );
 }
@@ -75,7 +97,7 @@ export function SettingsPage({ settings, warning, passive, onChange, onAccess }:
       <h1>Einstellungen</h1>
       {/* Im zweiten Fenster eines Geräts ist alles gesperrt: Gespeichert wird nur vom Fenster, das schreiben darf. */}
       <fieldset class="einstellungen-gruppe" disabled={passive}>
-        <Choice title="Glättung" name="glaettung" value={settings.smoothing} options={SMOOTHING} onPick={(smoothing) => pick({ smoothing })} />
+        <Choice title="Glättung" name="glaettung" value={settings.smoothing} options={SMOOTHING} hint={SMOOTHING_HINT} onPick={(smoothing) => pick({ smoothing })} />
         <Choice
           title="Vorhersage"
           name="vorhersage"
