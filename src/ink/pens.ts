@@ -69,7 +69,10 @@ export const TAPER_TIP = 0.15;
 /** Die Füllfeder wird nie dünner als dieser Teil der Nennbreite. */
 export const FUELLER_FLOOR = 0.1;
 
-/** Eine neue Richtung zählt erst, wenn der Stift so weit (Seiteneinheiten, 0,5 mm) vom letzten Richtungspunkt weg ist ... */
+/**
+ * Die Richtung des Strichs zeigt von einem Anker zum Stift, der ihm wie an einem Seil folgt. Das Seil ist so lang
+ * (Seiteneinheiten, 0,5 mm) ...
+ */
 export const DIR_MIN = 3;
 
 /**
@@ -78,7 +81,7 @@ export const DIR_MIN = 3;
  */
 export const DIR_MIN_PX = 4;
 
-/** Weglänge (Seiteneinheiten), über die eine neue Richtung geglättet wird. */
+/** Weg des Richtungsankers (Seiteneinheiten), über den die Richtung geglättet wird. */
 export const DIR_LEN = 2;
 
 /** Weglänge (Seiteneinheiten), über die der Druck geglättet wird. Steht der Stift still, bleibt der Druck. */

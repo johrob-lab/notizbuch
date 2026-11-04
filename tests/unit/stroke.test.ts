@@ -754,6 +754,34 @@ test('the fountain pen settles no point before its first direction', () => {
   }
 });
 
+test('the width changes smoothly around a circle', () => {
+  // Kreis mit Radius 6 Einheiten (1 mm), Punkte alle 0,5 Einheiten, zwei Umläufe, gleicher Druck. Schärfe 0: Die Breite ist
+  // die Grundbreite. Mit der Richtung in Stufen (alle 3 Einheiten neu) sprang sie von Punkt zu Punkt um bis zu 55 % (Rundung 0)
+  // und 37 % (Startwerte) der Nennbreite, mit der Richtung am Seil um 7,6 % und 5,1 %.
+  for (const [settings, limit] of [
+    [{ rundung: 0 }, 0.11],
+    [{}, 0.08],
+  ] as const) {
+    const b = fueller({ ...settings, schaerfe: 0 });
+    const n = Math.round((2 * 2 * Math.PI * 6) / 0.5);
+    for (let i = 0; i <= n; i++) b.add(100 + 6 * Math.cos((i * 0.5) / 6), 100 + 6 * Math.sin((i * 0.5) / 6), 0.45, 40, 40);
+    for (const [name, pts] of [
+      ['points', b.points()],
+      ['finish', b.finish().pts],
+    ] as const) {
+      const w = widths(pts);
+      const step = Math.max(...w.slice(1).map((v, i) => Math.abs(v - w[i]))) / NOM;
+      const label = `${name} ${JSON.stringify(settings)}`;
+      expect(step, label).toBeLessThanOrEqual(limit);
+      // Stetig heißt nicht flach: Bei Rundung 0 wechselt die Linie weiter zwischen dünn und dick (gemessen 0,61 bis 1,62).
+      if ('rundung' in settings) {
+        expect(Math.min(...w) / NOM, label).toBeLessThanOrEqual(0.7);
+        expect(Math.max(...w) / NOM, label).toBeGreaterThanOrEqual(1.5);
+      }
+    }
+  }
+});
+
 test('a tap that slides a little still keeps a round dot', () => {
   const base = NOM * pressureFactor(DEFAULT_FUELLER.druck, 0.5); // etwa 1,23
   const b = fueller();

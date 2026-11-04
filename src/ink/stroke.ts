@@ -96,7 +96,7 @@ export class StrokeBuilder {
   // Nur Füllfeder:
   /** Strichrichtung als doppelter Winkel, geglättet. `null`, bis der Stift weit genug gekommen ist. */
   private dir: Doubled | null = null;
-  /** Der Rohpunkt, an dem die Richtung zuletzt bestimmt wurde (am Anfang der erste). */
+  /** Der Richtungsanker: folgt dem Stift wie an einem Seil, die Richtung zeigt von ihm zum Stift (am Anfang der erste Rohpunkt). */
   private anchor: { x: number; y: number } | null = null;
   /** Richtung, in die der Stift zeigt, als doppelter Winkel, geglättet. `null` vor dem ersten Punkt. */
   private nib: Doubled | null = null;
@@ -236,21 +236,27 @@ export class StrokeBuilder {
     this.nib = this.nib ? mix(this.nib, now) : now;
     const nibLen = Math.hypot(this.nib.c, this.nib.s);
     const nib = nibLen > 0 ? { c: this.nib.c / nibLen, s: this.nib.s / nibLen } : now; // Länge 0: zwei Neigungen genau gegenüber
-    // Richtung des Strichs: erst, wenn der Stift weit genug vom Anker weg ist, sonst bleibt die letzte. Der Anker rückt dann
-    // nach. Mit der ersten Richtung bekommen auch die Punkte davor ihren Federfaktor.
+    // Richtung des Strichs am Seil: Der Anker folgt dem Stift im Abstand `dirRope` (0,5 mm und einige Bildschirmpunkte). Ist
+    // das Seil straff, zeigt die Richtung vom Anker zum Punkt, und der Anker wird auf dieser Linie nachgezogen, bis er genau
+    // `dirRope` vom Punkt weg ist. Geglättet wird über den Weg des Ankers: So dreht die Richtung mit jedem Punkt ein wenig,
+    // nicht in Stufen. Ist das Seil locker, bleibt alles. Zittern im Stand zieht den Anker höchstens um die Breite des
+    // Zitterns nach, danach ist das Seil locker. Mit der ersten Richtung bekommen auch die Punkte davor ihren Federfaktor.
+    const dirRope = Math.max(DIR_MIN, DIR_MIN_PX * pxUnit);
     if (!this.anchor) this.anchor = { x, y };
     else {
       const d = dist(this.anchor, x, y);
-      if (d >= Math.max(DIR_MIN, DIR_MIN_PX * pxUnit)) {
+      if (d >= dirRope) {
         const u = doubled(Math.atan2(y - this.anchor.y, x - this.anchor.x));
+        const moved = d - dirRope; // so weit wird der Anker nachgezogen
         if (this.dir) {
-          const k = 1 - Math.exp(-d / DIR_LEN);
+          const k = 1 - Math.exp(-moved / DIR_LEN);
           this.dir = { c: this.dir.c + (u.c - this.dir.c) * k, s: this.dir.s + (u.s - this.dir.s) * k };
         } else {
           this.dir = u;
           this.backfill(u);
         }
-        this.anchor = { x, y };
+        const f = moved / d;
+        this.anchor = { x: this.anchor.x + (x - this.anchor.x) * f, y: this.anchor.y + (y - this.anchor.y) * f };
       }
     }
     // Weg wie an einem Seil: Ist der Rohpunkt weiter als das Seil (einige Bildschirmpunkte) vom gezählten Ort weg, rückt der
