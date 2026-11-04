@@ -64,7 +64,7 @@ export const PRESSURE_SPAN = 0.8;
 /** Die ganz flache Feder (Rundung 0): Faktor quer zur Richtung, in die der Stift zeigt, und entlang dazu. */
 export const FLAT_NIB = { across: 0.3, along: 1.7 };
 
-/** So weit (Seiteneinheiten, 1,5 mm) läuft jedes Ende spitz aus. */
+/** So weit (Seiteneinheiten, 1,5 mm) läuft jedes Ende spitz aus, wenn das Tempo unbekannt ist. Mit Tempo das `taperScale`-fache. */
 export const TAPER_LEN = 9;
 
 /** Breite an der Spitze als Teil der vollen Breite, bei Schärfe 100 %. */
@@ -105,6 +105,27 @@ export const STABIL_REACH = 2.5;
 /** Mindestabstand zweier Stiftpunkte in Bildschirmpunkten: Die Fläche gibt `minDist` = `MIN_DIST_PX` / Zoom mit. */
 export const MIN_DIST_PX = 0.6;
 
+// Tempo wie Tinte: Die Füllfeder misst das Tempo des Stifts in Bildschirmpunkten je ms. Schnelle Striche werden dünner, und ihre
+// Enden laufen länger spitz aus, langsame bleiben satt und enden stumpf.
+
+/** Bis zu diesem Tempo (Bildschirmpunkte je ms, etwa 30 mm/s auf dem Glas) ist ein Strich langsam ... */
+export const V_SLOW = 0.15;
+
+/** ... ab diesem (etwa 190 mm/s) schnell. Dazwischen gehen Breite und Spitzen weich über (`speedBlend`). */
+export const V_FAST = 1.0;
+
+/** Zeitkonstante (ms), mit der das geglättete Tempo dem gemessenen folgt: Nach 20 ms hat es knapp zwei Drittel einer Änderung. */
+export const SPEED_TAU_MS = 20;
+
+/** So viel schmaler ist ein schneller Strich: Tempofaktor 1 − `THIN_FAST`, also halb so breit wie ein langsamer. */
+export const THIN_FAST = 0.5;
+
+/** Länge der Verjüngung an einem langsamen Ende, als Vielfaches von `TAPER_LEN` (0,6 mm) ... */
+export const TAPER_SLOW = 0.4;
+
+/** ... und an einem schnellen (3,75 mm). */
+export const TAPER_FAST = 2.5;
+
 /** Ein Winkel als doppelter Winkel (cos 2a, sin 2a): Entgegengesetzte Richtungen sind dann gleich. */
 export type Doubled = { c: number; s: number };
 
@@ -132,6 +153,26 @@ export function pressureFactor(druck: number, pressure: number): number {
 /** σ der Strich-Stabilisierung in Bildschirmpunkten: von `STABIL_MIN_PX` bei `stabil` 0 bis `STABIL_MAX_PX` bei 1. */
 export function stabilSigmaPx(stabil: number): number {
   return STABIL_MIN_PX + (STABIL_MAX_PX - STABIL_MIN_PX) * stabil;
+}
+
+/**
+ * Wie schnell ein Tempo `v` (Bildschirmpunkte je ms) zählt: 0 bis `V_SLOW`, 1 ab `V_FAST`, dazwischen weich (smoothstep). Was keine
+ * Zahl ist, zählt als langsam.
+ */
+export function speedBlend(v: number): number {
+  const x = (v - V_SLOW) / (V_FAST - V_SLOW);
+  const t = x >= 1 ? 1 : x > 0 ? x : 0;
+  return t * t * (3 - 2 * t);
+}
+
+/** Tempofaktor der Breite für `q` aus `speedBlend`: 1 langsam, 1 − `THIN_FAST` schnell. */
+export function speedFactor(q: number): number {
+  return 1 - THIN_FAST * q;
+}
+
+/** Länge der Verjüngung an einem Ende als Vielfaches von `TAPER_LEN`, für `q` aus `speedBlend`: `TAPER_SLOW` langsam bis `TAPER_FAST` schnell. */
+export function taperScale(q: number): number {
+  return TAPER_SLOW + (TAPER_FAST - TAPER_SLOW) * q;
 }
 
 /**

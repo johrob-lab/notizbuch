@@ -2,7 +2,8 @@ import type { Page } from '@playwright/test';
 
 // Synthetische Zeigerereignisse für die Schreibfläche. Playwright kann keinen Stift und keine zwei Finger, darum
 // werden `PointerEvent`s gebaut und auf der obersten Ebene der Fläche abgeschickt. Orte sind Seiteneinheiten, den
-// Weg zu Bildschirmkoordinaten kennt die App (`window.__notizbuch.toClient`).
+// Weg zu Bildschirmkoordinaten kennt die App (`window.__notizbuch.toClient`). Die Füllfeder misst das Tempo aus den
+// Zeiten der Ereignisse: Darum bekommen die Wege des Stifts gleichmäßige Zeiten (`SLOW_SPEED`), nicht die des Browsers.
 
 export type Kind = 'pen' | 'touch' | 'mouse';
 /** Ein Punkt eines Wegs in Seiteneinheiten. Mit `pressure` meldet der Zeiger dort diesen Druck statt seines eigenen. */
@@ -23,42 +24,63 @@ const PALM_SIZE = 150;
 const PLAIN: Feel = { pressure: 0.5, tiltX: 0, tiltY: 0 };
 /** Beim Schweben berührt der Stift nicht: kein Druck. Die Neigung meldet Safari dabei nicht. */
 const HOVERING: Feel = { pressure: 0, tiltX: 0, tiltY: 0 };
+/**
+ * So schnell (Bildschirmpunkte je ms) zieht der Stift seine Wege, wenn nichts anderes gesagt ist: langsamer als 0,15, so ändert das
+ * Tempo die Breite der Füllfeder nicht (ihre Spitzen sind dann kurz). Schickte der Test die Ereignisse mit den Zeiten des Browsers,
+ * wäre jeder Strich fast unendlich schnell, und wie schnell genau, hinge davon ab, wie rasch der Browser sie abarbeitet.
+ */
+const SLOW_SPEED = 0.1;
 
 /**
  * Spielt die Schritte in der Reihenfolge ab, alle in einem Aufruf: Zwischen zwei Ereignissen vergeht keine Wartezeit.
  * Alle Orte werden vorab in Bildschirmkoordinaten umgerechnet. Der Finger bewegt sich also über den Bildschirm,
- * auch wenn die Seite unter ihm wandert.
+ * auch wenn die Seite unter ihm wandert. Ein Weg des Stifts (mehr als ein Ereignis, ohne Schweben) bekommt Zeiten, als zöge
+ * er ihn gleichmäßig mit `speed` Bildschirmpunkten je ms, und sein letztes Ereignis ist jetzt: Das Abheben hat also die Zeit
+ * des Browsers, die Pause nach dem Stift für Finger gilt wie gewohnt. Alle anderen Ereignisse behalten die Zeit des Browsers.
  */
-async function play(page: Page, steps: Step[]): Promise<void> {
+async function play(page: Page, steps: Step[], speed = SLOW_SPEED): Promise<void> {
   await page.evaluate(
-    ({ steps: list, target }) => {
+    ({ steps: list, target, speed: v }) => {
       const surface = document.querySelector(target);
       if (!surface) throw new Error('Keine Schreibfläche gefunden.');
       const placed = list.map((s) => ({ s, at: window.__notizbuch.toClient(s.x, s.y) }));
-      for (const { s, at } of placed) {
+      // Vom letzten Ereignis des Stifts rückwärts: jedes um seinen Abstand zum nächsten, geteilt durch das Tempo, früher.
+      const drawn = placed.filter(({ s }) => s.kind === 'pen' && s.phase !== 'hover');
+      const stamps = new Map<(typeof placed)[number], number>();
+      if (drawn.length > 1) {
+        let t = performance.now();
+        for (let i = drawn.length - 1; i >= 0; i--) {
+          stamps.set(drawn[i], t);
+          if (i) t -= Math.hypot(drawn[i].at.x - drawn[i - 1].at.x, drawn[i].at.y - drawn[i - 1].at.y) / v;
+        }
+      }
+      for (const item of placed) {
+        const { s, at } = item;
         const touching = s.phase === 'down' || s.phase === 'move';
-        surface.dispatchEvent(
-          new PointerEvent(s.phase === 'hover' ? 'pointermove' : `pointer${s.phase}`, {
-            pointerId: s.id,
-            pointerType: s.kind,
-            isPrimary: s.primary,
-            pressure: s.feel.pressure,
-            tiltX: s.feel.tiltX,
-            tiltY: s.feel.tiltY,
-            width: s.size,
-            height: s.size,
-            clientX: at.x,
-            clientY: at.y,
-            button: s.phase === 'down' || s.phase === 'up' ? 0 : -1,
-            buttons: touching ? 1 : 0,
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-          }),
-        );
+        const ev = new PointerEvent(s.phase === 'hover' ? 'pointermove' : `pointer${s.phase}`, {
+          pointerId: s.id,
+          pointerType: s.kind,
+          isPrimary: s.primary,
+          pressure: s.feel.pressure,
+          tiltX: s.feel.tiltX,
+          tiltY: s.feel.tiltY,
+          width: s.size,
+          height: s.size,
+          clientX: at.x,
+          clientY: at.y,
+          button: s.phase === 'down' || s.phase === 'up' ? 0 : -1,
+          buttons: touching ? 1 : 0,
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        });
+        // Die Zeit lässt sich beim Bauen nicht angeben: Eine eigene Eigenschaft verdeckt die des Browsers.
+        const stamp = stamps.get(item);
+        if (stamp !== undefined) Object.defineProperty(ev, 'timeStamp', { value: stamp });
+        surface.dispatchEvent(ev);
       }
     },
-    { steps, target: LIVE },
+    { steps, target: LIVE, speed },
   );
 }
 
@@ -119,8 +141,11 @@ export function centerOf(page: Page, selector: string): Promise<{ x: number; y: 
 }
 
 export type Pointer = {
-  /** Zeichnet einen Weg: aufsetzen am ersten Punkt, zu jedem weiteren bewegen, am letzten abheben. Ein Punkt kann seinen Druck mitbringen. */
-  stroke(points: PathPoint[]): Promise<void>;
+  /**
+   * Zeichnet einen Weg: aufsetzen am ersten Punkt, zu jedem weiteren bewegen, am letzten abheben. Ein Punkt kann seinen Druck
+   * mitbringen. Mit `lift: false` bleibt der Zeiger am letzten Punkt liegen, `up` hebt ihn später ab.
+   */
+  stroke(points: PathPoint[], o?: { lift?: boolean }): Promise<void>;
   tap(x: number, y: number): Promise<void>;
   down(x: number, y: number): Promise<void>;
   move(x: number, y: number): Promise<void>;
@@ -147,7 +172,7 @@ export type Pointer = {
 
 const BASE_ID: Record<Kind, number> = { mouse: 1, pen: 11, touch: 21 };
 
-function pointer(page: Page, kind: Kind, n: number, size = FINGER_SIZE, feel = PLAIN): Pointer {
+function pointer(page: Page, kind: Kind, n: number, size = FINGER_SIZE, feel = PLAIN, speed = SLOW_SPEED): Pointer {
   const id = BASE_ID[kind] + n;
   const step = (phase: Phase, [x, y, pressure]: PathPoint): Step => ({
     kind,
@@ -159,15 +184,15 @@ function pointer(page: Page, kind: Kind, n: number, size = FINGER_SIZE, feel = P
     size,
     feel: pressure === undefined ? feel : { ...feel, pressure },
   });
-  const path = (points: PathPoint[]): Step[] => [
+  const path = (points: PathPoint[], lift = true): Step[] => [
     step('down', points[0]),
     ...points.slice(1).map((p) => step('move', p)),
-    step('up', points[points.length - 1]),
+    ...(lift ? [step('up', points[points.length - 1])] : []),
   ];
   const on = (selector: string, events: OnElementEvent[]) => sendOn(page, selector, kind, id, size, feel, events);
   return {
-    stroke: (points) => play(page, path(points)),
-    tap: (x, y) => play(page, path([[x, y]])),
+    stroke: (points, o = {}) => play(page, path(points, o.lift ?? true), speed),
+    tap: (x, y) => play(page, path([[x, y]]), speed),
     down: (x, y) => play(page, [step('down', [x, y])]),
     move: (x, y) => play(page, [step('move', [x, y])]),
     up: (x, y) => play(page, [step('up', [x, y])]),
@@ -195,9 +220,12 @@ function pointer(page: Page, kind: Kind, n: number, size = FINGER_SIZE, feel = P
   };
 }
 
-/** Der Apple Pencil. Jedes Ereignis meldet `pressure` (ohne Angabe 0,5), `tiltX` und `tiltY` (ohne Angabe 0). */
-export const pen = (page: Page, o: { pressure?: number; tiltX?: number; tiltY?: number } = {}): Pointer =>
-  pointer(page, 'pen', 0, FINGER_SIZE, { pressure: o.pressure ?? PLAIN.pressure, tiltX: o.tiltX ?? PLAIN.tiltX, tiltY: o.tiltY ?? PLAIN.tiltY });
+/**
+ * Der Apple Pencil. Jedes Ereignis meldet `pressure` (ohne Angabe 0,5), `tiltX` und `tiltY` (ohne Angabe 0). Seine Wege zieht er
+ * gleichmäßig mit `speed` Bildschirmpunkten je ms (ohne Angabe langsam, `SLOW_SPEED`).
+ */
+export const pen = (page: Page, o: { pressure?: number; tiltX?: number; tiltY?: number; speed?: number } = {}): Pointer =>
+  pointer(page, 'pen', 0, FINGER_SIZE, { pressure: o.pressure ?? PLAIN.pressure, tiltX: o.tiltX ?? PLAIN.tiltX, tiltY: o.tiltY ?? PLAIN.tiltY }, o.speed);
 /** Ein Finger. `n` unterscheidet mehrere Finger zugleich (0 ist der erste). */
 export const touch = (page: Page, n = 0): Pointer => pointer(page, 'touch', n);
 /** Die Maus. */

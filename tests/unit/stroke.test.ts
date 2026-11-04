@@ -4,11 +4,17 @@ import {
   DIR_MIN,
   DIR_MIN_PX,
   doubled,
+  MIN_DIST_PX,
   nibFactorR,
   pressureFactor,
+  speedBlend,
+  speedFactor,
   stabilSigmaPx,
+  TAPER_FAST,
   TAPER_LEN,
+  TAPER_SLOW,
   TAPER_TIP,
+  taperFactor,
   type FuellerSettings,
 } from '../../src/ink/pens';
 import { fmtNum, hitStroke, parsePathD, pathD, StrokeBuilder } from '../../src/ink/stroke';
@@ -894,7 +900,8 @@ test('smoothing follows the distance, not the number of points', () => {
   const inner = slow.filter((p) => p.x > reach && p.x < 60 - reach);
   expect(inner.length).toBeGreaterThan(50);
   const apart = mean(inner.map((p) => Math.abs(p.y - yAt(fast, p.x))));
-  expect(apart).toBeLessThanOrEqual(0.3); // gemessen 0,085
+  // Gemessen 0,085. Ohne Glättung wären es 0,286, mit der Glättung nach der Zahl der Punkte (bis Paket 3b) 0,171.
+  expect(apart).toBeLessThanOrEqual(0.12);
 });
 
 test('at 14 % the jitter drops by at least 60 %', () => {
@@ -970,6 +977,56 @@ test('settled points are those more than 2.5 sigma before the end', () => {
   expect(fixed[fixed.length - 1].length).toBeGreaterThan(280);
 });
 
+/**
+ * Die Glättung der Füllfeder auf einen Schlag, Punkt für Punkt nach der Formel: das Mittel aller Rohpunkte, deren Strecke höchstens
+ * r = min(2,5 σ, s − s0, Ende − s) von der des Punkts abliegt, gewichtet mit exp(−d² / 2σ²), `d` der Unterschied der Strecke.
+ */
+function smoothByFormula(raw: readonly XY[], sigma: number): XY[] {
+  const s = arcLengths(raw);
+  const end = s[s.length - 1];
+  return raw.map((_, i) => {
+    const r = Math.min(2.5 * sigma, s[i] - s[0], end - s[i]);
+    let sx = 0;
+    let sy = 0;
+    let sw = 0;
+    raw.forEach((p, j) => {
+      const d = s[j] - s[i];
+      if (Math.abs(d) > r) return;
+      const w = Math.exp(-(d * d) / (2 * sigma * sigma));
+      sx += w * p.x;
+      sy += w * p.y;
+      sw += w;
+    });
+    return { x: sx / sw, y: sy / sw };
+  });
+}
+
+test('after every point the smoothed places follow the formula', () => {
+  // Eine Welle mit Zittern, mal dicht, mal weit auseinander, in normaler Größe und stark gezoomt (ein Bildschirmpunkt ist 0,25
+  // Einheiten), mit dem Mindestabstand der App: Punkte näher als 0,6 Bildschirmpunkte am letzten behaltenen fallen weg. Nach jedem
+  // Punkt muss jeder geglättete Ort der Formel für die behaltenen Rohpunkte folgen, auch die Punkte, die schon fest sind: So fällt auf,
+  // wenn ein Punkt mit einem Fenster fest wird, das noch am alten Ende abgeschnitten war.
+  for (const pxUnit of [1, 0.25]) {
+    const rnd = random(2718);
+    const pts: XY[] = [];
+    for (let i = 0, x = 100; i < 200; i++, x += 0.3 + 1.7 * rnd()) {
+      pts.push({ x: x * pxUnit, y: (100 + 3 * Math.sin(x / 5) + (2 * rnd() - 1) * 0.3) * pxUnit });
+    }
+    const sigma = stabilSigmaPx(DEFAULT_FUELLER.stabil) * pxUnit;
+    const b = new StrokeBuilder({ pen: 'fueller', color: 'schwarz', widthMm: 0.2, sigma: 0, t: 1, minDist: MIN_DIST_PX * pxUnit, pxUnit });
+    const kept: XY[] = [];
+    let worst = 0;
+    for (const p of pts) {
+      if (b.add(p.x, p.y, 0.45, 40, 40)) kept.push(p);
+      const want = smoothByFormula(kept, sigma);
+      expect(b.points()).toHaveLength(kept.length);
+      b.points().forEach((q, i) => (worst = Math.max(worst, Math.abs(q.x - want[i].x), Math.abs(q.y - want[i].y))));
+    }
+    expect(kept.length, `pxUnit ${pxUnit}: ein paar Punkte fallen weg`).toBeLessThan(pts.length - 10);
+    expect(worst, `pxUnit ${pxUnit}`).toBeLessThan(1e-9);
+  }
+});
+
 test('other pens smooth as before', () => {
   // Kugelschreiber und Fineliner glätten weiter nach der Zahl der Punkte, mit `sigma` aus der Einstellung „Glättung“. Die
   // Erwartung (x, y, Breite) stammt aus dem Stand vor dem Glätten nach Strecke, auf sechs Stellen gerundet.
@@ -1013,5 +1070,248 @@ test('other pens smooth as before', () => {
       expect(p.y, `${pen} y ${i}`).toBeCloseTo(y, 5);
       expect(p.w, `${pen} Breite ${i}`).toBeCloseTo(w, 5);
     });
+  }
+});
+
+// ---------- Tempo wie Tinte (Paket 3c) ----------
+
+/**
+ * Füllfeder, bei der nur das Tempo die Breite ändert: runde Spitze (Rundung 1), ohne Druckempfindlichkeit. Schärfe 1 läuft spitz
+ * aus, Schärfe 0 gibt die Grundbreite je Punkt (ohne Verjüngung). Ohne `pxUnit` in normaler Größe: Ein Bildschirmpunkt ist eine
+ * Seiteneinheit.
+ */
+function inkPen(schaerfe = 1, pxUnit = 1): StrokeBuilder {
+  return new StrokeBuilder({
+    pen: 'fueller',
+    color: 'schwarz',
+    widthMm: 0.2,
+    sigma: 0,
+    t: 1,
+    minDist: 0.01 * pxUnit,
+    pxUnit,
+    fueller: { ...DEFAULT_FUELLER, schaerfe, rundung: 1, druck: 0 },
+  });
+}
+
+/** Ein Punkt mit der Zeit (ms), zu der der Stift dort war. */
+type Timed = XY & { t: number };
+
+/**
+ * Eine waagrechte Gerade von x = 0 bis `len`, Punkte alle `step` Einheiten, mit Zeiten: An der Stelle x zieht der Stift mit `speed(x)`
+ * Bildschirmpunkten je ms. Bei `inkPen` ist x auch die Strecke ab dem Anfang in Bildschirmpunkten.
+ */
+function timedLine(len: number, step: number, speed: (x: number) => number): Timed[] {
+  const pts: Timed[] = [{ x: 0, y: 0, t: 5000 }];
+  for (let i = 1; i <= Math.round(len / step); i++) pts.push({ x: i * step, y: 0, t: pts[i - 1].t + step / speed(i * step) });
+  return pts;
+}
+
+/** Die Gerade der Tempo-Tests, 120 Einheiten lang, Punkte alle 0,6: bis zur Mitte mit `first`, danach mit `second` Bildschirmpunkten je ms. */
+const twoSpeeds = (first: number, second: number): Timed[] => timedLine(120, 0.6, (x) => (x <= 60 ? first : second));
+
+/** Gibt die Punkte mit ihren Zeiten in den Strich (mittlerer Druck, ohne Neigung). */
+function feedTimed(b: StrokeBuilder, pts: Timed[]): void {
+  for (const p of pts) expect(b.add(p.x, p.y, 0.5, 0, 0, p.t)).toBe(true);
+}
+
+/** Die Breiten von `pts` mit Schärfe 1 beim Schreiben (`live`) und fertig (`done`), dazu die Grundbreiten (`base`, Schärfe 0, fertig). */
+function tempoWidths(pts: Timed[]): { live: number[]; done: number[]; base: number[] } {
+  const sharp = inkPen();
+  const blunt = inkPen(0);
+  feedTimed(sharp, pts);
+  feedTimed(blunt, pts);
+  return { live: widths(sharp.points()), done: widths(sharp.finish().pts), base: widths(blunt.finish().pts) };
+}
+
+/** Die Strecke `s` des ersten Punkts, dessen Breite `w` 90 % seiner Grundbreite erreicht. */
+const reach90 = (w: number[], base: number[], s: number[]): number => s[w.findIndex((v, i) => v >= 0.9 * base[i])];
+
+/** Wie `reach90`, aber vom Ende der Geraden `pts` aus gezählt (die Strecke bis zum Ende). */
+const reach90FromEnd = (w: number[], base: number[], pts: Timed[]): number => {
+  const end = pts[pts.length - 1].x;
+  return reach90([...w].reverse(), [...base].reverse(), pts.map((p) => end - p.x).reverse());
+};
+
+test('a fast stroke is half as wide as a slow one', () => {
+  // Dieselbe Gerade, 120 Einheiten lang, Punkte alle 0,6: einmal mit 0,1 Bildschirmpunkten je ms, einmal mit 1,2. In der Mitte
+  // (Punkt 100, x = 60) wirkt keine Verjüngung, dort zählt beim Schreiben wie fertig nur die Grundbreite.
+  const slow = tempoWidths(timedLine(120, 0.6, () => 0.1));
+  const fast = tempoWidths(timedLine(120, 0.6, () => 1.2));
+  for (const name of ['live', 'done'] as const) {
+    expect(slow[name][100], name).toBeCloseTo(NOM, 9); // langsam: volle Breite
+    expect(Math.abs(fast[name][100] / slow[name][100] / 0.5 - 1), name).toBeLessThanOrEqual(0.05);
+  }
+  // Stark gezoomt (ein Bildschirmpunkt ist 0,25 Einheiten) zählt das Tempo auf dem Bildschirm: Dieselben Geraden in
+  // Bildschirmpunkten, also 30 Einheiten lang, haben in der Mitte dieselbe Grundbreite.
+  const zoomed = (speed: number): number => {
+    const b = inkPen(0, 0.25);
+    feedTimed(b, timedLine(120, 0.6, () => speed).map((p) => ({ ...p, x: p.x * 0.25 })));
+    return b.finish().pts[100].w;
+  };
+  expect(zoomed(0.1)).toBeCloseTo(slow.base[100], 9);
+  expect(zoomed(1.2)).toBeCloseTo(fast.base[100], 9);
+});
+
+test('the speed starts at 0 and follows the pen with 20 ms', () => {
+  // Eine Gerade mit gleichmäßig 0,5 Bildschirmpunkten je ms, Punkte alle 0,6 (1,2 ms): Das geglättete Tempo t ms nach dem Aufsetzen
+  // ist 0,5 × (1 − exp(−t / 20)), die Grundbreite also Nennbreite × speedFactor(speedBlend(dieses Tempo)), von 1,2 bis 1,0.
+  const pts = timedLine(30, 0.6, () => 0.5);
+  const { base } = tempoWidths(pts);
+  pts.forEach((p, i) => {
+    const vs = 0.5 * (1 - Math.exp(-(p.t - pts[0].t) / 20));
+    expect(base[i], `Punkt ${i}`).toBeCloseTo(NOM * speedFactor(speedBlend(vs)), 9);
+  });
+  expect(base[base.length - 1]).toBeLessThan(0.85 * NOM);
+});
+
+test('a fast lift gives a long tip, a slow lift a short one', () => {
+  // Dieselbe Gerade: bis zur Mitte langsam (0,1 Bildschirmpunkte je ms) und am Ende schnell (1,2), oder umgekehrt. Die Spitze am
+  // Ende ist schnell 22,5 Einheiten lang (90 % der Grundbreite erst 14,8 Einheiten vor dem Ende), langsam 3,6 (schon nach 2,4).
+  const fromEnd = (pts: Timed[]): number => {
+    const { done, base } = tempoWidths(pts);
+    return reach90FromEnd(done, base, pts);
+  };
+  expect(fromEnd(twoSpeeds(0.1, 1.2))).toBeGreaterThan(12);
+  expect(fromEnd(twoSpeeds(1.2, 0.1))).toBeLessThanOrEqual(4);
+});
+
+test('a slow start is blunt, a fast start long', () => {
+  // Dieselben Geraden am Anfang: langsam angesetzt (0,1) erreicht die Breite 90 % der Grundbreite nach 2,4 Einheiten, schnell
+  // angesetzt (1,2) erst nach 14,8. Das gilt schon beim Schreiben (`points`, nach der ersten Richtung), nicht erst fertig.
+  for (const name of ['live', 'done'] as const) {
+    const fromStart = (pts: Timed[]): number => {
+      const w = tempoWidths(pts);
+      return reach90(w[name], w.base, pts.map((p) => p.x));
+    };
+    expect(fromStart(twoSpeeds(0.1, 1.2)), name).toBeLessThanOrEqual(4);
+    expect(fromStart(twoSpeeds(1.2, 0.1)), name).toBeGreaterThan(12);
+  }
+});
+
+test('before the start speed is known, nothing is settled', () => {
+  // Stark gezoomt (ein Bildschirmpunkt ist 0,1 Einheiten): Punkte alle 0,5 Einheiten (5 Bildschirmpunkte) mit 1,2 Bildschirmpunkten
+  // je ms. Die erste Richtung kommt nach 3 Einheiten (Punkt 6). Schon vorher liegen alle Punkte bis auf die letzten zwei mehr als
+  // 2,5 σ vor dem Ende, fest ist aber keiner: Bis dahin läuft der Anfang vorläufig auf 3,6 Einheiten spitz zu (wie langsam). Mit der
+  // ersten Richtung steht das Tempo beim Ansetzen fest (30 Bildschirmpunkte in 25 ms), und die Punkte davor bekommen die Länge für
+  // schnell, 22,5 Einheiten.
+  const make = (schaerfe: number) =>
+    new StrokeBuilder({ pen: 'fueller', color: 'schwarz', widthMm: 0.2, sigma: 0, t: 1, minDist: 0.05, pxUnit: 0.1, fueller: { ...DEFAULT_FUELLER, schaerfe, rundung: 1, druck: 0 } });
+  const b = make(1);
+  const blunt = make(0); // die Grundbreiten
+  for (let i = 0; i <= 20; i++) {
+    const t = 5000 + (5 / 1.2) * i;
+    expect(b.add(100 + 0.5 * i, 100, 0.5, 0, 0, t)).toBe(true);
+    blunt.add(100 + 0.5 * i, 100, 0.5, 0, 0, t);
+    const n = i + 1;
+    expect(b.settled(), `${n} Punkte`).toBe(i < 6 ? 0 : n - 2);
+    const len = TAPER_LEN * (i < 6 ? TAPER_SLOW : TAPER_FAST);
+    b.points().forEach((p, j) => {
+      const want = Math.max(0.1 * NOM, blunt.points()[j].w * taperFactor(1, 0.5 * j, len));
+      expect(p.w, `${n} Punkte, Punkt ${j}`).toBeCloseTo(want, 9);
+    });
+  }
+  expect(b.meanW()).toBeCloseTo(b.stroke().w, 9);
+});
+
+test('equal or decreasing times do not break the speed', () => {
+  // Eine langsame Gerade (0,1 Bildschirmpunkte je ms). Darin hat jeder dritte Punkt dieselbe Zeit wie der vorige und jeder fünfte
+  // eine Zeit 3 ms vor der vorigen. Solche Schritte zählen nicht für das Tempo: kein NaN, kein unendliches Tempo, die Linie bleibt
+  // langsam (volle Breite, kurze Spitzen). Ebenso, wenn alle Punkte dieselbe Zeit haben oder jede Zeit vor der vorigen liegt.
+  const clean = timedLine(120, 0.6, () => 0.1);
+  const slow = tempoWidths(clean);
+  const glitchy: Timed[] = [];
+  clean.forEach((p, i) => glitchy.push({ ...p, t: i % 3 === 2 ? glitchy[i - 1].t : i % 5 === 4 ? glitchy[i - 1].t - 3 : p.t }));
+  const steps = glitchy.slice(1).map((p, i) => p.t - glitchy[i].t);
+  expect(steps.filter((d) => d === 0).length).toBeGreaterThan(50);
+  expect(steps.filter((d) => d < 0).length).toBeGreaterThan(20);
+  const same = clean.map((p) => ({ ...p, t: 5000 }));
+  const backwards = clean.map((p, i) => ({ ...p, t: 5000 - i }));
+  for (const [name, pts] of [
+    ['glitchy', glitchy],
+    ['same', same],
+    ['backwards', backwards],
+  ] as const) {
+    const w = tempoWidths(pts);
+    for (const key of ['live', 'done', 'base'] as const) {
+      expect(w[key].filter((v) => !(Number.isFinite(v) && v >= 0.1 * NOM)), `${name} ${key}`).toEqual([]);
+      expect(w[key], `${name} ${key}`).toEqual(slow[key]);
+    }
+  }
+  // Zusammengefasste Ereignisse, die sich je zu zweit eine Zeit teilen: Die Strecke des Schritts ohne eigene Zeit zählt beim nächsten
+  // mit. So bleibt ein schneller Strich (1,2 Bildschirmpunkte je ms) so dünn wie mit getrennten Zeiten und wird nicht halb so schnell.
+  const fast = timedLine(120, 0.6, () => 1.2);
+  const paired = fast.map((p, i) => ({ ...p, t: fast[i - (i % 2)].t }));
+  for (const key of ['live', 'done'] as const) expect(tempoWidths(paired)[key][100], key).toBeCloseTo(tempoWidths(fast)[key][100], 9);
+});
+
+test('a fast short flick tapers on half its length and never below the floor', () => {
+  // Ein Schwung, 10 Einheiten lang, Punkte alle 0,5, mit 1,2 Bildschirmpunkten je ms: Beide Spitzen wären für dieses Tempo länger als
+  // der halbe Strich (Anfang 22,5, Ende 7,8 Einheiten), sie laufen je auf 5 Einheiten aus. Die Mitte hat ihre volle Grundbreite.
+  const pts = timedLine(10, 0.5, () => 1.2);
+  const { done, base } = tempoWidths(pts);
+  expect(done).toHaveLength(21);
+  expect(done.filter((w) => !(Number.isFinite(w) && w >= 0.1 * NOM))).toEqual([]);
+  expect(done[10]).toBeCloseTo(base[10], 9); // x = 5
+  // Auf halbem Weg zur Mitte (x = 2,5 und 7,5) wirkt ein Viertel der Verjüngung, wie bei einer Länge von 5.
+  for (const i of [5, 15]) expect(done[i], `Punkt ${i}`).toBeCloseTo((1 - 0.85 * 0.25) * base[i], 9);
+  for (const i of [0, 20]) expect(done[i], `Punkt ${i}`).toBeCloseTo(Math.max(0.1 * NOM, TAPER_TIP * base[i]), 9);
+});
+
+test('a resting pen with times keeps the blob limits', () => {
+  /**
+   * Der Klecks-Test von oben mit Zeiten. Stark gezoomt zieht der Stift 20 Einheiten langsam (0,1 Bildschirmpunkte je ms), bleibt am
+   * Ende stehen und zittert: 200 Punkte im Umkreis von 0,3 Einheiten (3 Bildschirmpunkte), je 40 ms auseinander. Auch der weiteste
+   * Sprung (6 Bildschirmpunkte) ist dann langsam: Ruhe ist kleines Tempo, also volle Breite, mit den Grenzen wie ohne Zeiten.
+   */
+  const rest = (dir: [number, number], seed: number) => {
+    const b = fueller();
+    const start = { x: 100, y: 100 };
+    const line = straight(start, dir, 20, 0.1);
+    let t = 5000;
+    b.add(start.x, start.y, 0.45, 40, 40, t);
+    for (const p of line) b.add(p.x, p.y, 0.45, 40, 40, (t += 10)); // 0,1 Einheiten sind ein Bildschirmpunkt
+    const moving = b.points()[b.points().length - 1].w;
+    const n = b.points().length;
+    for (const p of around(line[line.length - 1], 0.3, 200, random(seed))) b.add(p.x, p.y, 0.45, 40, 40, (t += 40));
+    return { moving, resting: widths(b.points().slice(n)), stroked: widths(b.stroke().pts.slice(n)) };
+  };
+  const { moving, resting, stroked } = rest([1, 1], 4711);
+  expect(resting.length).toBeGreaterThan(100);
+  expect(Math.max(...resting)).toBeLessThanOrEqual(1.05 * Math.min(...resting));
+  expect(Math.max(...resting)).toBeLessThanOrEqual(1.05 * moving);
+  expect(stroked).toEqual(resting);
+  for (let seed = 1; seed <= 200; seed++) {
+    const across = rest([1, -1], seed);
+    const widest = Math.max(...across.resting);
+    expect(across.resting.length, `Startwert ${seed}`).toBeGreaterThan(100);
+    expect(widest, `Startwert ${seed}`).toBeLessThanOrEqual(1.05 * across.moving);
+    expect(widest, `Startwert ${seed}`).toBeLessThanOrEqual(1.05 * Math.min(...across.resting));
+  }
+});
+
+test('without times nothing changes', () => {
+  // Eine Welle mit wechselndem Druck und etwas Zittern, Startwerte der Regler, in normaler Größe, ohne Zeiten. Die Breiten beim
+  // Schreiben und fertig sind dieselben wie vor dem Tempo (aufgenommen mit dem Stand e6c6fd4, auf sechs Stellen gerundet).
+  const before = {
+    live: [
+      0.226498, 0.818679, 1.328679, 1.386832, 1.644566, 1.988995, 1.7406, 1.770835, 1.976409, 1.696528, 1.683252, 1.829095, 1.47066, 1.375161,
+      1.427373, 1.062371, 0.961545, 1.017302, 0.773874, 0.768001, 0.874724, 0.72738, 0.788371, 0.982771,
+    ],
+    done: [
+      0.226498, 0.818679, 1.328679, 1.386832, 1.644566, 1.988995, 1.7406, 1.770835, 1.976409, 1.696528, 1.683252, 1.829095, 1.47066, 1.375161,
+      1.427373, 1.062371, 0.961545, 1.005246, 0.715593, 0.629158, 0.602939, 0.363704, 0.254658, 0.147416,
+    ],
+  };
+  const rnd = random(4242);
+  const b = new StrokeBuilder({ pen: 'fueller', color: 'schwarz', widthMm: 0.2, sigma: 0, t: 1, minDist: 0.6, pxUnit: 1 });
+  for (let i = 0; i < 24; i++) {
+    expect(b.add(100 + 1.1 * i, 100 + 6 * Math.sin(i / 5) + (2 * rnd() - 1) * 0.2, [0.2, 0.5, 0.9][i % 3], 40, 40)).toBe(true);
+  }
+  for (const [name, got] of [
+    ['live', widths(b.points())],
+    ['done', widths(b.finish().pts)],
+  ] as const) {
+    expect(got, name).toHaveLength(24);
+    got.forEach((w, i) => expect(w, `${name} ${i}`).toBeCloseTo(before[name][i], 5));
   }
 });

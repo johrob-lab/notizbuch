@@ -1,9 +1,10 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 import { GestureFilter } from '../../src/ink/gestures';
+import { outlineD } from '../../src/ink/outline';
 import { DEFAULT_FUELLER, type FuellerSettings } from '../../src/ink/pens';
 import { WIDTH_MM } from '../../src/ink/types';
 import { DEFAULT_INK } from '../../src/lib/settings';
-import { fuellerPanel, previewD } from '../../src/ui/FuellerPanel';
+import { fuellerPanel, previewD, previewStroke } from '../../src/ui/FuellerPanel';
 import { inkPrefs } from '../../src/ui/inkPrefs';
 import { inkTools, type InkToolsOptions } from '../../src/ui/inkTools';
 import { toolActions } from '../../src/ui/toolActions';
@@ -157,6 +158,26 @@ test('the preview fits its viewBox with any settings and width', () => {
       }
     }
   }
+});
+
+test('the preview shows speed and tips', () => {
+  // Die Vorschau setzt langsam an (0,2 Bildschirmpunkte je ms), wird zur Mitte etwas schneller (0,35) und hebt schnell ab (1,0).
+  const done = previewStroke(DEFAULT_FUELLER, WIDTH_MM.mittel).pts;
+  const base = previewStroke({ ...DEFAULT_FUELLER, schaerfe: 0 }, WIDTH_MM.mittel).pts; // ohne Verjüngung
+  expect(previewD(DEFAULT_FUELLER, WIDTH_MM.mittel).d).toBe(outlineD(done));
+  // Die Breite nimmt zum schnellen Ende hin ab: Am Ende ist die Linie schmaler als am Anfang, obwohl die Kurve dort dieselbe
+  // Richtung hat und der Druck derselbe ist (gemessen 0,68-fach).
+  const last = base.length - 1;
+  expect(base[last].w).toBeLessThanOrEqual(0.8 * base[0].w);
+  // Das Ende läuft länger spitz aus als der Anfang: Die Strecke, nach der die Breite 90 % der Grundbreite erreicht (gemessen am
+  // Anfang 2,9 Einheiten, am Ende 12,9).
+  const s = [0];
+  for (let i = 1; i <= last; i++) s.push(s[i - 1] + Math.hypot(done[i].x - done[i - 1].x, done[i].y - done[i - 1].y));
+  const full = done.map((p, i) => p.w >= 0.9 * base[i].w);
+  const fromStart = s[full.indexOf(true)];
+  const fromEnd = s[last] - s[full.lastIndexOf(true)];
+  expect(fromStart).toBeLessThanOrEqual(4);
+  expect(fromEnd).toBeGreaterThanOrEqual(3 * fromStart);
 });
 
 test('the quick switch goes back to the last pen', () => {

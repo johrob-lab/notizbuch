@@ -1029,7 +1029,8 @@ export class InkSurface {
     }
     d.hist.push({ x: pos.x, y: pos.y, t: ev.timeStamp });
     if (d.hist.length > 12) d.hist.shift();
-    if (d.builder.add(pt.x, pt.y, ev.pressure, ev.tiltX ?? 0, ev.tiltY ?? 0)) growBox(d.box, pt);
+    // Jedes Ereignis mit seiner eigenen Zeit, auch die zusammengefassten: Daraus misst die Füllfeder das Tempo.
+    if (d.builder.add(pt.x, pt.y, ev.pressure, ev.tiltX ?? 0, ev.tiltY ?? 0, ev.timeStamp)) growBox(d.box, pt);
   }
 
   /**
