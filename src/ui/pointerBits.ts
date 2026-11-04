@@ -1,8 +1,8 @@
 import { useRef } from 'preact/hooks';
 import type { GestureFilter, TouchMark } from '../ink/gestures';
 
-// Was Ring, Lasche und Rad gemeinsam brauchen: den Zeiger an einem Knopf festhalten, prüfen, ob er noch auf dem Knopf liegt,
-// und die Regel, wer einen Knopf auslöst.
+// Was Ring, Lasche, Rad und das Regler-Fenster gemeinsam brauchen: den Zeiger an einem Knopf festhalten, auf sein Abheben
+// warten, prüfen, ob er noch auf dem Knopf liegt, und die Regel, wer einen Knopf auslöst.
 
 /** Hält den Zeiger am Element fest. Ein künstliches Ereignis hat keinen aktiven Zeiger, dann bleibt es beim Versuch. */
 export function capturePointer(el: Element, id: number): void {
@@ -11,6 +11,22 @@ export function capturePointer(el: Element, id: number): void {
   } catch {
     // ein künstliches Ereignis hat keinen aktiven Zeiger
   }
+}
+
+/** Wartet auf das Abheben (oder den Abbruch) des Zeigers `id`, wo auch immer es ankommt. Gibt zurück, wie man das Warten beendet. */
+export function untilLifted(id: number, then: (ev: PointerEvent) => void): () => void {
+  function stop() {
+    window.removeEventListener('pointerup', end, true);
+    window.removeEventListener('pointercancel', end, true);
+  }
+  function end(ev: PointerEvent) {
+    if (ev.pointerId !== id) return;
+    stop();
+    then(ev);
+  }
+  window.addEventListener('pointerup', end, true);
+  window.addEventListener('pointercancel', end, true);
+  return stop;
 }
 
 type Box = { left: number; right: number; top: number; bottom: number };

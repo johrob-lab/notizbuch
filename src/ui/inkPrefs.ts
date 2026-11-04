@@ -1,5 +1,5 @@
 import { signal } from '@preact/signals';
-import { PENS } from '../ink/pens';
+import { PEN_CHOICES, type FuellerSettings } from '../ink/pens';
 import { PALETTE, WIDTH_MM } from '../ink/types';
 import { DEFAULT_INK, updateSettings, type InkPrefs, type Settings } from '../lib/settings';
 import type { Store } from '../sync/store';
@@ -20,17 +20,34 @@ let listening = false;
 
 const oneOf = <T>(value: unknown, allowed: readonly T[], fallback: T): T => (allowed.includes(value as T) ? (value as T) : fallback);
 
+/** Ein Regler der Füllfeder: eine endliche Zahl, auf 0 bis 1 begrenzt und auf zwei Nachkommastellen gerundet, sonst `fallback`. */
+const share = (value: unknown, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) ? Math.round(Math.min(1, Math.max(0, value)) * 100) / 100 : fallback;
+
+/** Die gespeicherten Regler der Füllfeder, jeder fehlende oder kaputte Wert aus `DEFAULT_INK.fueller`. */
+function fuellerOf(raw: unknown): FuellerSettings {
+  const r: Partial<Record<keyof FuellerSettings, unknown>> = typeof raw === 'object' && raw !== null ? raw : {};
+  const start = DEFAULT_INK.fueller;
+  return {
+    schaerfe: share(r.schaerfe, start.schaerfe),
+    druck: share(r.druck, start.druck),
+    rundung: share(r.rundung, start.rundung),
+    stabil: share(r.stabil, start.stabil),
+  };
+}
+
 /** Die gespeicherte Wahl, jedes fehlende oder unbekannte Feld aus `DEFAULT_INK`. */
 function sanitize(raw: Partial<InkPrefs> | undefined): InkPrefs {
   const r = raw ?? {};
   return {
     tool: oneOf(r.tool, ['pen', 'eraser'] as const, DEFAULT_INK.tool),
-    pen: oneOf(r.pen, PENS, DEFAULT_INK.pen),
+    pen: oneOf(r.pen, PEN_CHOICES, DEFAULT_INK.pen),
     color: oneOf(r.color, PALETTE, DEFAULT_INK.color),
     width: oneOf(r.width, Object.keys(WIDTH_MM) as InkPrefs['width'][], DEFAULT_INK.width),
     eraserSize: oneOf(r.eraserSize, ['klein', 'mittel', 'gross'] as const, DEFAULT_INK.eraserSize),
     eraserMode: oneOf(r.eraserMode, ['strich', 'stueck'] as const, DEFAULT_INK.eraserMode),
     scribble: typeof r.scribble === 'boolean' ? r.scribble : DEFAULT_INK.scribble,
+    fueller: fuellerOf(r.fueller),
   };
 }
 

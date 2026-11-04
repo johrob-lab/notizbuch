@@ -6,7 +6,18 @@ import { History, restore, type Removed } from './history';
 import { fixedSegments, tailStart } from './live';
 import { InkMeter } from './meter';
 import { outlineOf } from './outline';
-import { BLEISTIFT_OPACITY, BLEISTIFT_PRESSURE, isShape, type PenKind } from './pens';
+import {
+  BLEISTIFT_OPACITY,
+  DEFAULT_FUELLER,
+  DEFAULT_PEN_ANGLE,
+  MIN_DIST_PX,
+  STABIL_SIGMA,
+  isShape,
+  nibShape,
+  penAngle,
+  type FuellerSettings,
+  type PenKind,
+} from './pens';
 import { extrapolate } from './predict';
 import { isScribble, scribbleTargets } from './scribble';
 import { newStrokeId, StrokeBuilder } from './stroke';
@@ -21,7 +32,7 @@ import { INK, MM, PAGE_H, PAGE_W, PAPER, WIDTH_MM, type FieldBox, type InkColor,
 export type SurfaceOptions = {
   /** Nichts schreiben, radieren oder rückgängig machen, nur ansehen. Verschieben und Zoomen gehen weiter. */
   readOnly: boolean;
-  /** Stärke der Glättung (σ, siehe `SMOOTHING`). */
+  /** Stärke der Glättung (σ, siehe `SMOOTHING`). Die Füllfeder glättet stattdessen mit ihrer Strich-Stabilisierung. */
   sigma: number;
   prediction: boolean;
   /**
@@ -51,8 +62,7 @@ export type SurfaceOptions = {
 };
 
 /**
- * Ein Strich, der entsteht, mit Stift und Farbe des Strichs (beim Bleistift `grau`). `grain`: Der Bleistift malt mit Körnung,
- * beim Aufsetzen einmal entschieden. `drawn` sagt, was schon fest auf der Live-Ebene steht: bei Linien das erste Segment, das
+ * Ein Strich, der entsteht, mit Stift und Farbe des Strichs. `drawn` sagt, was schon fest auf der Live-Ebene steht: bei Linien das erste Segment, das
  * noch fehlt (siehe `live.ts`), bei Formen die Zahl der Punkte, deren Viereck vom vorigen Punkt und deren Kreis dort stehen.
  * `tailArea` ist der Bereich des Endstücks auf der Vorhersage-Ebene.
  */
@@ -61,7 +71,6 @@ type Drawing = {
   builder: StrokeBuilder;
   pen: PenKind;
   color: StrokeColor;
-  grain: boolean;
   box: Box;
   drawn: number;
   tailArea: Box | null;
@@ -87,6 +96,17 @@ const HEAVY_POINTS = 8000;
 /** Zoom als Vielfaches der normalen Größe (`fit`, die Seite füllt die Breite): kleiner als normal wird die Seite nie. */
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 10;
+/** Die Spitze beim Schweben ist auf dem Bildschirm mindestens so lang (Punkte), sonst wäre sie in normaler Größe kaum zu sehen. */
+const TIP_MIN_PX = 8;
+/** So lange (ms) bleibt die Spitze nach der letzten Schwebe-Meldung stehen. */
+const TIP_HOLD_MS = 300;
+
+/**
+ * Richtung, in die der Stift beim letzten Strichpunkt mit Neigung zeigte (Bogenmaß). So steht die Spitze beim Schweben, denn
+ * dabei meldet Safari keine Neigung. Sie gehört keiner einzelnen Fläche: Jede Seite baut ihre eigene, und nach dem Blättern
+ * steht die Spitze wie beim letzten Strich, nicht wieder wie bei einem Rechtshänder.
+ */
+let lastPenDir = DEFAULT_PEN_ANGLE;
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
@@ -172,8 +192,6 @@ export class InkSurface {
   private readonly base: HTMLCanvasElement;
   private readonly live: HTMLCanvasElement;
   private readonly pred: HTMLCanvasElement;
-  /** Live- und Vorhersage-Ebene zusammen: Eine Deckkraft hier gilt einmal für beide, wie bei einem einzigen Bild. */
-  private readonly liveGroup: HTMLElement;
   /** Bild der Grundebene für Gesten auf vollen Seiten. Hat nur während einer solchen Geste eine Größe. */
   private readonly snap = document.createElement('canvas');
   private readonly bctx: CanvasRenderingContext2D;
@@ -199,8 +217,13 @@ export class InkSurface {
   private eraserPx = ERASER_PX.mittel;
   private eraserMode: EraserMode = 'strich';
   private scribble = true;
+  /** Die Regler der Füllfeder für die nächsten Striche. */
+  private fueller: FuellerSettings = DEFAULT_FUELLER;
   private flashTimer = 0;
   private flashEl: HTMLElement | null = null;
+  /** Die Spitze der Füllfeder, solange der Stift über der Seite schwebt. */
+  private tipEl: HTMLElement | null = null;
+  private tipTimer = 0;
 
   // Ansicht: `view` rechnet Seiteneinheiten in Bildschirmpunkte um (x * s + x), `fit` ist der Maßstab für die Seitenbreite.
   private dpr = 1;
@@ -250,19 +273,14 @@ export class InkSurface {
     this.bctx = context(this.base);
     this.lctx = context(this.live, { desynchronized: true });
     this.pctx = context(this.pred);
-    // Live- und Vorhersage-Ebene liegen in einer Gruppe. Der Bleistift setzt seine Deckkraft auf die Gruppe: Sie wirkt einmal
-    // auf beide zusammen, und wo sich ihre Stücke überlappen, wird es nicht dunkler.
-    this.liveGroup = document.createElement('div');
-    this.liveGroup.dataset.layers = 'live vorhersage';
-    Object.assign(this.liveGroup.style, { position: 'absolute', inset: '0', pointerEvents: 'none', touchAction: 'none' });
-    this.liveGroup.append(this.live, this.pred);
-    el.append(this.base, this.liveGroup);
+    el.append(this.base, this.live, this.pred);
 
     // Alle Zeiger hören auf `el`: Der Stift (und der Finger) bleibt mit Zeigerfang bei der Fläche, auch außerhalb ihres Rands.
     this.listen(el, 'pointerdown', this.onDown, { passive: false });
     this.listen(el, 'pointermove', this.onMove, { passive: false });
     this.listen(el, 'pointerup', this.onUp);
     this.listen(el, 'pointercancel', this.onUp);
+    this.listen(el, 'pointerleave', this.onLeave);
     this.listen(el, 'wheel', this.onWheel, { passive: false });
     // Ohne diese Sperren zoomt oder scrollt Safari die ganze Seite, statt dass die Fläche die Geste bekommt.
     const prevent = (e: Event) => e.preventDefault();
@@ -326,13 +344,21 @@ export class InkSurface {
     return { ...this.head, meta: { ...this.head.meta }, strokes: this.strokes.slice() };
   }
 
+  /** Stift oder Radierer. Ein anderes Werkzeug blendet die Spitze beim Schweben aus. */
   setTool(t: 'pen' | 'eraser'): void {
+    if (t !== this.tool) this.hideTip();
     this.tool = t;
   }
 
-  /** Der Stift für die nächsten Striche. Ein Strich, der gerade entsteht, bleibt bei seinem. */
+  /** Der Stift für die nächsten Striche. Ein Strich, der gerade entsteht, bleibt bei seinem. Ein anderer Stift blendet die Spitze aus. */
   setPen(pen: PenKind): void {
+    if (pen !== this.pen) this.hideTip();
     this.pen = pen;
+  }
+
+  /** Die Regler der Füllfeder für die nächsten Striche. Ein Strich, der gerade entsteht, bleibt bei seinen. */
+  setFueller(s: FuellerSettings): void {
+    this.fueller = s;
   }
 
   setColor(c: InkColor): void {
@@ -357,11 +383,13 @@ export class InkSurface {
   /**
    * Sperrt die Fläche oder gibt sie frei. Beim Sperren endet, was gerade entsteht, ohne zur Seite zu gehören: Ein Strich
    * verschwindet, radierte Striche stehen wieder da. Die Seite wird nicht mehr gespeichert, also soll auch nichts auf
-   * dem Bildschirm stehen, was nie gespeichert wird.
+   * dem Bildschirm stehen, was nie gespeichert wird. Die Spitze beim Schweben geht sofort: Hier schreibt der Stift nicht mehr.
    */
   setReadOnly(on: boolean): void {
     this.readOnly = on;
-    if (on) this.cancelInput();
+    if (!on) return;
+    this.cancelInput();
+    this.hideTip();
   }
 
   undo(): void {
@@ -436,13 +464,13 @@ export class InkSurface {
     clearTimeout(this.predTimer);
     clearTimeout(this.flashTimer);
     this.flashEl?.remove();
+    this.hideTip();
     for (const c of [this.base, this.live, this.pred, this.snap]) {
       c.remove();
       // Safari gibt den Speicher einer Zeichenfläche erst frei, wenn sie nichts mehr zu halten hat, und deckelt alle zusammen.
       c.width = 0;
       c.height = 0;
     }
-    this.liveGroup.remove();
   }
 
   // ---------- Aufbau ----------
@@ -454,7 +482,7 @@ export class InkSurface {
     if (!receivesInput) {
       c.style.pointerEvents = 'none';
       c.setAttribute('aria-hidden', 'true');
-    } else c.style.pointerEvents = 'auto'; // auch in der Gruppe, die selbst keine Zeiger annimmt
+    }
     return c;
   }
 
@@ -599,7 +627,7 @@ export class InkSurface {
     const pencil = s.tool === 'bleistift';
     ctx.save();
     if (pencil) ctx.globalAlpha = BLEISTIFT_OPACITY;
-    this.shapePaint(ctx, s.color, pencil && boundsOf(s).maxW * this.view.s * this.dpr >= GRAIN_MIN_PX);
+    this.shapePaint(ctx, s.color, { grainy: pencil && boundsOf(s).maxW * this.view.s * this.dpr >= GRAIN_MIN_PX });
     ctx.beginPath();
     for (const poly of outlineOf(s, this.pixel())) {
       ctx.moveTo(poly[0].x, poly[0].y);
@@ -611,11 +639,11 @@ export class InkSurface {
   }
 
   /**
-   * Womit eine Form gemalt wird: in der Farbe des Strichs, mit `grainy` (nur Bleistift) im Kornmuster, voll deckend (die
-   * Deckkraft des Bleistifts setzt, wer zeichnet). Das Muster wird nicht geglättet: So deckt jeder Bildpunkt ganz oder gar
-   * nicht, auch vergrößert, und wo sich Stücke auf einer Ebene überlappen, wird es nicht dunkler.
+   * Womit eine Form gemalt wird: in der Farbe des Strichs, mit `grainy` (nur fertige Bleistiftstriche) im Kornmuster, voll
+   * deckend (die Deckkraft des Bleistifts setzt, wer zeichnet). Das Muster wird nicht geglättet: So deckt jeder Bildpunkt ganz
+   * oder gar nicht, auch vergrößert, und wo sich Stücke auf einer Ebene überlappen, wird es nicht dunkler.
    */
-  private shapePaint(ctx: CanvasRenderingContext2D, color: StrokeColor, grainy: boolean): void {
+  private shapePaint(ctx: CanvasRenderingContext2D, color: StrokeColor, { grainy }: { grainy: boolean }): void {
     const grain = grainy ? this.grain(ctx) : null;
     ctx.fillStyle = grain ?? INK[color];
     ctx.strokeStyle = grain ?? INK[color];
@@ -806,7 +834,7 @@ export class InkSurface {
     if (d.drawn < settled) {
       const ctx = this.lctx;
       this.setView(ctx);
-      this.shapePaint(ctx, d.color, d.grain);
+      this.shapePaint(ctx, d.color, { grainy: false });
       ctx.beginPath();
       count = addShape(ctx, p, d.drawn, settled, this.pixel());
       ctx.fill('nonzero');
@@ -853,7 +881,7 @@ export class InkSurface {
     const ctx = this.pctx;
     const px = this.pixel();
     this.setView(ctx);
-    this.shapePaint(ctx, d.color, d.grain);
+    this.shapePaint(ctx, d.color, { grainy: false });
     ctx.beginPath();
     const count = addShape(ctx, p, d.drawn, n, px);
     ctx.fill('nonzero');
@@ -931,7 +959,7 @@ export class InkSurface {
     if (isShape(d.pen)) {
       // Eine Form: Viereck vom letzten Punkt zum vorhergesagten in der Breite des letzten Punkts, ein Kreis am Ende.
       const r = Math.max(last.w, this.pixel()) / 2;
-      this.shapePaint(pctx, d.color, d.grain);
+      this.shapePaint(pctx, d.color, { grainy: false });
       pctx.beginPath();
       addQuad(pctx, last, r, t, r);
       addCircle(pctx, t, r);
@@ -963,21 +991,10 @@ export class InkSurface {
     const pen = this.pen;
     const builder = this.newBuilder(pen);
     const color = builder.stroke().color;
-    // Körnung nur, wenn der Strich auf dem Bildschirm breit genug werden kann: beim Aufsetzen einmal entschieden, mit der
-    // größten Breite, die der Druck zulässt.
-    const grain = pen === 'bleistift' && this.widthMm * MM * BLEISTIFT_PRESSURE.max * this.view.s * this.dpr >= GRAIN_MIN_PX;
-    this.drawing = { id: e.pointerId, builder, pen, color, grain, box: emptyBox(), drawn: nothingDrawn(pen), tailArea: null, hist: [] };
-    // Der Bleistift malt auf Live- und Vorhersage-Ebene voll deckend, seine Deckkraft gilt einmal für beide zusammen. So sieht
-    // er aus wie der fertige Strich, auch wo sich seine Stücke überlappen.
-    if (pen === 'bleistift') this.setLiveOpacity(String(BLEISTIFT_OPACITY));
+    this.drawing = { id: e.pointerId, builder, pen, color, box: emptyBox(), drawn: nothingDrawn(pen), tailArea: null, hist: [] };
     this.addSample(e);
     this.liveUpdate();
     this.startMeter();
-  }
-
-  /** Deckkraft von Live- und Vorhersage-Ebene zusammen (auf ihrer Gruppe, einmal für beide). Leer heißt: ganz deckend. */
-  private setLiveOpacity(value: string): void {
-    this.liveGroup.style.opacity = value;
   }
 
   private newBuilder(pen: PenKind): StrokeBuilder {
@@ -985,9 +1002,13 @@ export class InkSurface {
       pen,
       color: this.color,
       widthMm: this.widthMm,
-      sigma: this.opts.sigma,
+      // Die Füllfeder glättet mit ihrer Strich-Stabilisierung statt mit der Glättung aus den Einstellungen.
+      sigma: pen === 'fueller' ? STABIL_SIGMA * this.fueller.stabil : this.opts.sigma,
       t: Date.now(),
-      minDist: 0.6 / this.view.s, // auf dem Bildschirm immer gleich weit, egal wie weit hineingezoomt ist
+      minDist: MIN_DIST_PX / this.view.s, // auf dem Bildschirm immer gleich weit, egal wie weit hineingezoomt ist
+      // Nur die Füllfeder liest diese beiden: ihre Regler und wie viele Seiteneinheiten ein Bildschirmpunkt gerade ist.
+      fueller: this.fueller,
+      pxUnit: 1 / this.view.s,
     });
   }
 
@@ -998,6 +1019,8 @@ export class InkSurface {
 
   private addSample(ev: PointerEvent): void {
     const d = this.drawing!;
+    // Die Spitze beim Schweben steht wie die Feder beim letzten Strich, auch auf der nächsten Seite.
+    lastPenDir = penAngle(ev.tiltX ?? 0, ev.tiltY ?? 0) ?? lastPenDir;
     const pos = this.local(ev);
     const pt = this.toPage(pos.x, pos.y);
     if (this.inNoInk(pt)) {
@@ -1026,9 +1049,12 @@ export class InkSurface {
     this.clearPredLayer();
   }
 
-  /** Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. Ein Gekritzel über Geschriebenem löscht es stattdessen. */
+  /**
+   * Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. Ein Gekritzel über Geschriebenem löscht es
+   * stattdessen. Gespeichert wird der fertige Strich, bei der Füllfeder mit beiden spitzen Enden.
+   */
   private commitStroke(d: Drawing): void {
-    const s = d.builder.stroke();
+    const s = d.builder.finish();
     if (!s.pts.length) return;
     if (this.scribble && this.eraseByScribble(s)) return;
     this.strokes.push(s);
@@ -1092,7 +1118,6 @@ export class InkSurface {
     this.stopMeter();
     this.clearLive(true);
     this.clearPredLayer();
-    this.setLiveOpacity('');
     if (d && commit) this.commitStroke(d);
   }
 
@@ -1232,6 +1257,58 @@ export class InkSurface {
     if (g.moved) this.render();
   }
 
+  // ---------- Spitze beim Schweben ----------
+
+  /**
+   * Der Stift schwebt über der Seite, ohne sie zu berühren. Mit der Füllfeder auf einer Seite, die man beschreiben kann, zeigt
+   * die Spitze, wo er aufsetzen würde: die Form der Feder bei mittlerem Druck (`nibShape`), gedreht wie beim letzten Strich.
+   */
+  private hover(e: PointerEvent): void {
+    if (this.readOnly || this.tool !== 'pen' || this.pen !== 'fueller' || this.drawing) {
+      this.hideTip();
+      return;
+    }
+    // Wo die Fläche liegt, wird nur gemessen, wenn noch keine Spitze steht (erstes Schweben, nach dem Verlassen, nach einer
+    // Pause), sonst wie immer bei Größe, Rad und Aufsetzen. Jedes Messen erzwingt ein Layout, und der Stift meldet sich oft.
+    if (!this.tipEl) this.refreshRect();
+    this.showTip(this.local(e));
+  }
+
+  /**
+   * Stellt die Spitze mit ihrer Mitte auf `at` (Bildschirmpunkte in der Fläche): ein eigenes Element über den Ebenen, so löscht
+   * ihr Wandern nichts, was dort gezeichnet ist. Ohne neue Schwebe-Meldung geht sie nach `TIP_HOLD_MS`.
+   */
+  private showTip(at: Pt2): void {
+    const shape = nibShape(this.fueller, this.widthMm * MM, lastPenDir);
+    // Bildschirmpunkte je Seiteneinheit: wie die Seite, aber so viele, dass die Spitze mindestens `TIP_MIN_PX` lang ist.
+    const k = Math.max(this.view.s, TIP_MIN_PX / shape.long);
+    const long = shape.long * k;
+    const short = shape.short * k;
+    if (!this.tipEl) {
+      const el = document.createElement('div');
+      el.className = 'spitze';
+      el.setAttribute('aria-hidden', 'true');
+      this.el.append(el);
+      this.tipEl = el;
+    }
+    Object.assign(this.tipEl.style, {
+      left: `${at.x - long / 2}px`,
+      top: `${at.y - short / 2}px`,
+      width: `${long}px`,
+      height: `${short}px`,
+      transform: `rotate(${shape.angle}rad)`,
+      background: INK[this.color],
+    });
+    clearTimeout(this.tipTimer);
+    this.tipTimer = window.setTimeout(() => this.hideTip(), TIP_HOLD_MS);
+  }
+
+  private hideTip(): void {
+    clearTimeout(this.tipTimer);
+    this.tipEl?.remove();
+    this.tipEl = null;
+  }
+
   // ---------- Eingabe ----------
 
   private capture(e: PointerEvent): void {
@@ -1257,6 +1334,7 @@ export class InkSurface {
   }
 
   private onDown = (e: PointerEvent): void => {
+    this.hideTip(); // der Stift setzt auf: Die Linie übernimmt
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
     this.refreshRect();
@@ -1306,7 +1384,7 @@ export class InkSurface {
       this.touches.set(e.pointerId, this.local(e));
       this.logFinger(e, 'move');
       this.moveGesture();
-    }
+    } else if (e.pointerType === 'pen' && e.buttons === 0) this.hover(e);
   };
 
   private onUp = (e: PointerEvent): void => {
@@ -1325,6 +1403,11 @@ export class InkSurface {
     if (isTwoFingerTap(this.fingerLog)) this.undo();
     else if (isFingerTap(this.tapLog)) this.opts.onTap?.(this.toPage(this.tapLog[0].x, this.tapLog[0].y));
     this.forgetTaps();
+  };
+
+  /** Der Stift verlässt die Fläche: Die Spitze beim Schweben geht mit. */
+  private onLeave = (e: PointerEvent): void => {
+    if (e.pointerType === 'pen') this.hideTip();
   };
 
   /** Mausrad: blättern, mit Strg (oder Cmd, so meldet das Trackpad Zwei-Finger-Zoomen) zoomen. */

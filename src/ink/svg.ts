@@ -81,7 +81,16 @@ function attrs(list: Attr[]): string {
 
 // ---------- Schreiben ----------
 
-/** Ein <path> je Strich, alle Zahlen mit höchstens einer Nachkommastelle. */
+/**
+ * Breite eines Punkts in `data-linie`: auf zwei Nachkommastellen gerundet, ohne Nullen am Ende und nie als `-0`. Eine
+ * Nachkommastelle gäbe bei dünnen Linien sichtbare Stufen. Was keine endliche Zahl ist, wird `0` wie bei `fmtNum`.
+ */
+function fmtWidth(n: number): string {
+  if (!Number.isFinite(n)) return '0';
+  return String(Math.round(n * 100) / 100);
+}
+
+/** Ein <path> je Strich, alle Zahlen mit höchstens einer Nachkommastelle, nur die Breiten in `data-linie` mit zwei. */
 function strokeMarkup(s: Stroke): string {
   if (isShape(s.tool)) {
     const list: Attr[] = [
@@ -90,7 +99,7 @@ function strokeMarkup(s: Stroke): string {
       ['data-farbe', s.color],
       ['data-breite', fmtNum(s.widthMm)],
       ['data-t', fmtNum(s.t)],
-      ['data-linie', s.pts.map((p) => `${fmtNum(p.x)} ${fmtNum(p.y)} ${fmtNum(p.w)}`).join(' ')],
+      ['data-linie', s.pts.map((p) => `${fmtNum(p.x)} ${fmtNum(p.y)} ${fmtWidth(p.w)}`).join(' ')],
       ['d', outlineD(s.pts)],
       ['fill', INK[s.color]],
     ];

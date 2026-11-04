@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { DEFAULT_FUELLER } from '../../src/ink/pens';
 import { DEFAULT_INK, loadSettings, saveSettings, type Settings } from '../../src/lib/settings';
 import { openStore, type Store } from '../../src/sync/store';
 import { initInkPrefs, inkPrefs, setInkPrefs } from '../../src/ui/inkPrefs';
@@ -50,4 +51,29 @@ test('a saved choice without a pen or with an unknown pen is the ballpoint', () 
   expect(inkPrefs.value.pen).toBe('kugel');
   initInkPrefs({ ...settings, ink: { pen: 'fueller' } as never });
   expect(inkPrefs.value.pen).toBe('fueller');
+});
+
+test('a saved pencil becomes the ballpoint', () => {
+  initInkPrefs({ ...settings, ink: { pen: 'bleistift', color: 'rot' } as never });
+  expect(inkPrefs.value.pen).toBe('kugel');
+  expect(inkPrefs.value.color).toBe('rot');
+});
+
+test('fountain pen settings fall back to the start values', () => {
+  expect(DEFAULT_INK.fueller).toEqual(DEFAULT_FUELLER);
+  // Fehlt die ganze Einstellung, oder ist sie kein Objekt: alle vier Startwerte.
+  for (const fueller of [undefined, null, 'scharf', Number.NaN]) {
+    initInkPrefs({ ...settings, ink: { fueller } as never });
+    expect(inkPrefs.value.fueller, String(fueller)).toEqual(DEFAULT_FUELLER);
+  }
+  // Je Regler: fehlt, null, Text, NaN, unendlich gibt seinen Startwert, die übrigen bleiben.
+  initInkPrefs({ ...settings, ink: { fueller: { schaerfe: null, druck: '0.5', rundung: Number.NaN, stabil: Number.POSITIVE_INFINITY } } as never });
+  expect(inkPrefs.value.fueller).toEqual(DEFAULT_FUELLER);
+  initInkPrefs({ ...settings, ink: { fueller: { druck: 0.5 } } as never });
+  expect(inkPrefs.value.fueller).toEqual({ ...DEFAULT_FUELLER, druck: 0.5 });
+  // Auf 0 bis 1 begrenzt und auf zwei Nachkommastellen gerundet.
+  initInkPrefs({ ...settings, ink: { fueller: { schaerfe: 1.7, druck: -0.2, rundung: 0.333, stabil: 0 } } as never });
+  expect(inkPrefs.value.fueller).toEqual({ schaerfe: 1, druck: 0, rundung: 0.33, stabil: 0 });
+  // Die übrige Wahl bleibt davon unberührt.
+  expect(inkPrefs.value).toEqual({ ...DEFAULT_INK, fueller: { schaerfe: 1, druck: 0, rundung: 0.33, stabil: 0 } });
 });

@@ -4,7 +4,7 @@ import { INK } from '../ink/types';
 import { RING, ringLayout, type Pt } from './ringLayout';
 import type { ActionButton, ToolAction } from './toolActions';
 import { ERASER_SIZES, WIDTHS } from './toolChoices';
-import { capturePointer, useActivation } from './pointerBits';
+import { capturePointer, untilLifted, useActivation } from './pointerBits';
 import { Icon, PEN_ICON } from './Toolbar';
 
 // Der Ring des Rads im Vollbild: zwei Kreise aus Knöpfen um das Rad, darunter ein Schutzfeld über der ganzen Bühne. Was die Knöpfe
@@ -62,22 +62,6 @@ export function ActionFace({ action }: { action: ToolAction }) {
         </svg>
       );
   }
-}
-
-/** Wartet auf das Abheben (oder den Abbruch) des Zeigers `id`, wo auch immer es ankommt. Gibt zurück, wie man das Warten beendet. */
-function untilLifted(id: number, then: (ev: PointerEvent) => void): () => void {
-  function stop() {
-    window.removeEventListener('pointerup', end, true);
-    window.removeEventListener('pointercancel', end, true);
-  }
-  function end(ev: PointerEvent) {
-    if (ev.pointerId !== id) return;
-    stop();
-    then(ev);
-  }
-  window.addEventListener('pointerup', end, true);
-  window.addEventListener('pointercancel', end, true);
-  return stop;
 }
 
 /**

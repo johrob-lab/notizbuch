@@ -5,17 +5,24 @@ import type { Page } from '@playwright/test';
 // Weg zu Bildschirmkoordinaten kennt die App (`window.__notizbuch.toClient`).
 
 export type Kind = 'pen' | 'touch' | 'mouse';
-type Phase = 'down' | 'move' | 'up';
+/** Ein Punkt eines Wegs in Seiteneinheiten. Mit `pressure` meldet der Zeiger dort diesen Druck statt seines eigenen. */
+export type PathPoint = [x: number, y: number, pressure?: number];
+/** `hover` ist eine Bewegung ohne Berührung (`pointermove` ohne gedrückte Taste). */
+type Phase = 'down' | 'move' | 'up' | 'hover';
 /** Druck und Neigung, die ein Zeiger mit jedem Ereignis meldet. */
 type Feel = { pressure: number; tiltX: number; tiltY: number };
 type Step = { kind: Kind; id: number; primary: boolean; phase: Phase; x: number; y: number; size: number; feel: Feel };
 
 const LIVE = 'canvas[data-layer="live"]';
+/** Die Schreibfläche selbst, die alle Zeigerereignisse annimmt (die Ebenen liegen in ihr). */
+const SURFACE = '[data-testid="surface"]';
 /** So groß ist die Auflagefläche eines Fingers im Test (ein Handballen ist größer als 120). */
 const FINGER_SIZE = 1;
 const PALM_SIZE = 150;
 /** Ohne Angabe: halber Druck und keine Neigung. */
 const PLAIN: Feel = { pressure: 0.5, tiltX: 0, tiltY: 0 };
+/** Beim Schweben berührt der Stift nicht: kein Druck. Die Neigung meldet Safari dabei nicht. */
+const HOVERING: Feel = { pressure: 0, tiltX: 0, tiltY: 0 };
 
 /**
  * Spielt die Schritte in der Reihenfolge ab, alle in einem Aufruf: Zwischen zwei Ereignissen vergeht keine Wartezeit.
@@ -29,8 +36,9 @@ async function play(page: Page, steps: Step[]): Promise<void> {
       if (!surface) throw new Error('Keine Schreibfläche gefunden.');
       const placed = list.map((s) => ({ s, at: window.__notizbuch.toClient(s.x, s.y) }));
       for (const { s, at } of placed) {
+        const touching = s.phase === 'down' || s.phase === 'move';
         surface.dispatchEvent(
-          new PointerEvent(`pointer${s.phase}`, {
+          new PointerEvent(s.phase === 'hover' ? 'pointermove' : `pointer${s.phase}`, {
             pointerId: s.id,
             pointerType: s.kind,
             isPrimary: s.primary,
@@ -41,8 +49,8 @@ async function play(page: Page, steps: Step[]): Promise<void> {
             height: s.size,
             clientX: at.x,
             clientY: at.y,
-            button: s.phase === 'move' ? -1 : 0,
-            buttons: s.phase === 'up' ? 0 : 1,
+            button: s.phase === 'down' || s.phase === 'up' ? 0 : -1,
+            buttons: touching ? 1 : 0,
             bubbles: true,
             cancelable: true,
             composed: true,
@@ -51,6 +59,18 @@ async function play(page: Page, steps: Step[]): Promise<void> {
       }
     },
     { steps, target: LIVE },
+  );
+}
+
+/** Der Zeiger verlässt die Schreibfläche: `pointerleave` an der Fläche selbst (das Ereignis steigt nicht auf). */
+async function leaveSurface(page: Page, kind: Kind, id: number, primary: boolean): Promise<void> {
+  await page.evaluate(
+    ({ kind: pointerType, id: pointerId, primary: isPrimary, target }) => {
+      const surface = document.querySelector(target);
+      if (!surface) throw new Error('Keine Schreibfläche gefunden.');
+      surface.dispatchEvent(new PointerEvent('pointerleave', { pointerId, pointerType, isPrimary, bubbles: false, cancelable: false, composed: true }));
+    },
+    { kind, id, primary, target: SURFACE },
   );
 }
 
@@ -99,12 +119,19 @@ export function centerOf(page: Page, selector: string): Promise<{ x: number; y: 
 }
 
 export type Pointer = {
-  /** Zeichnet einen Weg: aufsetzen am ersten Punkt, zu jedem weiteren bewegen, am letzten abheben. */
-  stroke(points: [number, number][]): Promise<void>;
+  /** Zeichnet einen Weg: aufsetzen am ersten Punkt, zu jedem weiteren bewegen, am letzten abheben. Ein Punkt kann seinen Druck mitbringen. */
+  stroke(points: PathPoint[]): Promise<void>;
   tap(x: number, y: number): Promise<void>;
   down(x: number, y: number): Promise<void>;
   move(x: number, y: number): Promise<void>;
   up(x: number, y: number): Promise<void>;
+  /**
+   * Schwebt über der Seite, ohne sie zu berühren: `pointermove` ohne gedrückte Taste (`buttons` 0), ohne Druck und ohne
+   * Neigung. So meldet Safari den Apple Pencil kurz über dem Bildschirm.
+   */
+  hover(x: number, y: number): Promise<void>;
+  /** Verlässt die Schreibfläche (`pointerleave` an der Fläche). */
+  leave(): Promise<void>;
   /** Tippt in die Mitte eines Elements außerhalb der Schreibfläche (zum Beispiel den Schnellwechsel). */
   tapOn(selector: string): Promise<void>;
   /**
@@ -122,8 +149,17 @@ const BASE_ID: Record<Kind, number> = { mouse: 1, pen: 11, touch: 21 };
 
 function pointer(page: Page, kind: Kind, n: number, size = FINGER_SIZE, feel = PLAIN): Pointer {
   const id = BASE_ID[kind] + n;
-  const step = (phase: Phase, [x, y]: [number, number]): Step => ({ kind, id, primary: n === 0, phase, x, y, size, feel });
-  const path = (points: [number, number][]): Step[] => [
+  const step = (phase: Phase, [x, y, pressure]: PathPoint): Step => ({
+    kind,
+    id,
+    primary: n === 0,
+    phase,
+    x,
+    y,
+    size,
+    feel: pressure === undefined ? feel : { ...feel, pressure },
+  });
+  const path = (points: PathPoint[]): Step[] => [
     step('down', points[0]),
     ...points.slice(1).map((p) => step('move', p)),
     step('up', points[points.length - 1]),
@@ -135,6 +171,8 @@ function pointer(page: Page, kind: Kind, n: number, size = FINGER_SIZE, feel = P
     down: (x, y) => play(page, [step('down', [x, y])]),
     move: (x, y) => play(page, [step('move', [x, y])]),
     up: (x, y) => play(page, [step('up', [x, y])]),
+    hover: (x, y) => play(page, [{ ...step('hover', [x, y]), feel: HOVERING }]),
+    leave: () => leaveSurface(page, kind, id, n === 0),
     async tapOn(selector) {
       const c = await centerOf(page, selector);
       await on(selector, [
@@ -240,6 +278,22 @@ export function inkNear(page: Page, at: [number, number], radius = 6): Promise<n
     { at, radius },
   );
 }
+
+/**
+ * Der Ort der Seite nahe `at`, der auf den Ebenen genau in die Mitte eines Bildpunkts fällt. Ein Punkt, der nur etwa einen
+ * Bildpunkt groß ist, deckt dort diesen einen Bildpunkt fast ganz, sonst je nach Lage keinen zu mehr als der Hälfte.
+ */
+export const onPixelCentre = (page: Page, at: [number, number]): Promise<[number, number]> =>
+  page.evaluate(([x, y]) => {
+    const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-layer="grund"]')!;
+    const box = canvas.getBoundingClientRect();
+    const k = canvas.width / box.width;
+    const origin = window.__notizbuch.toClient(0, 0);
+    const scale = window.__notizbuch.toClient(1, 0).x - origin.x;
+    const c = window.__notizbuch.toClient(x, y);
+    const centre = (v: number, edge: number) => edge + (Math.floor((v - edge) * k) + 0.5) / k;
+    return [x + (centre(c.x, box.left) - c.x) / scale, y + (centre(c.y, box.top) - c.y) / scale] as [number, number];
+  }, at);
 
 /** Die Farbe der Grundebene an einem Ort der Seite als `[rot, grün, blau]` (0 bis 255), dort liegen Papier, Hintergrund und Striche. */
 export function colorAt(page: Page, at: [number, number]): Promise<[number, number, number]> {

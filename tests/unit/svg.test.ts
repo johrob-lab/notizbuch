@@ -749,8 +749,34 @@ test('a fountain pen stroke is a filled outline with its centre line and widths'
   s.pts.forEach((p, i) => {
     expect(Math.abs(back.pts[i].x - p.x)).toBeLessThanOrEqual(0.05);
     expect(Math.abs(back.pts[i].y - p.y)).toBeLessThanOrEqual(0.05);
-    expect(Math.abs(back.pts[i].w - p.w)).toBeLessThanOrEqual(0.05);
+    expect(Math.abs(back.pts[i].w - p.w)).toBeLessThanOrEqual(0.005 + 1e-9); // die Breite mit zwei Nachkommastellen
   });
+});
+
+test('the width in the centre line keeps two decimals', () => {
+  const s: Stroke = {
+    id: 'f1',
+    tool: 'fueller',
+    color: 'schwarz',
+    widthMm: 0.2,
+    t: 5,
+    w: 0.967,
+    pts: [
+      { x: 10.04, y: 20.06, w: 0.734 },
+      { x: 30, y: 40.04, w: 1.2 },
+    ],
+  };
+  const svg = serializePage(tagPage([s]), FIELDS, '');
+  // x und y weiter mit einer Nachkommastelle, die Breite mit zwei, ohne Nullen am Ende.
+  expect(lineOf(svg, 'f1')).toContain(' data-linie="10 20.1 0.73 30 40 1.2" ');
+  expect(parsePage(svg).strokes[0].pts).toEqual([
+    { x: 10, y: 20.1, w: 0.73 },
+    { x: 30, y: 40, w: 1.2 },
+  ]);
+  // Eine Datei von früher hat die Breite mit einer Nachkommastelle: Sie wird weiter gelesen.
+  const old = svg.replace(' data-linie="10 20.1 0.73 30 40 1.2" ', ' data-linie="10 20.1 0.7 30 40 1.2" ');
+  expect(old).not.toBe(svg);
+  expect(parsePage(old).strokes[0].pts.map((p) => p.w)).toEqual([0.7, 1.2]);
 });
 
 test('a pencil stroke is grey, see through and grainy, and the grain is defined once', () => {

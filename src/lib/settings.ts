@@ -1,4 +1,4 @@
-import type { PenKind } from '../ink/pens';
+import { DEFAULT_FUELLER, type FuellerSettings, type PenKind } from '../ink/pens';
 import type { InkColor, SMOOTHING, WidthName } from '../ink/types';
 import type { Store } from '../sync/store';
 import type { Day } from './dates';
@@ -19,9 +19,20 @@ export type InkPrefs = {
   eraserMode: EraserMode;
   /** Kritzeln über Geschriebenem löscht es. */
   scribble: boolean;
+  /** Die Regler der Füllfeder. Sie gelten für die Striche, die danach entstehen. */
+  fueller: FuellerSettings;
 };
 
-export const DEFAULT_INK: InkPrefs = { tool: 'pen', pen: 'kugel', color: 'schwarz', width: 'mittel', eraserSize: 'mittel', eraserMode: 'strich', scribble: true };
+export const DEFAULT_INK: InkPrefs = {
+  tool: 'pen',
+  pen: 'kugel',
+  color: 'schwarz',
+  width: 'mittel',
+  eraserSize: 'mittel',
+  eraserMode: 'strich',
+  scribble: true,
+  fueller: DEFAULT_FUELLER,
+};
 
 /** Womit man im Vollbild die Werkzeuge erreicht: ein Kreis um den Stift (`kreis`) oder eine Lasche am linken Rand (`tab`). */
 export type VollbildWerkzeuge = 'kreis' | 'tab';

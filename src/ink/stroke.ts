@@ -1,15 +1,24 @@
 import {
   BLEISTIFT_PRESSURE,
+  DEFAULT_FUELLER,
   DEFAULT_PEN_ANGLE,
+  DIR_LEN,
+  DIR_MIN,
+  DIR_MIN_PX,
   FINELINER_FACTOR,
-  FUELLER_MIN,
-  FUELLER_PRESSURE,
+  FUELLER_FLOOR,
+  MIN_DIST_PX,
+  PRESS_LEN,
   SMOOTH_NEW,
+  TAPER_LEN,
   doubled,
-  nibFactor,
+  nibFactorR,
   penAngle,
+  pressureFactor,
   pressureRamp,
+  taperFactor,
   type Doubled,
+  type FuellerSettings,
   type PenKind,
 } from './pens';
 import { isShape } from './pens';
@@ -20,6 +29,12 @@ const lerp = (range: { min: number; max: number }, t: number): number => range.m
 
 /** `a` und `b` gemischt, `b` mit dem Gewicht `SMOOTH_NEW`. */
 const mix = (a: Doubled, b: Doubled): Doubled => ({ c: a.c * (1 - SMOOTH_NEW) + b.c * SMOOTH_NEW, s: a.s * (1 - SMOOTH_NEW) + b.s * SMOOTH_NEW });
+
+/** `w`, aber nie unter `min`. Auch was keine Zahl ist, wird `min`. */
+const atLeast = (w: number, min: number): number => (w >= min ? w : min);
+
+/** Abstand zweier Punkte. */
+const dist = (a: { x: number; y: number }, x: number, y: number): number => Math.hypot(x - a.x, y - a.y);
 
 /**
  * Zahl für die SVG-Datei: auf eine Nachkommastelle gerundet, ohne `.0` am Ende und nie als `-0`.
@@ -47,9 +62,23 @@ export function newStrokeId(t: number): string {
  * Baut einen Strich aus den Stiftpunkten auf. Die Rechnung stammt aus `pushPoint` und `smoothTail` im Stift-Test
  * (`docs/reference/stift-test.html`) und ist dort mit dem Apple Pencil geprüft: Mindestabstand zum letzten Rohpunkt,
  * Druck geglättet, Breite aus dem Druck, Gauß-Glättung mit einem Fenster, das zu den Enden hin schrumpft.
+ *
+ * Die Füllfeder rechnet ihre Breite mit den Reglern (`FuellerSettings`) und glättet Druck und Richtung über den Weg statt
+ * je Punkt: Stark gezoomt liegen die Stiftpunkte so dicht, dass sonst das Zittern des Stifts die Breite springen ließe.
+ * Beim Schreiben läuft der Anfang spitz zu, `finish()` gibt den fertigen Strich mit beiden spitzen Enden. Steht die erste
+ * Richtung fest, rechnet sie die Punkte davor einmal nach, bis dahin ist bei ihr kein Punkt fest (`settled`).
  */
 export class StrokeBuilder {
-  private readonly opts: { pen: PenKind; color: InkColor; widthMm: number; sigma: number; t: number; minDist: number };
+  private readonly opts: {
+    pen: PenKind;
+    color: InkColor;
+    widthMm: number;
+    sigma: number;
+    t: number;
+    minDist: number;
+    fueller: FuellerSettings;
+    pxUnit: number;
+  };
   private readonly id: string;
   private readonly nomW: number;
   /** Halbe Fensterbreite der Glättung in Punkten, 0 heißt: nicht glätten. */
@@ -63,17 +92,50 @@ export class StrokeBuilder {
   /** Geglätteter Druck, `null` vor dem ersten Punkt. */
   private ps: number | null = null;
   private sumW = 0;
-  /** Strichrichtung als doppelter Winkel, geglättet. Länge 0 heißt: noch unbekannt. */
-  private dir: Doubled = { c: 0, s: 0 };
-  /** Federrichtung als doppelter Winkel, geglättet, `null` vor dem ersten Punkt. */
+
+  // Nur Füllfeder:
+  /** Strichrichtung als doppelter Winkel, geglättet. `null`, bis der Stift weit genug gekommen ist. */
+  private dir: Doubled | null = null;
+  /** Der Richtungsanker: folgt dem Stift wie an einem Seil, die Richtung zeigt von ihm zum Stift (am Anfang der erste Rohpunkt). */
+  private anchor: { x: number; y: number } | null = null;
+  /** Richtung, in die der Stift zeigt, als doppelter Winkel, geglättet. `null` vor dem ersten Punkt. */
   private nib: Doubled | null = null;
+  /**
+   * Der gezählte Ort für den Weg (am Anfang der erste Rohpunkt), der dem Stift wie an einem Seil folgt, und der Weg, den
+   * er dabei zurückgelegt hat. Bleibt dieser 0, kam der Stift nie weiter als das Seil vom Aufsetzpunkt weg: ein Tipp.
+   */
+  private counted: { x: number; y: number } | null = null;
+  private countedSum = 0;
+  /** Weg des letzten Rohpunkts ab dem Anfang, in Seiteneinheiten. */
+  private travel = 0;
+  /** Je Rohpunkt die Grundbreite (ohne Verjüngung) und der Weg ab dem Anfang. */
+  private readonly base: number[] = [];
+  private readonly ways: number[] = [];
+  /** Geglätteter Druck und Stiftrichtung der Punkte, solange die erste Richtung fehlt: Mit ihr werden sie nachgerechnet. */
+  private early: { ps: number; nib: Doubled }[] = [];
 
   /**
    * `minDist` ist der Mindestabstand zwischen zwei Rohpunkten in Seiteneinheiten (die App rechnet
    * 0.6 / Zoom, damit er auf dem Bildschirm gleich bleibt). `t` ist der Beginn des Strichs in Millisekunden.
+   * Nur für die Füllfeder: `fueller` sind die Regler (ohne Angabe die Startwerte), `pxUnit` sind Seiteneinheiten je
+   * Bildschirmpunkt (ohne Angabe aus `minDist`).
    */
-  constructor(o: { pen?: PenKind; color: InkColor; widthMm: number; sigma: number; t: number; minDist: number }) {
-    this.opts = { ...o, pen: o.pen ?? 'kugel' };
+  constructor(o: {
+    pen?: PenKind;
+    color: InkColor;
+    widthMm: number;
+    sigma: number;
+    t: number;
+    minDist: number;
+    fueller?: FuellerSettings;
+    pxUnit?: number;
+  }) {
+    this.opts = {
+      ...o,
+      pen: o.pen ?? 'kugel',
+      fueller: { ...DEFAULT_FUELLER, ...o.fueller },
+      pxUnit: o.pxUnit ?? o.minDist / MIN_DIST_PX,
+    };
     this.id = newStrokeId(o.t);
     this.nomW = o.widthMm * MM;
     const sig = o.sigma;
@@ -96,8 +158,7 @@ export class StrokeBuilder {
       if (dx * dx + dy * dy < min * min) return false;
     }
     const pv = pressure > 0 ? pressure : 0.5;
-    this.ps = this.ps === null ? pv : this.ps * 0.7 + pv * 0.3;
-    const pt: Pt = { x, y, w: this.widthAt(x, y, last, this.ps, tiltX, tiltY) };
+    const pt: Pt = { x, y, w: this.opts.pen === 'fueller' ? this.fuellerAt(x, y, last, pv, tiltX, tiltY) : this.widthAt(pv) };
     raw.push(pt);
     this.sumW += pt.w;
     this.smoothTail();
@@ -106,7 +167,8 @@ export class StrokeBuilder {
 
   /**
    * Der Strich, wie er jetzt ist. Das ist eine Momentaufnahme: Punkte, die danach kommen, ändern ihn nicht.
-   * `w` ist der Mittelwert der Breiten der Rohpunkte, ohne Punkte die Nennbreite.
+   * `w` ist der Mittelwert der Breiten der Rohpunkte, ohne Punkte die Nennbreite. Bei der Füllfeder läuft hier nur der
+   * Anfang spitz zu.
    */
   stroke(): Stroke {
     const n = this.raw.length;
@@ -121,34 +183,141 @@ export class StrokeBuilder {
     };
   }
 
-  /** Breite am neuen Rohpunkt je nach Stift. `last` ist der vorige Rohpunkt, `ps` der geglättete Druck. */
-  private widthAt(x: number, y: number, last: Pt | undefined, ps: number, tiltX: number, tiltY: number): number {
+  /**
+   * Der fertige Strich nach dem Abheben, eine Momentaufnahme wie `stroke()`. Bei der Füllfeder laufen beide Enden spitz
+   * zu, bei einem Strich kürzer als zwei Verjüngungen je auf seiner halben Länge. Ein Tipp (der Stift kam nie weiter als
+   * das Seil vom Aufsetzpunkt weg) bleibt ein runder Punkt, jeder Punkt in seiner Grundbreite. Die Orte sind dieselben wie
+   * bei `stroke()`. Bei den anderen Stiften gleich `stroke()`.
+   */
+  finish(): Stroke {
+    const s = this.stroke();
+    const n = this.raw.length;
+    if (this.opts.pen !== 'fueller' || !n) return s;
+    const tap = !(this.countedSum > 0);
+    const { schaerfe } = this.opts.fueller;
+    const floor = this.nomW * FUELLER_FLOOR;
+    const total = this.ways[n - 1];
+    const len = Math.min(TAPER_LEN, total / 2);
+    let sum = 0;
+    const pts = s.pts.map((p, i) => {
+      const way = this.ways[i];
+      const w = tap ? this.base[i] : atLeast(this.base[i] * taperFactor(schaerfe, way, len) * taperFactor(schaerfe, total - way, len), floor);
+      sum += w;
+      return { x: p.x, y: p.y, w };
+    });
+    return { ...s, w: sum / n, pts };
+  }
+
+  /** Breite am neuen Rohpunkt bei Kugelschreiber, Fineliner und Bleistift. `pv` ist der Druck, er wird je Punkt geglättet. */
+  private widthAt(pv: number): number {
+    const ps = (this.ps = this.ps === null ? pv : this.ps * 0.7 + pv * 0.3);
     const nomW = this.nomW;
     switch (this.opts.pen) {
       case 'fineliner':
         return nomW * FINELINER_FACTOR;
       case 'bleistift':
         return nomW * lerp(BLEISTIFT_PRESSURE, pressureRamp(ps));
-      case 'fueller': {
-        if (last) this.dir = mix(this.dir, doubled(Math.atan2(y - last.y, x - last.x)));
-        const now = doubled(penAngle(tiltX, tiltY) ?? DEFAULT_PEN_ANGLE);
-        this.nib = this.nib ? mix(this.nib, now) : now;
-        const len = Math.hypot(this.nib.c, this.nib.s);
-        const nib = len > 0 ? { c: this.nib.c / len, s: this.nib.s / len } : now; // Länge 0: zwei Neigungen genau gegenüber
-        const w = nomW * lerp(FUELLER_PRESSURE, pressureRamp(ps)) * nibFactor(this.dir, nib);
-        return Math.max(w, nomW * FUELLER_MIN);
-      }
       default:
         return nomW * (0.7 + 0.6 * ps); // Druck wirkt dezent auf die Breite
     }
   }
 
   /**
+   * Breite der Füllfeder am neuen Rohpunkt, mit der Verjüngung am Anfang. `last` ist der vorige Rohpunkt, `pv` der Druck.
+   * Druck und Richtung werden über den Weg geglättet, nicht je Punkt: Steht der Stift und zittert, ändert sich die Breite
+   * nicht, auch wenn er viele Punkte schickt. Merkt sich je Punkt Grundbreite und Weg für `finish()`.
+   */
+  private fuellerAt(x: number, y: number, last: Pt | undefined, pv: number, tiltX: number, tiltY: number): number {
+    const { pxUnit } = this.opts;
+    // Druck: der erste direkt, danach über den Weg zum vorigen Rohpunkt geglättet.
+    const ps = (this.ps = this.ps === null || !last ? pv : this.ps + (pv - this.ps) * (1 - Math.exp(-dist(last, x, y) / PRESS_LEN)));
+    // Richtung, in die der Stift zeigt: je Punkt gemischt und auf Länge 1 gebracht.
+    const now = doubled(penAngle(tiltX, tiltY) ?? DEFAULT_PEN_ANGLE);
+    this.nib = this.nib ? mix(this.nib, now) : now;
+    const nibLen = Math.hypot(this.nib.c, this.nib.s);
+    const nib = nibLen > 0 ? { c: this.nib.c / nibLen, s: this.nib.s / nibLen } : now; // Länge 0: zwei Neigungen genau gegenüber
+    // Richtung des Strichs am Seil: Der Anker folgt dem Stift im Abstand `dirRope` (0,5 mm und einige Bildschirmpunkte). Ist
+    // das Seil straff, zeigt die Richtung vom Anker zum Punkt, und der Anker wird auf dieser Linie nachgezogen, bis er genau
+    // `dirRope` vom Punkt weg ist. Geglättet wird über den Weg des Ankers: So dreht die Richtung mit jedem Punkt ein wenig,
+    // nicht in Stufen. Ist das Seil locker, bleibt alles. Zittern im Stand zieht den Anker höchstens um die Breite des
+    // Zitterns nach, danach ist das Seil locker. Mit der ersten Richtung bekommen auch die Punkte davor ihren Federfaktor.
+    const dirRope = Math.max(DIR_MIN, DIR_MIN_PX * pxUnit);
+    if (!this.anchor) this.anchor = { x, y };
+    else {
+      const d = dist(this.anchor, x, y);
+      if (d >= dirRope) {
+        const u = doubled(Math.atan2(y - this.anchor.y, x - this.anchor.x));
+        const moved = d - dirRope; // so weit wird der Anker nachgezogen
+        if (this.dir) {
+          const k = 1 - Math.exp(-moved / DIR_LEN);
+          this.dir = { c: this.dir.c + (u.c - this.dir.c) * k, s: this.dir.s + (u.s - this.dir.s) * k };
+        } else {
+          this.dir = u;
+          this.backfill(u);
+        }
+        const f = moved / d;
+        this.anchor = { x: this.anchor.x + (x - this.anchor.x) * f, y: this.anchor.y + (y - this.anchor.y) * f };
+      }
+    }
+    // Weg wie an einem Seil: Ist der Rohpunkt weiter als das Seil (einige Bildschirmpunkte) vom gezählten Ort weg, rückt der
+    // Ort nur bis auf die Länge des Seils an ihn heran, und nur dieses Stück zählt. So zählt Zittern im Stand nicht, auch wenn
+    // es breiter ist als das Seil lang. Weg = gezählter Weg + Abstand zum gezählten Ort, er nimmt nie ab.
+    const rope = DIR_MIN_PX * pxUnit;
+    if (!this.counted) this.counted = { x, y };
+    else {
+      const d = dist(this.counted, x, y);
+      if (d > rope) {
+        const k = (d - rope) / d;
+        this.countedSum += d - rope;
+        this.counted = { x: this.counted.x + (x - this.counted.x) * k, y: this.counted.y + (y - this.counted.y) * k };
+      }
+    }
+    this.travel = Math.max(this.travel, this.countedSum + dist(this.counted, x, y));
+    const base = this.baseWidth(this.dir, nib, ps);
+    if (!this.dir) this.early.push({ ps, nib });
+    this.base.push(base);
+    this.ways.push(this.travel);
+    return this.startWidth(base, this.travel);
+  }
+
+  /** Grundbreite der Füllfeder: Nennbreite × Federfaktor × Druckfaktor, nie unter dem Boden. */
+  private baseWidth(dir: Doubled | null, nib: Doubled, ps: number): number {
+    const { rundung, druck } = this.opts.fueller;
+    return atLeast(this.nomW * nibFactorR(rundung, dir, nib) * pressureFactor(druck, ps), this.nomW * FUELLER_FLOOR);
+  }
+
+  /** Breite der Füllfeder beim Schreiben: Grundbreite mit der Verjüngung am Anfang, nie unter dem Boden. */
+  private startWidth(base: number, way: number): number {
+    return atLeast(base * taperFactor(this.opts.fueller.schaerfe, way, TAPER_LEN), this.nomW * FUELLER_FLOOR);
+  }
+
+  /**
+   * Die erste Richtung steht fest: Die Punkte davor, bisher mit Federfaktor 1, bekommen den Federfaktor dieser Richtung, jeder
+   * mit seinem eigenen Druck und seiner eigenen Stiftrichtung. Sonst wüchse die Breite bis hierher wie bei einer runden
+   * Feder und spränge dann. Neue Punkte statt geänderter: Ein Strich, den `stroke()` vorher gab, bleibt, wie er war.
+   */
+  private backfill(first: Doubled): void {
+    this.early.forEach(({ ps, nib }, i) => {
+      const base = this.baseWidth(first, nib, ps);
+      const w = this.startWidth(base, this.ways[i]);
+      const r = this.raw[i];
+      const o = this.out[i];
+      this.base[i] = base;
+      this.sumW += w - r.w;
+      this.raw[i] = { x: r.x, y: r.y, w };
+      this.out[i] = { x: o.x, y: o.y, w };
+    });
+    this.early = [];
+  }
+
+  /**
    * Wie viele Punkte am Anfang fest sind: Weitere Stiftpunkte ändern sie nicht mehr (die Glättung reicht nur K Punkte
-   * zurück). Ohne Glättung sind alle Punkte fest.
+   * zurück). Ohne Glättung sind alle Punkte fest. Bei der Füllfeder ist keiner fest, bis die erste Richtung feststeht: Mit
+   * ihr ändert sich noch die Breite der Punkte davor.
    */
   settled(): number {
     const n = this.raw.length;
+    if (this.opts.pen === 'fueller' && !this.dir) return 0;
     return this.K ? Math.max(0, n - 1 - this.K) : n;
   }
 
