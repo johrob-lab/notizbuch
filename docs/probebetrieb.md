@@ -67,7 +67,7 @@ Das Test-Repo hat nur für den 29.10.2026 ein Briefing. Diesen Tag öffnest du s
 2. Tippe am rechten Rand auf den Reiter **OKT**.
 3. Tippe mit dem Finger oben in das Feld mit der 29, dorthin, wo die Tageszahl steht. Mit dem Stift geht das nicht, der Stift schreibt nur.
 4. Du siehst die Tagesseite mit der Karte **Morgenbriefing**. Tippe auf das Kästchen vor **Urlaube im Plan nachziehen**. Der Haken erscheint sofort.
-5. Oben steht sofort **Gesichert**. Bei GitHub ist der Haken da, sobald du die App verlässt (am PC: sobald du zu einem anderen Tab oder Fenster wechselst), sonst nach etwa 10 Sekunden.
+5. Oben steht sofort **Gesichert**. Bei GitHub ist der Haken da, sobald du die App verlässt (am PC: sobald du auf einen anderen Tab wechselst oder den Browser minimierst), sonst nach etwa 10 Sekunden.
 6. Öffne bei GitHub das Test-Repo und tippe über der Dateiliste auf **Commits** (die Zahl neben dem Uhr-Symbol). Der oberste Commit heißt `Notizbuch: 2026-10-29.md (iPad)`. Tippe darauf: Aus `- [ ]` wurde `- [x]`.
 
 Klappt das, ist die Testkopie bereit.
@@ -87,10 +87,10 @@ Wo: Testkopie, iPad. Dauer: etwa 10 Minuten.
 3. Tippe auf das Kästchen vor **Liste Planobjekte ergänzen**. Der Haken erscheint sofort. Tippe noch einmal darauf: Er geht wieder weg. Tippe ein drittes Mal: Er ist wieder da. Im echten Vault hakst du später nur ab, was wirklich erledigt ist.
 4. Tippe am Ende einer Zeile auf das kleine Stift-Symbol. Ändere ein Wort und tippe auf **Speichern**.
 5. Tippe unten in der Karte in das Feld **Ergänzen**, schreib „Probe“ und tippe auf **Hinzufügen**. Der Schalter **Aufgabe** ist an, es entsteht also eine Aufgabe mit Kästchen. Sie steht im neuen Abschnitt **Ergänzungen**.
-6. Oben steht sofort **Gesichert**. Bei GitHub sind deine Änderungen da, sobald du die App verlässt (am PC: sobald du zu einem anderen Tab oder Fenster wechselst), sonst etwa 10 Sekunden nach der letzten Änderung.
+6. Oben steht sofort **Gesichert**. Bei GitHub sind deine Änderungen da, sobald du die App verlässt (am PC: sobald du auf einen anderen Tab wechselst oder den Browser minimierst), sonst etwa 10 Sekunden nach der letzten Änderung.
 7. Öffne bei GitHub im Test-Repo die Datei `05 Daily Notes/2026-10-29.md`. Die Haken stehen als `[x]` da, deine Ergänzung unter `## Ergänzungen`, und die Markierungen zwischen `%%` am Zeilenende sind noch da.
 
-Erwartet: Jeder Haken zeigt sich sofort. Nach ein paar Sekunden steht **Gesichert** da. Bei GitHub gibt es Commits wie `Notizbuch: 2026-10-29.md (iPad)`.
+Erwartet: Jeder Haken zeigt sich sofort. Oben steht sofort **Gesichert**. Bei GitHub gibt es Commits wie `Notizbuch: 2026-10-29.md (iPad)`.
 
 - [ ] Klappt
 
@@ -105,7 +105,7 @@ Wo: Testkopie, iPad mit Stift. Dauer: etwa 15 Minuten.
 5. Tippe auf **+ Seite**. Seite 2 geht auf (**Seite 2 von 2**), die Kopfdaten sind übernommen. Schreib wieder ein paar Zeilen.
 6. Tippe oben in der Leiste auf **‹**. Seite 1 ist da, mit allen deinen Strichen. Tippe auf **›**: Seite 2 ist wieder da.
 7. Tippe oben auf **Tag**. Die Karte **Besprechungen** zeigt jetzt **Besprechung · 2 Seiten**.
-8. Öffne bei GitHub im Test-Repo den Ordner `07 Anhänge/Notizbuch/2026`. Dort liegen `2026-10-29 0800 Abstimmung Beispiel 2027 S1.svg` und `2026-10-29 0800 Abstimmung Beispiel 2027 S2.svg`. GitHub zeigt eine SVG-Datei als Bild, du erkennst deine Schrift.
+8. Öffne bei GitHub im Test-Repo den Ordner `07 Anhänge/Notizbuch/2026`. Dort liegen `2026-10-29 0800 Abstimmung Beispiel 2027 S1.svg` und `2026-10-29 0800 Abstimmung Beispiel 2027 S2.svg`, sobald du die App verlassen hast, sonst 2 Minuten nach dem letzten Strich (der Wechsel zur Tagesseite in Schritt 7 lädt noch nichts hoch). GitHub zeigt eine SVG-Datei als Bild, du erkennst deine Schrift.
 9. Probiere zum Schluss das Löschen (nur in der Testkopie): Öffne Seite 2 und tippe auf **Seite löschen**. Es erscheint die Frage „Seite wirklich löschen?“. Tippe auf **Abbrechen**: Es passiert nichts. Tippe noch einmal auf **Seite löschen** und diesmal auf **Löschen**: Seite 2 verschwindet, Seite 1 geht auf.
 
 Besprechungen ohne Termin legst du in der Karte **Besprechungen** mit **+ Besprechung** an: Trage Thema und Zeit ein und tippe auf **Anlegen**.

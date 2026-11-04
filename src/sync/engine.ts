@@ -287,7 +287,7 @@ export class SyncEngine {
       remote = await this.#fetch(path);
     } catch (error) {
       if (isStop(error)) {
-        if (!this.#frozen) this.#noteStop(error);
+        if (!this.#frozen) this.#noteStop(error, true);
         return { text: null, unknown: true };
       }
       throw error;
@@ -336,20 +336,15 @@ export class SyncEngine {
   }
 
   /**
-   * Frischt die Kopie vor einer Änderung auf (`#refreshCopy` fragt nur, wenn es eine Kopie gibt und keine eigene Änderung an ihr
-   * wartet) und wartet darauf höchstens `FRESH_WAIT_MS`: Ein Haken soll nicht ungesichert an einer langsamen Verbindung hängen.
-   * Eine spätere Antwort läuft weiter wie das Auffrischen im Hintergrund von `lookup`: Sie übernimmt einen neueren Stand nur, wenn
-   * für die Datei nichts wartet, und meldet ihn dann. Fehler kommen nie nach außen, auch späte nicht.
+   * Frischt die Kopie vor einer Änderung auf, wie `lookup` es im Hintergrund tut (`#refreshInBackground`: gefragt wird nur, wenn
+   * es eine Kopie gibt und keine eigene Änderung an ihr wartet, Fehler kommen nie nach außen), und wartet darauf höchstens
+   * `FRESH_WAIT_MS`: Ein Haken soll nicht ungesichert an einer langsamen Verbindung hängen. Einen neueren Stand, der rechtzeitig
+   * kommt, bekommt der Aufrufer direkt, gemeldet wird er nicht. Eine spätere Antwort übernimmt ihn nur, wenn für die Datei nichts
+   * wartet, und meldet ihn dann.
    */
   async #refreshBeforeChange(path: string): Promise<void> {
     let late = false;
-    const refresh = (async () => {
-      try {
-        if ((await this.#refreshCopy(path, false)) && late) this.#remoteChanged([path]);
-      } catch (error) {
-        if (!(error instanceof ReadOnlyError) && !this.#noteStop(error)) this.onError?.({ path, error });
-      }
-    })();
+    const refresh = this.#refreshInBackground(path, () => late);
     let timer: Timer | undefined;
     const gaveUp = new Promise<void>((resolve) => {
       timer = setTimeout(() => {
@@ -479,11 +474,16 @@ export class SyncEngine {
     this.#publish();
   }
 
-  /** Hält ein Fehler den Abgleich an? Dann merkt sich der Status, warum. */
-  #noteStop(error: unknown): boolean {
+  /**
+   * Hält ein Fehler den Abgleich an? Dann merkt sich der Status, warum. Scheitert nur ein Lesen (`reading`: frisches Lesen,
+   * Auffrischen, Abfrage) an Netz oder Ratenlimit, während eine Wartezeit läuft, bleibt der Status: Hochgeladen wird erst, wenn
+   * sie um ist, und erst dieser Versuch zeigt, ob das Netz fehlt. Sonst stünde „Wartet auf Netz“ bis zu 10 Minuten da, obwohl
+   * nichts gescheitert ist, was schon hochgehen sollte.
+   */
+  #noteStop(error: unknown, reading = false): boolean {
     if (error instanceof AuthError) this.#setState('zugang');
     else if (error instanceof OfflineError || error instanceof RateLimitError) {
-      if (this.#pending > 0) this.#setState('wartet');
+      if (this.#pending > 0 && !(reading && this.#waiting)) this.#setState('wartet');
     } else return false;
     return true;
   }
@@ -913,7 +913,7 @@ export class SyncEngine {
       await this.#rememberHead(head);
     } catch (error) {
       if (error instanceof ReadOnlyError) return; // beendet, während die Abfrage lief
-      if (!this.#noteStop(error)) this.onError?.({ path: '', error });
+      if (!this.#noteStop(error, true)) this.onError?.({ path: '', error });
     }
   }
 
@@ -956,12 +956,17 @@ export class SyncEngine {
     });
   }
 
-  async #refreshInBackground(path: string): Promise<void> {
+  /**
+   * Frischt eine Kopie ohne offene Änderung auf (`#refreshCopy`) und meldet einen neueren Stand, wenn `report` nach der Antwort
+   * ja sagt. Fehler kommen nie nach außen: Kein Netz, Ratenlimit oder kein Zugang gehen als Lesefehler in den Status
+   * (`#noteStop`), jeder andere Fehler an `onError`, und eine beendete Engine schweigt.
+   */
+  async #refreshInBackground(path: string, report: () => boolean = () => true): Promise<void> {
     try {
-      if (await this.#refreshCopy(path, false)) this.#remoteChanged([path]);
+      if ((await this.#refreshCopy(path, false)) && report()) this.#remoteChanged([path]);
     } catch (error) {
       if (error instanceof ReadOnlyError) return;
-      if (!this.#noteStop(error)) this.onError?.({ path, error });
+      if (!this.#noteStop(error, true)) this.onError?.({ path, error });
     }
   }
 }

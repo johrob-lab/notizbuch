@@ -286,6 +286,21 @@ test('an error that is not about the network goes to onError, and lookupFresh ke
   expect(h.errors).toEqual([{ path: A, error: expect.objectContaining({ status: 503 }) }]);
 });
 
+test('a fresh read that finds no file on GitHub keeps the copy and counts as a look', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  delete fake.files[A]; // gelöscht, oder der Zugang ist weg: GitHub antwortet in beiden Fällen mit „nicht gefunden“
+  later(30_001);
+  expect(await e.lookupFresh(A)).toEqual({ text: base, unknown: false }); // die Kopie bleibt
+  expect(fake.count('get')).toBe(2); // gefragt hat sie
+  expect(await h.store.get('files', A)).toMatchObject({ text: base, sha: 's1', base });
+  later(30_000); // genau 30 s nach der Antwort „gibt es nicht“
+  expect(await e.lookupFresh(A)).toEqual({ text: base, unknown: false });
+  await quiet();
+  expect(fake.count('get')).toBe(2); // auch diese Antwort war ein Blick auf die Datei: keine zweite Anfrage
+  expect(h.remoteChanges).toEqual([]);
+});
+
 test('lookupFresh gives up after 2 s and keeps the copy', async () => {
   fake.files[A] = { text: base, sha: 's1' };
   await e.read(A);

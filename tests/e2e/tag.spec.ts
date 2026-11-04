@@ -267,22 +267,30 @@ test('a tick waits at most 2 seconds for GitHub, then it is saved on the copy', 
   const remote = NOTE_TEXT.replace('- 08:00 bis 14:00 Abstimmung', '- 09:00 bis 14:00 Abstimmung');
   repo.commit(NOTE, remote); // auf GitHub ist die Notiz neuer
   // Das Netz ist schlecht: GitHub antwortet auf die Notiz erst, wenn der Test es erlaubt.
+  let asked = 0;
   let release!: () => void;
   const gate = new Promise<void>((resolve) => (release = resolve));
   await page.route(
     (url) => decodeURIComponent(url.pathname).endsWith(`/contents/${NOTE}`),
     async (route) => {
-      if (route.request().method() === 'GET') await gate;
+      if (route.request().method() === 'GET') {
+        asked++;
+        await gate;
+      }
       await route.fallback();
     },
   );
-  await page.clock.setFixedTime(new Date('2026-10-29T12:00:31+01:00')); // der letzte Blick ist älter als 30 Sekunden
+  const later = new Date('2026-10-29T12:00:31+01:00');
+  await page.clock.setFixedTime(later); // der letzte Blick ist älter als 30 Sekunden
+  // Ab jetzt laufen die Zeitgeber der Seite nur, wenn der Test die Uhr weiterstellt: Was folgt, hängt nicht an echter Zeit.
+  await page.clock.pauseAt(later);
 
   await checkbox(page, NAME1).check();
   await expect(checkbox(page, NAME1)).toBeChecked(); // der Haken zeigt sich sofort
-  await page.waitForTimeout(300);
-  expect(await queued(page)).toEqual({}); // die Karte wartet auf GitHub
-  await page.clock.fastForward(2_000); // nach 2 Sekunden gilt die Kopie
+  await expect.poll(() => asked, { message: 'die Karte fragt GitHub nach der Notiz' }).toBe(1); // die Antwort bleibt aus
+  await page.clock.runFor(1_999);
+  expect(await queued(page)).toEqual({}); // knapp 2 Sekunden: Die Karte wartet noch auf GitHub
+  await page.clock.runFor(1); // nach 2 Sekunden gilt die Kopie
   const ticked = NOTE_TEXT.replace(TASK1, TASK1.replace('[ ]', '[x]'));
   await expect.poll(() => queuedText(page, NOTE)).toBe(ticked);
 

@@ -7,7 +7,7 @@ import { unwrap } from 'idb';
 import { PathNotAllowedError } from '../../src/sync/paths';
 import { SyncEngine, statusLabel } from '../../src/sync/engine';
 import { fixture, lineOf } from './helpers';
-import { A, B, S, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
+import { A, B, S, quiet, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
 
 const base = fixture('05 Daily Notes/2026-10-29.md');
 
@@ -360,6 +360,64 @@ test('a write while the device is offline shows wartet right away', async () => 
   } finally {
     setOnLine(true);
   }
+});
+
+// Ein Lesen, das am Netz scheitert, während nur eine Wartezeit läuft: Hochgeladen wird erst, wenn sie um ist, und erst dieser
+// Versuch zeigt, ob das Netz fehlt. Bis dahin bleibt „Gesichert“, sonst stünde „Wartet auf Netz“ bis zu 10 Minuten falsch da.
+test.each([
+  {
+    name: 'the fresh read before a tick',
+    read: async () => {
+      vi.setSystemTime(Date.now() + 30_001); // der letzte Blick auf die Notiz ist älter als 30 s, ohne dass ein Zeitgeber abläuft
+      expect(await e.lookupFresh(A)).toEqual({ text: base, unknown: false });
+    },
+  },
+  {
+    name: 'the refresh in the background',
+    read: async () => {
+      expect(await e.read(A)).toBe(base);
+      await until(() => fake.finished('get') === 2);
+    },
+  },
+  { name: 'the poll', read: () => e.pollRemote() },
+  { name: 'a file without a copy', read: async () => expect(await e.lookup(B)).toEqual({ text: null, unknown: true }) },
+])('a read that fails on the network while a waiting time runs leaves Gesichert ($name)', async ({ read }) => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A); // die Kopie der Notiz
+  await e.write(S, svgPage('a'), 'svg'); // die 2 Minuten Pause laufen
+  fake.offline = true;
+  await read();
+  await quiet();
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 1 });
+
+  fake.offline = false; // das Netz war nur kurz weg, ohne dass das Gerät es meldet
+  await vi.advanceTimersByTimeAsync(120_000);
+  await until(() => fake.files[S]?.text === svgPage('a'));
+  await until(() => e.status.value.pending === 0);
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+  expect(fake.count('put')).toBe(1);
+});
+
+test('an upload that fails when the waiting time is over still shows Wartet auf Netz', async () => {
+  await e.write(S, svgPage('a'), 'svg');
+  fake.offline = true;
+  await e.pollRemote(); // ein Lesen scheitert, der Status bleibt
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 1 });
+  await vi.advanceTimersByTimeAsync(120_000); // die Wartezeit ist um, das Hochladen scheitert am Netz
+  await until(() => e.status.value.state === 'wartet');
+  expect(e.status.value).toEqual({ state: 'wartet', pending: 1 });
+});
+
+test('without a running waiting time a read that fails on the network shows Wartet auf Netz, as before', async () => {
+  fake.putErrors.set(A, new Error('kaputt')); // das Hochladen scheitert an GitHub, nicht am Netz
+  await e.write(A, 'x', 'md');
+  await vi.advanceTimersByTimeAsync(10_000);
+  await until(() => h.errors.length === 1);
+  await quiet();
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 1 }); // die Änderung wartet, eine Wartezeit läuft nicht mehr
+  fake.offline = true;
+  await e.pollRemote();
+  expect(e.status.value).toEqual({ state: 'wartet', pending: 1 });
 });
 
 test('an upload that hangs for 30 s counts as offline', async () => {
