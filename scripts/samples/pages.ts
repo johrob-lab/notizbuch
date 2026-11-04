@@ -80,7 +80,8 @@ class Scribe {
       pressure = Math.min(0.78, Math.max(0.3, pressure + this.jitter() * 0.12));
       builder.add(x + this.jitter() * 0.45, y + this.jitter() * 0.45, pressure, opts.tiltX, opts.tiltY);
     }
-    this.strokes.push(builder.stroke());
+    // Fertig wie nach dem Abheben in der App: bei der Füllfeder mit beiden spitzen Enden, bei den anderen Stiften wie `stroke()`.
+    this.strokes.push(builder.finish());
     this.t += 160 + this.rng() * 260;
   }
 

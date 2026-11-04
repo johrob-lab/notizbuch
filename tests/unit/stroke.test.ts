@@ -1,5 +1,14 @@
 import { expect, test } from 'vitest';
-import { DEFAULT_FUELLER, pressureFactor, STABIL_SIGMA, type FuellerSettings } from '../../src/ink/pens';
+import {
+  DEFAULT_FUELLER,
+  doubled,
+  nibFactorR,
+  pressureFactor,
+  STABIL_SIGMA,
+  TAPER_LEN,
+  TAPER_TIP,
+  type FuellerSettings,
+} from '../../src/ink/pens';
 import { fmtNum, hitStroke, parsePathD, pathD, StrokeBuilder } from '../../src/ink/stroke';
 import { SMOOTHING, type InkColor, type Stroke } from '../../src/ink/types';
 
@@ -551,8 +560,9 @@ test('both ends taper when the stroke is finished', () => {
   const done = widths(b.finish().pts);
   const last = done.length - 1;
   const mid = Math.floor(last / 2);
-  expect(base[0]).toBeCloseTo(NOM, 9); // am Anfang noch ohne Richtung: Federfaktor 1
-  expect(base[mid]).toBeCloseTo(1.469 * NOM, 9); // entlang der Feder bei Rundung 33 %
+  // Entlang der Feder bei Rundung 33 %, auch vor der ersten Richtung: Diese Punkte bekommen den Faktor der ersten Richtung.
+  expect(base[0]).toBeCloseTo(1.469 * NOM, 9);
+  expect(base[mid]).toBeCloseTo(1.469 * NOM, 9);
   expect(done[0]).toBeCloseTo(0.15 * base[0], 9);
   expect(done[last]).toBeCloseTo(0.15 * base[last], 9);
   expect(done[mid]).toBeCloseTo(base[mid], 9);
@@ -643,4 +653,119 @@ test('other pens are unchanged', () => {
   const liner = new StrokeBuilder({ pen: 'fineliner', color: 'schwarz', widthMm: 0.2, sigma: 0, t: 1, minDist: 0.5 });
   for (let i = 0; i < 40; i++) liner.add(2 * i, 0, i % 2 ? 0.9 : 0.1);
   for (const w of widths(liner.finish().pts)) expect(w).toBeCloseTo(1.5, 9);
+});
+
+// ---------- Nachbesserung 1: Seil, erste Richtung, Tipp ----------
+
+/**
+ * Weg ab dem nahen Ende, aus der Verjüngung zurückgerechnet: `t` ist Breite durch Grundbreite (Schärfe 1). Ab `TAPER_LEN`
+ * ist die Verjüngung 1, dann kommt `TAPER_LEN` heraus (der Weg ist mindestens so lang).
+ */
+const wayFromTaper = (t: number): number => TAPER_LEN * (1 - Math.sqrt((1 - Math.min(t, 1)) / (1 - TAPER_TIP)));
+
+test('the rope keeps jitter at the start out of the way, wherever the first point lies', () => {
+  // Rundung 100 % und gleicher Druck: Die Breite hängt nur noch vom Weg ab, so lässt er sich aus ihr zurückrechnen.
+  const start = { x: 100, y: 100 };
+  const line = straight(start, [1, 1], 20, 0.1);
+  const at = line[44]; // 4,5 Einheiten vom Startpunkt
+  const base = NOM * pressureFactor(DEFAULT_FUELLER.druck, 0.45);
+  const wayAt = (b: StrokeBuilder): number => wayFromTaper(b.points().find((p) => p.x === at.x && p.y === at.y)!.w / base);
+  const calm = fueller({ rundung: 1 });
+  feed(calm, [start, ...line]);
+  expect(wayAt(calm)).toBeCloseTo(4.5, 9);
+  let worst = 0;
+  for (let seed = 1; seed <= 100; seed++) {
+    // Schon der erste Punkt liegt irgendwo im Zittern: Umkreis 0,3, das Seil ist 4 Bildschirmpunkte (0,4 Einheiten) lang.
+    const shaky = fueller({ rundung: 1 });
+    feed(shaky, [...around(start, 0.3, 200, random(seed)), ...line]);
+    worst = Math.max(worst, Math.abs(wayAt(shaky) - 4.5));
+  }
+  expect(worst).toBeLessThanOrEqual(0.3);
+});
+
+test('a pen resting before it lifts keeps the taper at the end', () => {
+  const start = { x: 100, y: 100 };
+  const line = straight(start, [1, 1], 30, 0.1);
+  const end = line[line.length - 1]; // Weg 30, hier hebt der Stift ab oder bleibt erst noch stehen
+  const before = line[line.length - 46]; // 4,5 Einheiten vor dem Ende
+  const widthAt = (s: Stroke, p: XY): number => s.pts.find((q) => q.x === p.x && q.y === p.y)!.w;
+  const calm = fueller();
+  feed(calm, [start, ...line]);
+  const plain = calm.finish();
+  const base = widthAt(plain, end) / TAPER_TIP; // ohne Ruhe ist der letzte Punkt die Spitze
+  let extra = 0;
+  let wider = 0;
+  for (let seed = 1; seed <= 100; seed++) {
+    // Der Stift bleibt am Ende stehen und zittert (Umkreis 0,3), dann hebt er ab.
+    const resting = fueller();
+    feed(resting, [start, ...line, ...around(end, 0.3, 200, random(seed))]);
+    const s = resting.finish();
+    extra = Math.max(extra, wayFromTaper(widthAt(s, end) / base)); // Weg, den das Zittern dazugezählt hat
+    wider = Math.max(wider, widthAt(s, before) / widthAt(plain, before) - 1);
+  }
+  expect(extra).toBeLessThanOrEqual(0.6);
+  expect(wider).toBeLessThanOrEqual(0.08);
+});
+
+test('no knob where the first direction comes', () => {
+  // Bis zur ersten Richtung (3 Einheiten) rechnete die Feder rund: Quer zur Feder wuchs die Breite erst und fiel dann.
+  for (const dir of [
+    [1, -1],
+    [1, 1],
+  ] as [number, number][]) {
+    const b = fueller();
+    const start = { x: 100, y: 100 };
+    feed(b, [start, ...straight(start, dir, 30, 0.1)]);
+    for (const [name, pts] of [
+      ['points', b.points()],
+      ['finish', b.finish().pts],
+    ] as const) {
+      const w = widths(pts.slice(0, Math.floor(pts.length / 2) + 1)); // vom Anfang bis zur Mitte
+      const drops = w.flatMap((v, i) => (i && v < w[i - 1] - 1e-12 ? [`Punkt ${i}: ${w[i - 1]} -> ${v}`] : []));
+      expect(drops, `${name} in Richtung ${dir}`).toEqual([]);
+    }
+  }
+});
+
+test('the fountain pen settles no point before its first direction', () => {
+  const pf = pressureFactor(DEFAULT_FUELLER.druck, 0.45);
+  for (const sigma of [0, 1.6]) {
+    const K = sigma ? Math.ceil(2.5 * sigma) : 0;
+    const make = (pen: 'fueller' | 'kugel') => new StrokeBuilder({ pen, color: 'schwarz', widthMm: 0.2, sigma, t: 1, minDist: 0.05, pxUnit: 0.1 });
+    const pen = make('fueller');
+    const ball = make('kugel');
+    let early: Stroke | null = null;
+    for (let i = 0; i <= 20; i++) {
+      pen.add(100 + 0.5 * i, 100, 0.45, 40, 40);
+      ball.add(100 + 0.5 * i, 100, 0.45, 40, 40);
+      const n = i + 1;
+      const usual = K ? Math.max(0, n - 1 - K) : n;
+      // Die erste Richtung steht bei 3 Einheiten fest (Punkt 6), vorher kann sich jede Breite noch ändern.
+      expect(pen.settled(), `Füllfeder, sigma ${sigma}, ${n} Punkte`).toBe(i < 6 ? 0 : usual);
+      expect(ball.settled(), `Kugelschreiber, sigma ${sigma}, ${n} Punkte`).toBe(usual);
+      if (i === 5) early = pen.stroke();
+    }
+    // Eine Momentaufnahme von vorher bleibt, wie sie war (Federfaktor 1), obwohl die Punkte seither nachgerechnet sind.
+    expect(early!.pts[0].w).toBeCloseTo(TAPER_TIP * NOM * pf, 9);
+    // Jetzt mit dem Federfaktor der ersten Richtung: waagrecht, der Stift zeigt nach rechts unten.
+    const nib = nibFactorR(DEFAULT_FUELLER.rundung, doubled(0), doubled(Math.PI / 4));
+    expect(pen.points()[0].w).toBeCloseTo(TAPER_TIP * NOM * pf * nib, 9);
+    expect(pen.meanW()).toBeCloseTo(pen.stroke().w, 9);
+  }
+});
+
+test('a tap that slides a little still keeps a round dot', () => {
+  const base = NOM * pressureFactor(DEFAULT_FUELLER.druck, 0.5); // etwa 1,23
+  const b = fueller();
+  b.add(100, 100, 0.5, 40, 40);
+  expect(b.add(100.06, 100, 0.5, 40, 40)).toBe(true); // weiter als der Mindestabstand, aber im Seil (0,4)
+  const s = b.finish();
+  expect(base).toBeCloseTo(1.23, 2);
+  expect(s.pts).toHaveLength(2);
+  for (const p of s.pts) expect(p.w).toBeCloseTo(base, 9);
+  // Kam der Stift weiter als das Seil vom Aufsetzpunkt weg, laufen die Enden wieder spitz zu.
+  const dash = fueller();
+  dash.add(100, 100, 0.5, 40, 40);
+  dash.add(100.5, 100, 0.5, 40, 40);
+  for (const p of dash.finish().pts) expect(p.w).toBeCloseTo(TAPER_TIP * base, 9);
 });

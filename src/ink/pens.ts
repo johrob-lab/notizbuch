@@ -72,7 +72,10 @@ export const FUELLER_FLOOR = 0.1;
 /** Eine neue Richtung zählt erst, wenn der Stift so weit (Seiteneinheiten, 0,5 mm) vom letzten Richtungspunkt weg ist ... */
 export const DIR_MIN = 3;
 
-/** ... und mindestens so viele Bildschirmpunkte. Auch der Weg für die Verjüngung zählt erst ab so vielen Bildschirmpunkten. */
+/**
+ * ... und mindestens so viele Bildschirmpunkte. So lang ist auch das Seil, an dem der gezählte Weg dem Stift folgt: Zittern
+ * innerhalb des Seils zählt nicht, und ein Strich, der nie weiter vom Aufsetzpunkt wegkam, ist ein Tipp.
+ */
 export const DIR_MIN_PX = 4;
 
 /** Weglänge (Seiteneinheiten), über die eine neue Richtung geglättet wird. */
@@ -83,9 +86,6 @@ export const PRESS_LEN = 1.5;
 
 /** Die Strich-Stabilisierung glättet die Orte mit σ = `STABIL_SIGMA` × stabil, gemessen in Punkten. */
 export const STABIL_SIGMA = 6;
-
-/** Ist der ganze Weg eines Strichs kürzer (Seiteneinheiten), ist er ein Tipp: keine Verjüngung, er bleibt ein runder Punkt. */
-export const TAP_MAX = 1e-6;
 
 /** Mindestabstand zweier Stiftpunkte in Bildschirmpunkten: Die Fläche gibt `minDist` = `MIN_DIST_PX` / Zoom mit. */
 export const MIN_DIST_PX = 0.6;
