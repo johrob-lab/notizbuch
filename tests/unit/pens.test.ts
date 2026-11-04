@@ -12,6 +12,7 @@ import {
   speedBlend,
   speedFactor,
   stabilSigmaPx,
+  START_WAIT,
   taperFactor,
   taperScale,
   TAPER_FAST,
@@ -87,6 +88,8 @@ test('stabilSigmaPx grows evenly from 1.5 to 12 screen points', () => {
 
 test('pens: speed helpers', () => {
   expect([V_SLOW, V_FAST, SPEED_TAU_MS, THIN_FAST, TAPER_SLOW, TAPER_FAST]).toEqual([0.15, 1.0, 20, 0.5, 0.4, 2.5]);
+  // Der Anfang wartet höchstens 5 × TAPER_LEN Bildschirmpunkte auf einen Zeitschritt, der zählt.
+  expect(START_WAIT).toBe(5);
   // Übergang von langsam zu schnell: weich (smoothstep) zwischen 0,15 und 1,0 Bildschirmpunkten je ms, außerhalb 0 und 1.
   expect(speedBlend(0.15)).toBe(0);
   expect(speedBlend(1.0)).toBe(1);

@@ -64,7 +64,11 @@ export const PRESSURE_SPAN = 0.8;
 /** Die ganz flache Feder (Rundung 0): Faktor quer zur Richtung, in die der Stift zeigt, und entlang dazu. */
 export const FLAT_NIB = { across: 0.3, along: 1.7 };
 
-/** So weit (Seiteneinheiten, 1,5 mm) läuft jedes Ende spitz aus, wenn das Tempo unbekannt ist. Mit Tempo das `taperScale`-fache. */
+/**
+ * So weit (Bildschirmpunkte, bei Zoom 1 Seiteneinheiten, also 1,5 mm) läuft jedes Ende spitz aus, wenn das Tempo unbekannt ist.
+ * Mit Tempo das `taperScale`-fache. Gemessen auf dem Glas wie die Glättung und das Tempo: Gezoomt werden die Spitzen mit der Schrift
+ * kürzer, sonst würde ein schneller Strich zum Haarstrich.
+ */
 export const TAPER_LEN = 9;
 
 /** Breite an der Spitze als Teil der vollen Breite, bei Schärfe 100 %. */
@@ -85,7 +89,10 @@ export const DIR_MIN = 3;
  */
 export const DIR_MIN_PX = 4;
 
-/** Weg des Richtungsankers (Seiteneinheiten), über den die Richtung geglättet wird. */
+/**
+ * Weg des Richtungsankers (Seiteneinheiten), über den die Richtung mindestens geglättet wird. Glättet die Strich-Stabilisierung über
+ * eine längere Strecke (σ), dann die Richtung ebenso: So beruhigt sie auch das Flattern der Ränder, nicht nur die Linie.
+ */
 export const DIR_LEN = 2;
 
 /** Weglänge (Seiteneinheiten), über die der Druck geglättet wird. Steht der Stift still, bleibt der Druck. */
@@ -120,11 +127,18 @@ export const SPEED_TAU_MS = 20;
 /** So viel schmaler ist ein schneller Strich: Tempofaktor 1 − `THIN_FAST`, also halb so breit wie ein langsamer. */
 export const THIN_FAST = 0.5;
 
-/** Länge der Verjüngung an einem langsamen Ende, als Vielfaches von `TAPER_LEN` (0,6 mm) ... */
+/** Länge der Verjüngung an einem langsamen Ende, als Vielfaches von `TAPER_LEN` (3,6 Bildschirmpunkte, bei Zoom 1 0,6 mm) ... */
 export const TAPER_SLOW = 0.4;
 
-/** ... und an einem schnellen (3,75 mm). */
+/** ... und an einem schnellen (22,5 Bildschirmpunkte, bei Zoom 1 3,75 mm). */
 export const TAPER_FAST = 2.5;
+
+/**
+ * Das Tempo beim Ansetzen braucht einen Zeitschritt, der zählt. So weit (Vielfaches von `TAPER_LEN`, auf dem Glas) wartet der Anfang
+ * höchstens darauf: Kommt bis dahin keiner (alle Zeiten gleich), gilt der Anfang als langsam. So bleibt die Arbeit je Stiftbewegung
+ * begrenzt, denn bis der Anfang feststeht, ist kein Punkt fest.
+ */
+export const START_WAIT = 5;
 
 /** Ein Winkel als doppelter Winkel (cos 2a, sin 2a): Entgegengesetzte Richtungen sind dann gleich. */
 export type Doubled = { c: number; s: number };

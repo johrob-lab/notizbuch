@@ -1052,10 +1052,11 @@ export class InkSurface {
 
   /**
    * Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. Ein Gekritzel über Geschriebenem löscht es
-   * stattdessen. Gespeichert wird der fertige Strich, bei der Füllfeder mit beiden spitzen Enden.
+   * stattdessen. Gespeichert wird der fertige Strich, bei der Füllfeder mit beiden spitzen Enden. `tUp` ist die Zeit des
+   * Abhebens, falls bekannt: Bis dahin klingt bei der Füllfeder das Tempo ab.
    */
-  private commitStroke(d: Drawing): void {
-    const s = d.builder.finish();
+  private commitStroke(d: Drawing, tUp?: number): void {
+    const s = d.builder.finish(tUp);
     if (!s.pts.length) return;
     if (this.scribble && this.eraseByScribble(s)) return;
     this.strokes.push(s);
@@ -1112,14 +1113,14 @@ export class InkSurface {
     }, 300);
   }
 
-  /** Der Stift hebt ab, oder der Strich wird abgebrochen (`commit` falsch). */
-  private finishDraw(commit: boolean): void {
+  /** Der Stift hebt ab (zur Zeit `tUp`, falls bekannt), oder der Strich wird abgebrochen (`commit` falsch). */
+  private finishDraw(commit: boolean, tUp?: number): void {
     const d = this.drawing;
     this.drawing = null;
     this.stopMeter();
     this.clearLive(true);
     this.clearPredLayer();
-    if (d && commit) this.commitStroke(d);
+    if (d && commit) this.commitStroke(d, tUp);
   }
 
   /** Zählt Bilder, solange der Stift schreibt. */
@@ -1390,7 +1391,8 @@ export class InkSurface {
 
   private onUp = (e: PointerEvent): void => {
     const { drawing: d, erasing: er } = this;
-    if (d && e.pointerId === d.id) this.finishDraw(true);
+    // Mit der Zeit des Abhebens: Ruhte der Stift davor, ohne noch Punkte zu schicken, endet die Füllfeder trotzdem langsam.
+    if (d && e.pointerId === d.id) this.finishDraw(true, e.timeStamp);
     else if (er && e.pointerId === er.id) this.finishErase();
     if (e.pointerType === 'pen') this.filter.penUp(e.timeStamp);
     if (!this.touches.delete(e.pointerId)) return;
