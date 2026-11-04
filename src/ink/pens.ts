@@ -51,8 +51,8 @@ export type FuellerSettings = {
   stabil: number;
 };
 
-/** Startwerte wie in GoodNotes gewohnt: Scharf, Druckempfindlichkeit 25 %, Rundung 33 %, Stabilisierung 14 %. */
-export const DEFAULT_FUELLER: FuellerSettings = { schaerfe: 1, druck: 0.25, rundung: 0.33, stabil: 0.14 };
+/** Startwerte wie in GoodNotes gewohnt: Scharf, Druckempfindlichkeit 25 %, Rundung 33 %, Stabilisierung 14 %. Eingefroren: Wer sie ändern will, baut eine neue Einstellung. */
+export const DEFAULT_FUELLER: Readonly<FuellerSettings> = Object.freeze({ schaerfe: 1, druck: 0.25, rundung: 0.33, stabil: 0.14 });
 
 /** Druckfaktor 1 ± Empfindlichkeit × `PRESSURE_SPAN`: leicht dünner, fest breiter. */
 export const PRESSURE_SPAN = 0.8;

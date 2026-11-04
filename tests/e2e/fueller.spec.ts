@@ -2,11 +2,11 @@ import { expect, test as base, type Page } from '@playwright/test';
 import { DEFAULT_FUELLER, DEFAULT_PEN_ANGLE, nibShape, penAngle, pressureFactor, type FuellerSettings, type PenKind } from '../../src/ink/pens';
 import { INK, MM, WIDTH_MM } from '../../src/ink/types';
 import type { InkPrefs } from '../../src/lib/settings';
-import { changeStoredSettings, openSeeded, queued } from './helpers/app';
-import { inkNear, mouse, onPixelCentre, pen, touch, viewOf, wheel } from './helpers/pointer';
+import { bringToForeground, changeStoredSettings, openSeeded, queued, savedSettings, sendToBackground } from './helpers/app';
+import { centerOf, inkNear, mouse, onPixelCentre, palm, pen, touch, viewOf, wheel } from './helpers/pointer';
 
-// Die Füllfeder mit ihren Einstellungen auf der Schreibfläche und ihre Spitze, wenn der Stift über der Seite schwebt. Jeder
-// Test wählt Stift und Einstellungen über die gespeicherte Werkzeugwahl und lädt die App neu.
+// Die Füllfeder mit ihren Einstellungen auf der Schreibfläche, ihre Spitze, wenn der Stift über der Seite schwebt, und ihr
+// Regler-Fenster. Jeder Test wählt Stift und Einstellungen über die gespeicherte Werkzeugwahl und lädt die App neu.
 
 /** Jeder Test achtet auf Fehler, die im Browser unbehandelt bleiben (zum Beispiel eine Ausnahme beim Zeichnen). */
 const test = base.extend<{ browserErrors: void }>({
@@ -45,9 +45,9 @@ const inkWith = (fueller: FuellerSettings, chosen: PenKind = 'fueller'): InkPref
   fueller,
 });
 
-/** Wählt die Füllfeder mit den Einstellungen `fueller` über die gespeicherte Werkzeugwahl und lädt neu. */
-async function choose(page: Page, fueller: FuellerSettings): Promise<void> {
-  await changeStoredSettings(page, { ink: inkWith(fueller) });
+/** Wählt die Füllfeder mit den Einstellungen `fueller` über die gespeicherte Werkzeugwahl und lädt neu. `more`: weitere Einstellungen. */
+async function choose(page: Page, fueller: FuellerSettings, more: Record<string, unknown> = {}): Promise<void> {
+  await changeStoredSettings(page, { ink: inkWith(fueller), ...more });
   await page.reload();
   await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
 }
@@ -310,4 +310,354 @@ test('the tip turns like the last stroke and goes away on touch and leave', asyn
   const stays = await tipStays(page);
   expect(stays, 'so lange stand die Spitze noch (ms)').toBeGreaterThan(150);
   expect(stays, 'so lange stand die Spitze noch (ms)').toBeLessThan(500);
+});
+
+// ---------- Das Regler-Fenster ----------
+
+const PANEL = '.fueller-fenster';
+const SHIELD = '.fueller-schutz';
+const QUICK = '[data-testid="quick-switch"]';
+const SLIDER_NAMES = ['Schärfe der Spitze', 'Druckempfindlichkeit', 'Rundung der Spitze', 'Strich-Stabilisierung'];
+/** Neben dem Fenster: ein Ort im Notizfeld, weit unter dem Fenster an der Werkzeugleiste. */
+const BESIDE: [number, number] = [200, 1000];
+
+type Regler = keyof FuellerSettings;
+/** Die Zeile eines Reglers mit Name, Wert und dem Feld, das Stift, Finger und Maus annimmt. */
+const row = (key: Regler) => `${PANEL} [data-regler="${key}"]`;
+const field = (key: Regler) => `${row(key)} .fueller-feld`;
+const slider = (page: Page, key: Regler) => page.locator(`${row(key)} input[type="range"]`);
+const valueText = (page: Page, key: Regler) => page.locator(`${row(key)} .fueller-wert`);
+const previewOf = (page: Page) => page.locator(`${PANEL} .fueller-vorschau path`).getAttribute('d');
+const toolbarButton = (page: Page, label: string) => page.locator(`.werkzeuge button[aria-label="${label}"]`);
+const savedFueller = async (page: Page) => ((await savedSettings(page))?.ink as InkPrefs | undefined)?.fueller;
+const waitForPageOf = (page: Page, key: string) => page.waitForFunction((day) => window.__notizbuch?.currentPage?.().key === day, key);
+/** Stift und Handballen: Finger gelten erst 250 ms nach dem Abheben des Stifts wieder (siehe `GestureFilter`). */
+const afterPalmWindow = (page: Page) => page.waitForTimeout(300);
+
+/** Öffnet das Fenster mit einem zweiten Tipp auf die Füllfeder in der Werkzeugleiste: Sie ist schon gewählt. */
+async function openFromToolbar(page: Page): Promise<void> {
+  await toolbarButton(page, 'Füllfeder').click();
+  await expect(page.locator(PANEL)).toBeVisible();
+}
+
+/** Das Fenster steht in der Mitte der Bühne. */
+async function expectCentred(page: Page): Promise<void> {
+  const panel = page.locator(PANEL);
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-at', 'mitte');
+  const box = (await panel.boundingBox())!;
+  const stage = (await page.locator('.buehne').boundingBox())!;
+  expect(Math.abs(box.x + box.width / 2 - (stage.x + stage.width / 2)), 'waagrecht').toBeLessThanOrEqual(1);
+  expect(Math.abs(box.y + box.height / 2 - (stage.y + stage.height / 2)), 'senkrecht').toBeLessThanOrEqual(1);
+}
+
+/** Linker und rechter Rand und Mitte des Felds eines Reglers, in Bildschirmkoordinaten. */
+const fieldBox = (page: Page, key: Regler) =>
+  page.locator(field(key)).evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { left: r.left + 1, right: r.right - 1, x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
+
+/** Der Stift tippt einen Regler ganz links (0 %) oder ganz rechts (100 %) an. */
+async function penOnSlider(page: Page, key: Regler, end: 'left' | 'right'): Promise<void> {
+  const box = await fieldBox(page, key);
+  await pen(page).downOn(field(key), box[end], box.y);
+  await pen(page).upOn(field(key), box[end], box.y);
+}
+
+type Kind = 'pen' | 'touch' | 'mouse';
+type At = { x: number; y: number };
+type ScreenEvent = At & { type: 'pointerdown' | 'pointermove' | 'pointerup' };
+
+/**
+ * Zeigerereignisse wie auf dem Bildschirm: Jedes geht an das Element, das an seinem Ort zuoberst liegt (Schutzfeld, Fenster oder
+ * Fläche), nicht an ein ausgesuchtes. So zeigt sich, ob etwas über der Seite liegt. Orte in Bildschirmkoordinaten.
+ */
+async function onScreen(page: Page, kind: Kind, events: ScreenEvent[]): Promise<void> {
+  await page.evaluate(
+    ({ pointerType, pointerId, list }) => {
+      for (const ev of list) {
+        const el = document.elementFromPoint(ev.x, ev.y);
+        if (!el) throw new Error(`Nichts bei ${ev.x}, ${ev.y}.`);
+        el.dispatchEvent(
+          new PointerEvent(ev.type, {
+            pointerId,
+            pointerType,
+            isPrimary: true,
+            pressure: 0.5,
+            width: 1,
+            height: 1,
+            clientX: ev.x,
+            clientY: ev.y,
+            button: ev.type === 'pointermove' ? -1 : 0,
+            buttons: ev.type === 'pointerup' ? 0 : 1,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+          }),
+        );
+      }
+    },
+    { pointerType: kind, pointerId: { mouse: 1, pen: 11, touch: 21 }[kind], list: events },
+  );
+}
+
+/** Die Klasse des Elements, das an diesem Ort zuoberst liegt. */
+const topmost = (page: Page, at: At) => page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute('class') ?? null, at);
+
+/** Der Stift schwebt über einem Ort (Bildschirmkoordinaten): `pointermove` ohne Taste und Druck an das, was dort zuoberst liegt. */
+const hoverOnScreen = (page: Page, at: At) =>
+  page.evaluate(({ x, y }) => {
+    const el = document.elementFromPoint(x, y);
+    if (!el) throw new Error(`Nichts bei ${x}, ${y}.`);
+    const init = { pointerId: 11, pointerType: 'pen', isPrimary: true, pressure: 0, clientX: x, clientY: y, button: -1, buttons: 0 };
+    el.dispatchEvent(new PointerEvent('pointermove', { ...init, bubbles: true, cancelable: true, composed: true }));
+  }, at);
+
+/** Fenster und Schutzfeld sind weg, auf dem Papier liegt nichts mehr, und ein Strich des Stifts schreibt dort. */
+async function writesAgain(page: Page, y: number): Promise<void> {
+  await expect(page.locator(PANEL)).toHaveCount(0);
+  await expect(page.locator(SHIELD)).toHaveCount(0);
+  const points = await page.evaluate((list) => list.map(([x, py]) => window.__notizbuch.toClient(x, py)), line([200, y], [320, y + 20], 8));
+  expect(await topmost(page, points[0]), 'zuoberst auf dem Papier').not.toBe('fueller-schutz');
+  const before = await strokeCount(page);
+  await onScreen(page, 'pen', [
+    { type: 'pointerdown', ...points[0] },
+    ...points.slice(1).map((p): ScreenEvent => ({ type: 'pointermove', ...p })),
+    { type: 'pointerup', ...points[points.length - 1] },
+  ]);
+  await expect.poll(() => strokeCount(page)).toBe(before + 1);
+}
+
+test('a second tap on the fountain pen opens the panel in the toolbar, the ring and the tab', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  // Die erste Wahl wählt nur.
+  await toolbarButton(page, 'Füllfeder').click();
+  await expect(toolbarButton(page, 'Füllfeder')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator(PANEL)).toHaveCount(0);
+
+  // Der zweite Tipp öffnet das Fenster unter dem Knopf. Der Knopf bleibt gewählt.
+  await toolbarButton(page, 'Füllfeder').click();
+  const panel = page.getByRole('dialog', { name: 'Füllfeder' });
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-at', 'leiste');
+  await expect(page.locator(`${PANEL} .fueller-titel`)).toHaveText('Füllfeder');
+  await expect(toolbarButton(page, 'Füllfeder')).toHaveAttribute('aria-pressed', 'true');
+  const button = (await toolbarButton(page, 'Füllfeder').boundingBox())!;
+  const box = (await panel.boundingBox())!;
+  expect(box.y, 'unter dem Knopf').toBeGreaterThanOrEqual(button.y + button.height);
+  expect(box.y, 'gleich unter dem Knopf').toBeLessThan(button.y + button.height + 30);
+  expect(box.x, 'unter dem Knopf').toBeLessThanOrEqual(button.x + button.width / 2);
+  expect(box.x + box.width, 'unter dem Knopf').toBeGreaterThanOrEqual(button.x + button.width / 2);
+
+  // Die Vorschau in der Tintenfarbe, darunter vier Regler von 0 bis 100 mit Namen und Wert, jeder mindestens 44 Punkte hoch.
+  const path = page.locator(`${PANEL} .fueller-vorschau path`);
+  expect(await path.getAttribute('d')).toMatch(/^M -?[\d.]+ -?[\d.]+ L /);
+  expect(await path.getAttribute('fill')).toBe(INK.schwarz);
+  const sliders = page.locator(`${PANEL} input[type="range"]`);
+  expect(await sliders.evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')))).toEqual(SLIDER_NAMES);
+  expect(await sliders.evaluateAll((els) => els.map((el) => ['min', 'max', 'step'].map((a) => el.getAttribute(a))))).toEqual(Array(4).fill(['0', '100', '1']));
+  expect(await sliders.evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value))).toEqual(['100', '25', '33', '14']);
+  expect(await page.locator(`${PANEL} .fueller-name`).allTextContents()).toEqual(SLIDER_NAMES);
+  expect(await page.locator(`${PANEL} .fueller-wert`).allTextContents()).toEqual(['Scharf', '25 %', '33 %', '14 %']);
+  const heights = await page.locator(`${PANEL} .fueller-feld, ${PANEL} input[type="range"]`).evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+  expect(heights).toHaveLength(8);
+  for (const h of heights) expect(h).toBeGreaterThanOrEqual(44);
+
+  // Im Rad: Der Ring schließt wie bei jeder Wahl, das Fenster steht in der Mitte der Bühne.
+  await choose(page, DEFAULT_FUELLER, { vollbild: { an: true, werkzeuge: 'kreis' } });
+  await touch(page).tapOn(QUICK);
+  await expect(page.locator('.ring-knopf').first()).toBeVisible();
+  await touch(page).tapOn('.ring-knopf[aria-label="Füllfeder"]');
+  await expect(page.locator('.ring-knopf')).toHaveCount(0);
+  await expectCentred(page);
+
+  // In der Lasche: Sie bleibt offen, das Fenster steht in der Mitte der Bühne.
+  await choose(page, DEFAULT_FUELLER, { vollbild: { an: true, werkzeuge: 'tab' } });
+  await touch(page).tapOn('button.lasche');
+  await touch(page).tapOn('.lasche-knopf[aria-label="Füllfeder"]');
+  await expectCentred(page);
+  await expect(page.locator('.lasche-leiste')).toHaveCount(1);
+  expect(await savedFueller(page)).toEqual(DEFAULT_FUELLER);
+});
+
+test('moving a slider changes the preview and the next stroke', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await choose(page, DEFAULT_FUELLER);
+  await openFromToolbar(page);
+  const start = await previewOf(page);
+
+  // Rundung ganz nach rechts: Wert und Vorschau ändern sich sofort.
+  await penOnSlider(page, 'rundung', 'right');
+  await expect(valueText(page, 'rundung')).toHaveText('100 %');
+  await expect(slider(page, 'rundung')).toHaveValue('100');
+  const round = await previewOf(page);
+  expect(round).not.toBe(start);
+  // Schärfe ganz nach links: runde Enden.
+  await penOnSlider(page, 'schaerfe', 'left');
+  await expect(valueText(page, 'schaerfe')).toHaveText('Rund');
+  await expect(slider(page, 'schaerfe')).toHaveValue('0');
+  expect(await previewOf(page)).not.toBe(round);
+
+  // Das Fenster zu, dann schreibt der Stift mit den neuen Reglern: runde Spitze ohne Verjüngung, überall dieselbe Breite.
+  const beside = await clientOf(page, BESIDE);
+  await onScreen(page, 'pen', [
+    { type: 'pointerdown', ...beside },
+    { type: 'pointerup', ...beside },
+  ]);
+  await expect(page.locator(SHIELD)).toHaveCount(0);
+  await pen(page).stroke(line([200, 800], [400, 860], 40));
+  await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(1);
+  const widths = widthsOf(strokePaths(await savedPage(page))[0]);
+  expect(widths.length, 'Punkte in data-linie').toBeGreaterThan(20);
+  const mean = widths.reduce((sum, w) => sum + w, 0) / widths.length;
+  expect(widths.filter((w) => Math.abs(w / mean - 1) > 0.02), `Breiten ${widths.join(' ')}`).toEqual([]);
+});
+
+test('a tap next to the panel closes it and writes nothing', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await choose(page, DEFAULT_FUELLER);
+  const beside = await clientOf(page, BESIDE);
+
+  // Der Stift schwebt neben dem Fenster und über ihm: Die Fläche darunter hört davon nichts, sie zeigt keine Spitze.
+  await openFromToolbar(page);
+  expect(await topmost(page, beside), 'neben dem Fenster liegt das Schutzfeld').toBe('fueller-schutz');
+  for (const at of [beside, await centerOf(page, PANEL)]) await hoverOnScreen(page, at);
+  expect(await tipCount(page), 'Spitze unter dem Fenster').toBe(0);
+
+  // Stift und Maus: Das Fenster geht beim Aufsetzen, das Schutzfeld erst beim Abheben, damit auch das Ende nichts darunter trifft.
+  for (const kind of ['pen', 'mouse'] as const) {
+    if (kind === 'mouse') await openFromToolbar(page);
+    await onScreen(page, kind, [{ type: 'pointerdown', ...beside }]);
+    await expect(page.locator(PANEL), kind).toHaveCount(0);
+    await expect(page.locator(SHIELD), kind).toHaveCount(1);
+    await onScreen(page, kind, [{ type: 'pointerup', ...beside }]);
+    await expect(page.locator(SHIELD), kind).toHaveCount(0);
+    if (kind === 'pen') {
+      // Gegenprobe: Ohne Fenster zeigt das Schweben dort die Spitze.
+      await hoverOnScreen(page, beside);
+      expect(await tipCount(page), 'Spitze ohne Fenster').toBe(1);
+    }
+  }
+
+  // Ein Finger schließt es beim Abheben, wenn das Tor ihn als Finger annimmt.
+  await afterPalmWindow(page);
+  await openFromToolbar(page);
+  await onScreen(page, 'touch', [{ type: 'pointerdown', ...beside }]);
+  await expect(page.locator(PANEL)).toBeVisible();
+  await onScreen(page, 'touch', [{ type: 'pointerup', ...beside }]);
+  await expect(page.locator(SHIELD)).toHaveCount(0);
+
+  // Keiner dieser Tipps hat geschrieben. Jetzt liegt dort wieder das Papier, und der Stift schreibt.
+  expect(await strokeCount(page)).toBe(0);
+  expect(await savedPage(page)).toBe('');
+  await writesAgain(page, 1000);
+});
+
+test('a hand next to the panel or on a slider changes nothing', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await choose(page, DEFAULT_FUELLER);
+  await openFromToolbar(page);
+  const beside = await clientOf(page, BESIDE);
+  const druck = await fieldBox(page, 'druck');
+  const rundung = await fieldBox(page, 'rundung');
+
+  // Der Stift schiebt die Druckempfindlichkeit, die Hand liegt neben dem Fenster und auf der Rundung.
+  await pen(page).downOn(field('druck'), druck.right, druck.y);
+  await expect(slider(page, 'druck')).toHaveValue('100');
+  await touch(page).downOn(SHIELD, beside.x, beside.y);
+  await touch(page, 1).downOn(field('rundung'), rundung.left, rundung.y);
+  expect(await slider(page, 'rundung').inputValue(), 'Hand auf der Rundung').toBe('33');
+  await touch(page, 1).moveOn(field('rundung'), rundung.left + 20, rundung.y);
+  await pen(page).moveOn(field('druck'), druck.x, druck.y);
+  await pen(page).upOn(field('druck'), druck.x, druck.y);
+  await afterPalmWindow(page);
+  await touch(page).upOn(SHIELD, beside.x, beside.y);
+  await touch(page, 1).upOn(field('rundung'), rundung.left + 20, rundung.y);
+  await expect(page.locator(PANEL)).toBeVisible();
+  await expect(slider(page, 'druck')).toHaveValue('50');
+  await expect(slider(page, 'rundung')).toHaveValue('33');
+
+  // Ein Handballen (große Auflage) schließt das Fenster nicht und schiebt keinen Regler, auch nach der Pause des Stifts.
+  await palm(page).downOn(SHIELD, beside.x, beside.y);
+  await palm(page).upOn(SHIELD, beside.x, beside.y);
+  await palm(page).downOn(field('rundung'), rundung.left, rundung.y);
+  expect(await slider(page, 'rundung').inputValue(), 'Handballen auf der Rundung').toBe('33');
+  await palm(page).upOn(field('rundung'), rundung.left, rundung.y);
+  await expect(page.locator(PANEL)).toBeVisible();
+  await expect(slider(page, 'rundung')).toHaveValue('33');
+
+  // Ein Finger auf einem Regler, der schon lag, als der Stift aufsetzte, war die Hand: Was er geschoben hat, gilt nicht.
+  await touch(page).downOn(field('rundung'), rundung.right, rundung.y);
+  await expect(slider(page, 'rundung')).toHaveValue('100');
+  await pen(page).downOn(field('druck'), druck.left, druck.y);
+  await expect(slider(page, 'rundung')).toHaveValue('33');
+  await pen(page).upOn(field('druck'), druck.left, druck.y);
+  await afterPalmWindow(page);
+  await touch(page).upOn(field('rundung'), rundung.right, rundung.y);
+  await expect(slider(page, 'rundung')).toHaveValue('33');
+  await expect(slider(page, 'druck')).toHaveValue('0');
+  await expect.poll(() => savedFueller(page)).toEqual({ ...DEFAULT_FUELLER, druck: 0 });
+});
+
+test('the settings survive a reload', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await choose(page, DEFAULT_FUELLER);
+  await openFromToolbar(page);
+  // Mit der Tastatur ein Schritt nach rechts, und ein Wert direkt gesetzt, wie es Hilfen der Bedienung tun.
+  await slider(page, 'stabil').press('ArrowRight');
+  await slider(page, 'druck').fill('60');
+  await expect(valueText(page, 'stabil')).toHaveText('15 %');
+  await expect(valueText(page, 'druck')).toHaveText('60 %');
+  const changed = { ...DEFAULT_FUELLER, druck: 0.6, stabil: 0.15 };
+  await expect.poll(() => savedFueller(page)).toEqual(changed);
+
+  await page.reload();
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await openFromToolbar(page);
+  await expect(slider(page, 'druck')).toHaveValue('60');
+  await expect(valueText(page, 'druck')).toHaveText('60 %');
+  await expect(slider(page, 'stabil')).toHaveValue('15');
+  await expect(valueText(page, 'stabil')).toHaveText('15 %');
+  await expect(slider(page, 'schaerfe')).toHaveValue('100');
+});
+
+test('the panel never stays over the page', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await choose(page, DEFAULT_FUELLER);
+
+  // Blättern mit › in der Leiste oben.
+  await openFromToolbar(page);
+  await page.getByRole('link', { name: 'Nächster Tag' }).click();
+  await waitForPageOf(page, '2026-10-30');
+  await writesAgain(page, 800);
+
+  // Das Vollbild geht an (Knopf in der Leiste oben).
+  await openFromToolbar(page);
+  await page.getByRole('button', { name: 'Vollbild', exact: true }).click();
+  await expect(page.locator('main#app')).toHaveClass(/vollbild/);
+  await writesAgain(page, 900);
+
+  // Das Vollbild geht aus: Die Lasche liegt unter dem Schutzfeld, mit der Tastatur erreicht man sie trotzdem.
+  await choose(page, DEFAULT_FUELLER, { vollbild: { an: true, werkzeuge: 'tab' } });
+  await touch(page).tapOn('button.lasche');
+  await touch(page).tapOn('.lasche-knopf[aria-label="Füllfeder"]');
+  await expect(page.locator(PANEL)).toBeVisible();
+  await page.locator('.lasche-knopf[aria-label="Vollbild aus"]').press('Enter');
+  await expect(page.locator('main#app')).not.toHaveClass(/vollbild/);
+  await writesAgain(page, 1000);
+
+  // Ein anderes Werkzeug. Wieder die Füllfeder: Das wählt sie nur.
+  await openFromToolbar(page);
+  await toolbarButton(page, 'Radierer').click();
+  await expect(page.locator(PANEL)).toHaveCount(0);
+  await toolbarButton(page, 'Füllfeder').click();
+  await writesAgain(page, 1100);
+
+  // Die App geht in den Hintergrund.
+  await openFromToolbar(page);
+  await sendToBackground(page);
+  await expect(page.locator(PANEL)).toHaveCount(0);
+  await bringToForeground(page);
+  await writesAgain(page, 1200);
 });

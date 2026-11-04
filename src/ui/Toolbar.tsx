@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact';
 import { PEN_NAMES, PENS, type PenKind } from '../ink/pens';
 import { INK, type InkColor, type WidthName } from '../ink/types';
 import type { EraserMode, EraserSize } from '../lib/settings';
-
+import type { ButtonRect } from './FuellerPanel';
 import { COLORS, ERASER_MODES, ERASER_SIZES, WIDTHS, mm, type Tool } from './toolChoices';
 
 export type { Tool };
@@ -17,7 +17,8 @@ type Props = {
   eraserSize: EraserSize;
   eraserMode: EraserMode;
   onTool(tool: Tool): void;
-  onPen(pen: PenKind): void;
+  /** Ein Stift wurde angetippt. `from` ist das Rechteck seines Knopfs: Darunter öffnet ein zweiter Tipp das Fenster der Füllfeder. */
+  onPen(pen: PenKind, from: ButtonRect): void;
   onEraserSize(size: EraserSize): void;
   onEraserMode(mode: EraserMode): void;
   onColor(color: InkColor): void;
@@ -77,7 +78,15 @@ export function Toolbar(p: Props) {
     <div class="werkzeuge" role="toolbar" aria-label="Werkzeuge">
       <Group label="Werkzeug">
         {PENS.map((k) => (
-          <button key={k} class="tb" type="button" aria-pressed={p.tool === 'pen' && p.pen === k} aria-label={PEN_NAMES[k]} title={PEN_NAMES[k]} onClick={() => p.onPen(k)}>
+          <button
+            key={k}
+            class="tb"
+            type="button"
+            aria-pressed={p.tool === 'pen' && p.pen === k}
+            aria-label={PEN_NAMES[k]}
+            title={PEN_NAMES[k]}
+            onClick={(e) => p.onPen(k, e.currentTarget.getBoundingClientRect())}
+          >
             <Icon name={PEN_ICON[k]} />
           </button>
         ))}

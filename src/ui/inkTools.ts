@@ -3,6 +3,7 @@ import type { PenKind } from '../ink/pens';
 import type { InkColor, WidthName } from '../ink/types';
 import { todayVienna } from '../lib/dates';
 import type { EraserMode, EraserSize } from '../lib/settings';
+import { fuellerPanel, type ButtonRect } from './FuellerPanel';
 import { inkPrefs, setInkPrefs } from './inkPrefs';
 import type { PageProps } from './PageView';
 import { routeHash } from './router';
@@ -25,7 +26,7 @@ export type InkToolsOptions = {
   filter: GestureFilter;
 };
 
-export type Choose = { tool(t: Tool): void; pen(p: PenKind): void; color(c: InkColor): void; width(w: WidthName): void; eraserSize(s: EraserSize): void; eraserMode(m: EraserMode): void };
+export type Choose = { tool(t: Tool): void; pen(p: PenKind, from?: ButtonRect): void; color(c: InkColor): void; width(w: WidthName): void; eraserSize(s: EraserSize): void; eraserMode(m: EraserMode): void };
 
 /** Rad, Lasche und der einfache Schnellwechsel haben dieselben Angaben. */
 export type QuickProps = { tool: Tool; pen: PenKind; partial: boolean; pos?: [number, number]; filter: GestureFilter; onToggle(): void; onMove(pos: [number, number]): void };
@@ -36,8 +37,18 @@ export function inkTools(o: InkToolsOptions): InkTools {
   const { tool, pen, eraserMode } = inkPrefs.value;
 
   const chooseTool = (t: Tool) => setInkPrefs({ tool: t });
-  // Wer einen Stift wählt, will schreiben. Farbe und Breite bleiben, wie sie sind.
-  const choosePen = (p: PenKind) => setInkPrefs({ tool: 'pen', pen: p });
+  // Wer einen Stift wählt, will schreiben. Farbe und Breite bleiben, wie sie sind. Ist die Füllfeder schon gewählt, wählt ein
+  // weiterer Tipp auf sie nichts neu: Er öffnet ihr Regler-Fenster, aus der Werkzeugleiste unter ihrem Knopf (`from`), aus Rad und
+  // Lasche in der Mitte der Bühne. Ist es offen, schließt er es. Wo nicht geschrieben wird, gibt es kein Fenster.
+  const choosePen = (p: PenKind, from?: ButtonRect) => {
+    const now = inkPrefs.value; // die Wahl jetzt, nicht die beim Zeichnen
+    if (p !== 'fueller' || !o.canWrite || now.tool !== 'pen' || now.pen !== 'fueller') {
+      setInkPrefs({ tool: 'pen', pen: p });
+      return;
+    }
+    if (fuellerPanel.value) fuellerPanel.value = null;
+    else fuellerPanel.value = from ? { at: 'leiste', rect: { left: from.left, top: from.top, bottom: from.bottom, width: from.width } } : { at: 'mitte' };
+  };
   // Wer Farbe oder Breite wählt, will schreiben: Der Kugelschreiber ist dann wieder das Werkzeug. Ebenso Größe oder Art: der Radierer.
   const chooseColor = (c: InkColor) => setInkPrefs({ color: c, tool: 'pen' });
   const chooseWidth = (w: WidthName) => {

@@ -1,12 +1,16 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 import { GestureFilter } from '../../src/ink/gestures';
+import { DEFAULT_FUELLER, type FuellerSettings } from '../../src/ink/pens';
+import { WIDTH_MM } from '../../src/ink/types';
 import { DEFAULT_INK } from '../../src/lib/settings';
+import { fuellerPanel, previewD } from '../../src/ui/FuellerPanel';
 import { inkPrefs } from '../../src/ui/inkPrefs';
 import { inkTools, type InkToolsOptions } from '../../src/ui/inkTools';
 import { toolActions } from '../../src/ui/toolActions';
 
 beforeEach(() => {
   inkPrefs.value = DEFAULT_INK;
+  fuellerPanel.value = null;
 });
 
 function setup(over: Partial<InkToolsOptions> = {}) {
@@ -60,6 +64,99 @@ test('choosing a pen keeps the colour and the width', () => {
   expect(inkPrefs.value).toMatchObject({ pen: 'fueller', tool: 'pen', color: 'blau', width: 'breit' });
   inkTools(o).runAction({ kind: 'pen', pen: 'fineliner' });
   expect(inkPrefs.value).toMatchObject({ pen: 'fineliner', tool: 'pen', color: 'blau', width: 'breit' });
+});
+
+test('a second choice of the fountain pen opens the panel', () => {
+  const { o } = setup();
+  // Die erste Wahl wählt nur.
+  inkTools(o).choose.pen('fueller');
+  expect(inkPrefs.value).toMatchObject({ tool: 'pen', pen: 'fueller' });
+  expect(fuellerPanel.value).toBeNull();
+
+  // Die zweite öffnet das Fenster, gewählt wird nichts neu: aus der Werkzeugleiste unter dem Knopf ...
+  const chosen = inkPrefs.value;
+  const button = { left: 104, top: 8, bottom: 52, width: 44 };
+  inkTools(o).choose.pen('fueller', button);
+  expect(fuellerPanel.value).toEqual({ at: 'leiste', rect: button });
+  expect(inkPrefs.value).toBe(chosen);
+
+  // ... aus Rad und Lasche in der Mitte der Bühne.
+  fuellerPanel.value = null;
+  inkTools(o).runAction({ kind: 'pen', pen: 'fueller' });
+  expect(fuellerPanel.value).toEqual({ at: 'mitte' });
+  expect(inkPrefs.value).toBe(chosen);
+});
+
+test('choosing the fountain pen again closes its open panel', () => {
+  const { o } = setup();
+  inkPrefs.value = { ...DEFAULT_INK, pen: 'fueller' };
+  inkTools(o).choose.pen('fueller');
+  expect(fuellerPanel.value).toEqual({ at: 'mitte' });
+  inkTools(o).choose.pen('fueller', { left: 104, top: 8, bottom: 52, width: 44 });
+  expect(fuellerPanel.value).toBeNull();
+  expect(inkPrefs.value.pen).toBe('fueller');
+});
+
+test('the fountain pen with the eraser or without writing opens no panel', () => {
+  // Beim Radierer ist die Füllfeder nicht gewählt: Der Tipp wählt sie.
+  inkPrefs.value = { ...DEFAULT_INK, pen: 'fueller', tool: 'eraser' };
+  inkTools(setup().o).choose.pen('fueller');
+  expect(inkPrefs.value.tool).toBe('pen');
+  expect(fuellerPanel.value).toBeNull();
+  // Wo nicht geschrieben wird (Firmen-PC, Lesefenster, Seite nicht beschreibbar), gibt es kein Fenster.
+  inkTools(setup({ canWrite: false }).o).choose.pen('fueller');
+  inkTools(setup({ canWrite: false, full: true }).o).runAction({ kind: 'pen', pen: 'fueller' });
+  expect(fuellerPanel.value).toBeNull();
+});
+
+/** Die Befehle eines Pfads (ohne Zahlen) und die Zahlenpaare, die auf sie folgen. */
+function parse(d: string): { commands: string[]; points: [number, number][] } {
+  const commands = d.match(/[A-Za-z]/g) ?? [];
+  const numbers = (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+  const points: [number, number][] = [];
+  for (let i = 0; i + 1 < numbers.length; i += 2) points.push([numbers[i], numbers[i + 1]]);
+  return { commands, points };
+}
+
+test('previewD changes with the settings', () => {
+  const flat = previewD({ ...DEFAULT_FUELLER, rundung: 0 }, WIDTH_MM.mittel);
+  const round = previewD({ ...DEFAULT_FUELLER, rundung: 1 }, WIDTH_MM.mittel);
+  expect(flat.d).not.toBe(round.d);
+  for (const { d } of [flat, round]) {
+    const { commands } = parse(d);
+    expect(commands[0]).toBe('M');
+    expect([...new Set(commands)].sort()).toEqual(['L', 'M', 'Z']);
+  }
+  // Jeder Regler wirkt auf die Vorschau.
+  for (const key of ['schaerfe', 'druck', 'stabil'] as const) {
+    const other: FuellerSettings = { ...DEFAULT_FUELLER, [key]: DEFAULT_FUELLER[key] === 1 ? 0 : 1 };
+    expect(previewD(other, WIDTH_MM.mittel).d, key).not.toBe(previewD(DEFAULT_FUELLER, WIDTH_MM.mittel).d);
+  }
+});
+
+test('the preview fits its viewBox with any settings and width', () => {
+  const extremes: FuellerSettings[] = [
+    DEFAULT_FUELLER,
+    { schaerfe: 0, druck: 1, rundung: 0, stabil: 0 },
+    { schaerfe: 1, druck: 1, rundung: 1, stabil: 1 },
+    { schaerfe: 0, druck: 0, rundung: 0, stabil: 1 },
+  ];
+  for (const widthMm of Object.values(WIDTH_MM)) {
+    for (const o of extremes) {
+      const { d, viewBox } = previewD(o, widthMm);
+      const [left, top, w, h] = viewBox.split(' ').map(Number);
+      expect(w, viewBox).toBeGreaterThan(0);
+      expect(h, viewBox).toBeGreaterThan(0);
+      const { points } = parse(d);
+      expect(points.length).toBeGreaterThan(10);
+      for (const [x, y] of points) {
+        expect(x, `${JSON.stringify(o)} ${widthMm} mm`).toBeGreaterThanOrEqual(left);
+        expect(x, `${JSON.stringify(o)} ${widthMm} mm`).toBeLessThanOrEqual(left + w);
+        expect(y, `${JSON.stringify(o)} ${widthMm} mm`).toBeGreaterThanOrEqual(top);
+        expect(y, `${JSON.stringify(o)} ${widthMm} mm`).toBeLessThanOrEqual(top + h);
+      }
+    }
+  }
 });
 
 test('the quick switch goes back to the last pen', () => {

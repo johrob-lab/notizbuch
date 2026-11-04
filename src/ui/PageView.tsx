@@ -1,8 +1,9 @@
 import type { ComponentChildren } from 'preact';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { GestureFilter, type View } from '../ink/gestures';
 import { meterLabel } from '../ink/meter';
 import { effect } from '@preact/signals';
+import { FuellerPanel, fuellerPanel } from './FuellerPanel';
 import { inkPrefs } from './inkPrefs';
 import { inkTools } from './inkTools';
 import { InkSurface } from '../ink/surface';
@@ -245,6 +246,15 @@ export function PageView(p: Props) {
 
   const full = p.vollbild != null;
   const canWrite = !readOnly && phase !== 'unlesbar' && phase !== 'zuNeu' && phase !== 'gesperrt' && phase !== 'nichtGeladen';
+  // Das Regler-Fenster der Füllfeder gehört zu dieser Seite, wie sie gerade zu sehen ist. Es schließt, wenn sie geht (Seitenwechsel),
+  // wenn das Vollbild wechselt (es stand unter der Werkzeugleiste oder in der Mitte der Bühne) und wenn sie sich nicht mehr
+  // beschreiben lässt. Alles andere, was es schließt, regelt `FuellerPanel` selbst.
+  useLayoutEffect(
+    () => () => {
+      fuellerPanel.value = null;
+    },
+    [full, canWrite],
+  );
   const wheel = p.vollbild === 'kreis';
   const ink = inkTools({
     surface,
@@ -378,6 +388,8 @@ export function PageView(p: Props) {
             {canWrite && <QuickSwitch {...quick} />}
           </>
         )}
+        {/* Das Regler-Fenster der Füllfeder liegt über allem auf der Bühne. Ohne Schreiben gibt es keine Stiftwahl, also auch kein Fenster. */}
+        {canWrite && <FuellerPanel filter={palm} />}
       </div>
     </div>
   );
