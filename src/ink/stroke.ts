@@ -416,12 +416,14 @@ export class StrokeBuilder {
 
   /**
    * Kann der Anfang festgelegt werden? Dazu braucht es die erste Richtung und, mit Zeiten, einen Zeitschritt, der zählt (eine Zeit
-   * nach `t0`). Kommt keiner, bis der Weg `START_WAIT` × `TAPER_LEN` Bildschirmpunkte lang ist, sind wohl alle Zeiten gleich: Dann
-   * wird nicht länger gewartet, der Anfang gilt als langsam.
+   * nach `t0`). Kommt keiner, bis der gezählte Weg oder die Strecke der Rohpunkte `START_WAIT` × `TAPER_LEN` Bildschirmpunkte lang
+   * ist, sind wohl alle Zeiten gleich: Dann wird nicht länger gewartet, der Anfang gilt als langsam. Die Strecke zählt mit, damit auch
+   * ein Stift, der nach der ersten Richtung ruht und zittert, nicht endlos offene Punkte sammelt.
    */
   private startReady(): boolean {
     if (!this.dir) return false;
-    return !this.timed || this.tick.t > this.t0 || this.travel >= START_WAIT * this.taperLen;
+    const way = Math.max(this.travel, this.arc[this.arc.length - 1] ?? 0);
+    return !this.timed || this.tick.t > this.t0 || way >= START_WAIT * this.taperLen;
   }
 
   /** Tempo beim Ansetzen (Bildschirmpunkte je ms): die gezählte Strecke ab `t0` durch die Zeit seitdem. Ohne gezählte Zeit 0, langsam. */

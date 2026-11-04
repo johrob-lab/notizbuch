@@ -768,7 +768,7 @@ test('a pen resting before it lifts keeps the taper at the end', () => {
     feed(resting, [start, ...line, ...around(end, 0.3, 200, random(seed))]);
     extra = Math.max(extra, wayFromTaper(atEnd(resting.finish()) / base)); // Weg, den das Zittern dazugezählt hat
   }
-  expect(extra).toBeLessThanOrEqual(0.6);
+  expect(extra).toBeLessThanOrEqual(0.4);
 });
 
 test('no knob where the first direction comes', () => {
@@ -1559,6 +1559,17 @@ test('if no time step ever counts, the start waits only so far', () => {
   const done = widths(b.finish().pts);
   expect(reach90(done, widths(blunt.finish().pts), done.map((_, i) => 0.6 * i))).toBeLessThanOrEqual(4);
   for (const p of blunt.points()) expect(p.w).toBeCloseTo(NOM, 9); // langsam: volle Breite
+});
+
+test('a pen that rests after the first direction with equal times still settles', () => {
+  // Alle Zeiten gleich: Nach 6 Einheiten Gerade (die erste Richtung steht nach 4) ruht der Stift und zittert um 0,7 hin und her. Das
+  // Zittern bleibt im Seil, der gezählte Weg wächst nicht, wohl aber die Strecke der Rohpunkte. Ab START_WAIT × TAPER_LEN (45) gilt der
+  // Anfang als langsam, danach bleiben nur die Punkte am Ende offen: Die Arbeit je Stiftbewegung bleibt begrenzt.
+  const b = inkPen();
+  for (let i = 0; i <= 10; i++) expect(b.add(0.6 * i, 0, 0.5, 0, 0, 5000)).toBe(true);
+  for (let i = 0; i < 300; i++) expect(b.add(6 + (i % 2 ? 0.7 : -0.7), 0, 0.5, 0, 0, 5000)).toBe(true);
+  expect(b.settled()).toBeGreaterThan(0);
+  expect(b.points().length - b.settled()).toBeLessThan(100);
 });
 
 test('a point without time ends the speed for the rest of the stroke', () => {
