@@ -170,7 +170,7 @@ Wo: Testkopie, dann echtes Vault, Firmen-PC. Dauer: etwa 15 Minuten. Am PC kanns
 7. Hole am iPad die App in den Vordergrund. Innerhalb von Sekunden, spätestens nach 3 Minuten, steht der Haken auch dort.
 8. Probiere am PC noch: **Strg** halten und das Mausrad drehen zoomt die Seite, das Mausrad allein verschiebt sie, der Knopf **Ganze Seite** unten links auf der Seite bringt sie zurück.
 
-Hinweis: Die App lädt sich nach einer neuen Version selbst neu, in einem ruhigen Moment (nicht beim Schreiben). Nach dem Online-Gang dieser neuen Stifte lade den Firmen-PC einmal mit **F5** neu, danach läuft dort die neue Version. Das gilt auch nach jedem späteren Update.
+Hinweis: Die App lädt sich nach einer neuen Version selbst neu, in einem ruhigen Moment (nicht beim Schreiben): sofort, wenn du seit dem Öffnen oder Zurückkehren noch nichts angefasst hast, sonst eine Minute nach deiner letzten Eingabe. Nach dem Online-Gang dieser neuen Stifte lade den Firmen-PC einmal mit **F5** neu, danach läuft dort die neue Version. Das gilt auch nach jedem späteren Update.
 
 9. Klicke oben auf **Vollbild** und klicke mit der Maus auf den runden Knopf unten rechts (er zeigt drei Punkte). Erwartet: Ein Ring geht auf mit **‹**, **Heute**, **›**, den vier Ecken nach außen (**Ganze Seite**) und den vier Ecken nach innen (**Vollbild aus**), sonst nichts. Klicke auf **Vollbild aus**. Erwartet: Die Leisten sind wieder da.
 

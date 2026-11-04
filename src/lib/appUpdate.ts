@@ -46,7 +46,8 @@ export function startAppUpdate(env: UpdateEnv, swUrl: string, scope: string): Ap
   let registration: { update(): Promise<unknown> } | undefined;
   const down = new Set<number>();
   let lastInput = env.now();
-  let justShown = false;
+  // Kam seit dem Start oder seit dem letzten Sichtbarwerden eine Eingabe? Wenn nicht, lädt eine neue Version sofort.
+  let touched = false;
   const timers: ReturnType<typeof setInterval>[] = [];
 
   const check = async (): Promise<void> => {
@@ -71,7 +72,7 @@ export function startAppUpdate(env: UpdateEnv, swUrl: string, scope: string): Ap
 
   const quiet = (): boolean => {
     if (stopped || !ready || reloading || env.editing() || env.doc.visibilityState !== 'visible' || down.size > 0) return false;
-    return justShown || env.now() - lastInput >= QUIET_MS;
+    return !touched || env.now() - lastInput >= QUIET_MS;
   };
   const maybeReload = (): void => {
     if (quiet()) void reloadNow();
@@ -95,6 +96,7 @@ export function startAppUpdate(env: UpdateEnv, swUrl: string, scope: string): Ap
     const touch = (): void => {
       if (stopped) return;
       lastInput = env.now();
+      touched = true;
     };
     env.target.addEventListener(
       'pointerdown',
@@ -122,17 +124,12 @@ export function startAppUpdate(env: UpdateEnv, swUrl: string, scope: string): Ap
     env.doc.addEventListener('visibilitychange', () => {
       if (stopped) return;
       if (env.doc.visibilityState !== 'visible') {
-        justShown = false;
         down.clear(); // ein verlorenes pointerup darf das Neuladen nicht für immer sperren
         return;
       }
-      justShown = true;
+      touched = false; // zurück an der Oberfläche: bis zur ersten Eingabe darf sofort neu geladen werden
       void check();
       maybeReload();
-      // Nur der Moment des Öffnens zählt als ruhig, danach gilt wieder die Pause seit der letzten Eingabe.
-      setTimeout(() => {
-        justShown = false;
-      }, 0);
     });
 
     timers.push(setInterval(() => void check(), CHECK_EVERY_MS));
