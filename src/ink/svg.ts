@@ -1,11 +1,13 @@
 import { isValidDay, weekDays } from '../lib/dates';
+import { outlineD } from './outline';
+import { BLEISTIFT_OPACITY, PENS, isShape, type PenKind } from './pens';
 import { fmtNum, parsePathD, pathD } from './stroke';
 import {
   INK,
   PAGE_H,
   PAGE_W,
   type FieldBox,
-  type InkColor,
+  type StrokeColor,
   type Page,
   type PageKind,
   type Pt,
@@ -16,6 +18,23 @@ import {
 // und Feldnamen (beim Lesen ignoriert) und je Feld eine Gruppe mit den Strichen, die dort liegen. Ein Strich ist
 // ein <path>. Schreiben ist reine Textarbeit und braucht keinen DOM. Nur Lesen und Zusammenführen brauchen
 // den DOMParser.
+
+/** Höchste Formatversion, die diese App liest. 1: nur Kugelschreiber, 2: dazu Fineliner, Füllfeder und Bleistift. */
+export const FORMAT_VERSION = 2;
+
+/** Die Seite hat eine höhere Versionsnummer, als diese App kennt. */
+export class PageTooNewError extends Error {
+  readonly version: number;
+  constructor(version: number) {
+    super('Diese Seite stammt aus einer neueren Version der App.');
+    this.name = 'PageTooNewError';
+    this.version = version;
+  }
+}
+
+/** Die Körnung des Bleistifts, einmal je Datei in <defs>: Rauschen als Maske, die das Grau stellenweise wegnimmt. */
+const PENCIL_FILTER =
+  '<filter id="bleistift"><feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves="1" seed="7" result="korn"/><feColorMatrix in="korn" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.4 1.9" result="maske"/><feComposite in="SourceGraphic" in2="maske" operator="in"/></filter>';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PAGE_KINDS: readonly string[] = ['tag', 'woche', 'monat', 'besprechung'];
@@ -64,6 +83,20 @@ function attrs(list: Attr[]): string {
 
 /** Ein <path> je Strich, alle Zahlen mit höchstens einer Nachkommastelle. */
 function strokeMarkup(s: Stroke): string {
+  if (isShape(s.tool)) {
+    const list: Attr[] = [
+      ['data-id', s.id],
+      ['data-werkzeug', s.tool],
+      ['data-farbe', s.color],
+      ['data-breite', fmtNum(s.widthMm)],
+      ['data-t', fmtNum(s.t)],
+      ['data-linie', s.pts.map((p) => `${fmtNum(p.x)} ${fmtNum(p.y)} ${fmtNum(p.w)}`).join(' ')],
+      ['d', outlineD(s.pts)],
+      ['fill', INK[s.color]],
+    ];
+    if (s.tool === 'bleistift') list.push(['fill-opacity', String(BLEISTIFT_OPACITY)], ['filter', 'url(#bleistift)']);
+    return `<path${attrs(list)}/>`;
+  }
   return `<path${attrs([
     ['data-id', s.id],
     ['data-werkzeug', s.tool],
@@ -111,22 +144,24 @@ function pageDate(p: Page): string {
 }
 
 /** Eine Feldgruppe, wie sie in der Datei steht: `paths` sind fertige <path>-Texte. */
-type OutGroup = { feld: string; datum: string; paths: string[] };
+type OutGroup = { feld: string; datum: string; paths: string[]; tools?: PenKind[] };
 
-function writeSvg(head: Pick<Page, 'kind' | 'key' | 'meta'>, background: string, groups: OutGroup[]): string {
+function writeSvg(head: Pick<Page, 'kind' | 'key' | 'meta'>, background: string, groups: OutGroup[], tools: ReadonlySet<PenKind>): string {
   const root: Attr[] = [
     ['xmlns', SVG_NS],
     ['viewBox', `0 0 ${PAGE_W} ${PAGE_H}`],
     ['width', String(PAGE_W)],
     ['height', String(PAGE_H)],
-    ['data-notizbuch', '1'],
+    ['data-notizbuch', [...tools].some((t) => t !== 'kugel') ? '2' : '1'],
     ['data-seite', head.kind],
     ['data-schluessel', head.key],
   ];
   for (const [key, value] of Object.entries(head.meta)) {
     if (META_KEY.test(key) && !HEADER_KEYS.has(key)) root.push([`data-${key}`, value]);
   }
-  const lines = [`<svg${attrs(root)}>`, `  <g data-hintergrund="1">${background}</g>`];
+  const lines = [`<svg${attrs(root)}>`];
+  if (tools.has('bleistift')) lines.push(`  <defs>${PENCIL_FILTER}</defs>`);
+  lines.push(`  <g data-hintergrund="1">${background}</g>`);
   for (const g of groups) {
     if (!g.paths.length) continue;
     const open: Attr[] = [['data-feld', g.feld]];
@@ -147,12 +182,14 @@ function writeSvg(head: Pick<Page, 'kind' | 'key' | 'meta'>, background: string,
 export function serializePage(p: Page, fields: FieldBox[], background: string): string {
   const groups: OutGroup[] = fields.map((f) => ({ feld: f.id, datum: f.datum, paths: [] }));
   const frei: OutGroup = { feld: FREI, datum: pageDate(p), paths: [] };
+  const tools = new Set<PenKind>();
   for (const s of p.strokes) {
     if (!s.pts.length) continue;
+    tools.add(s.tool);
     const i = fieldIndex(fields, s.pts);
     (i < 0 ? frei : groups[i]).paths.push(strokeMarkup(s));
   }
-  return writeSvg(p, stripInvalid(background), [...groups, frei]);
+  return writeSvg(p, stripInvalid(background), [...groups, frei], tools);
 }
 
 // ---------- Lesen ----------
@@ -169,17 +206,41 @@ function toNumber(value: string | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Die Mittellinie aus `data-linie` (x y w je Punkt), oder `null`, wenn sie fehlt, unvollständig oder unbrauchbar ist. */
+function readLine(value: string | null): Pt[] | null {
+  const parts = (value ?? '').trim().split(/\s+/);
+  if (parts.length < 3 || parts.length % 3 !== 0) return null;
+  const nums = parts.map(Number);
+  if (!nums.every(Number.isFinite)) return null;
+  const pts: Pt[] = [];
+  for (let i = 0; i < nums.length; i += 3) {
+    if (nums[i + 2] < 0) return null;
+    pts.push({ x: nums[i], y: nums[i + 1], w: nums[i + 2] });
+  }
+  return pts;
+}
+
 /** Der Strich zu einem <path>, oder `null`, wenn ein Attribut fehlt oder nicht stimmt. */
 function readStroke(el: Element): Stroke | null {
   const id = el.getAttribute('data-id');
   const t = toNumber(el.getAttribute('data-t'));
   const widthMm = toNumber(el.getAttribute('data-breite'));
+  const tool = el.getAttribute('data-werkzeug') ?? 'kugel';
+  if (!(PENS as readonly string[]).includes(tool)) return null;
+  const pen = tool as PenKind;
+  const farbe0 = el.getAttribute('data-farbe') ?? '';
+  const color0 = INK_COLORS.includes(farbe0) ? (farbe0 as StrokeColor) : 'schwarz';
+  if (isShape(pen)) {
+    if (!id || t === null || widthMm === null) return null;
+    const pts = readLine(el.getAttribute('data-linie'));
+    if (!pts) return null;
+    const w = pts.reduce((sum, p) => sum + p.w, 0) / pts.length;
+    return { id, tool: pen, color: pen === 'bleistift' ? 'grau' : color0, widthMm, t, w, pts };
+  }
   const w = toNumber(el.getAttribute('stroke-width'));
   const points = parsePathD(el.getAttribute('d') ?? '');
   if (!id || t === null || widthMm === null || w === null || !points.length) return null;
-  const farbe = el.getAttribute('data-farbe') ?? '';
-  const color = INK_COLORS.includes(farbe) ? (farbe as InkColor) : 'schwarz';
-  return { id, tool: 'kugel', color, widthMm, t, w, pts: points.map((p) => ({ x: p.x, y: p.y, w })) };
+  return { id, tool: pen, color: color0, widthMm, t, w, pts: points.map((p) => ({ x: p.x, y: p.y, w })) };
 }
 
 function readDoc(svg: string): Doc {
@@ -194,9 +255,9 @@ function readDoc(svg: string): Doc {
   // Browser melden einen Fehler nicht als Ausnahme, sondern legen ein <parsererror> in das Dokument.
   if (doc.getElementsByTagName('parsererror').length > 0) throw new Error('Die Datei ist kein gültiges SVG.');
   const root = doc.documentElement;
-  if (!root || root.localName !== 'svg' || root.getAttribute('data-notizbuch') !== '1') {
-    throw new Error('Die Datei ist keine Seite des Notizbuchs.');
-  }
+  const versionText = root?.localName === 'svg' ? (root.getAttribute('data-notizbuch') ?? '') : '';
+  if (!/^[1-9]\d*$/.test(versionText)) throw new Error('Die Datei ist keine Seite des Notizbuchs.');
+  if (Number(versionText) > FORMAT_VERSION) throw new PageTooNewError(Number(versionText));
   const kind = root.getAttribute('data-seite') ?? '';
   if (!PAGE_KINDS.includes(kind)) throw new Error(`Unbekannter Seitentyp „${kind}“.`);
 
@@ -343,22 +404,32 @@ export function mergePages(oursSvg: string, theirsSvg: string, baseSvg?: string)
   const groups: OutGroup[] = ours.groups.map((g) => ({
     feld: g.feld,
     datum: g.datum,
-    paths: g.items.filter((item) => !erased.has(item.stroke.id)).map((item) => pathMarkup(item.el)),
+    paths: [],
+    tools: [],
   }));
+  ours.groups.forEach((g, i) => {
+    for (const item of g.items) {
+      if (erased.has(item.stroke.id)) continue;
+      groups[i].paths.push(pathMarkup(item.el));
+      groups[i].tools!.push(item.stroke.tool);
+    }
+  });
   for (const g of theirs.groups) {
     for (const item of g.items) {
       if (seen.has(item.stroke.id) || erased.has(item.stroke.id)) continue;
       seen.add(item.stroke.id);
       let target = groups.find((x) => x.feld === g.feld && x.datum === g.datum);
       if (!target) {
-        target = { feld: g.feld, datum: g.datum, paths: [] };
+        target = { feld: g.feld, datum: g.datum, paths: [], tools: [] };
         groups.push(target);
       }
       target.paths.push(pathMarkup(item.el));
+      target.tools!.push(item.stroke.tool);
     }
   }
   const ordered = [...groups.filter((g) => g.feld !== FREI), ...groups.filter((g) => g.feld === FREI)];
   const background = ours.background ? Array.from(ours.background.childNodes, (child) => markup(child)).join('') : '';
   const meta = base ? mergeMeta(ours.head.meta, theirs.head.meta, base.head.meta) : preferTheirs(ours.head.meta, theirs.head.meta);
-  return writeSvg({ ...ours.head, meta }, background, ordered);
+  const tools = new Set<PenKind>(ordered.flatMap((g) => g.tools ?? []));
+  return writeSvg({ ...ours.head, meta }, background, ordered, tools);
 }

@@ -1,6 +1,8 @@
 import { expect, test, vi } from 'vitest';
 import { StrokeBuilder } from '../../src/ink/stroke';
-import { mergePages, parsePage, serializePage } from '../../src/ink/svg';
+import { INK } from '../../src/ink/types';
+import type { PenKind } from '../../src/ink/pens';
+import { FORMAT_VERSION, PageTooNewError, mergePages, parsePage, serializePage } from '../../src/ink/svg';
 import type { FieldBox, InkColor, Page, Stroke } from '../../src/ink/types';
 
 const DAY = '2026-10-29';
@@ -420,7 +422,7 @@ test('a file that is not a readable notebook page throws a clear error', () => {
   expect(() => parsePage('hallo')).toThrow(/SVG/);
   expect(() => parsePage(`${ROOT}<g></svg>`)).toThrow(/SVG/); // nicht wohlgeformt
   expect(() => parsePage('<svg xmlns="http://www.w3.org/2000/svg"></svg>')).toThrow(/Seite des Notizbuchs/);
-  expect(() => parsePage('<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="2"></svg>')).toThrow(
+  expect(() => parsePage('<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="0"></svg>')).toThrow(
     /Seite des Notizbuchs/,
   );
   expect(() => parsePage('<html xmlns="http://www.w3.org/1999/xhtml" data-notizbuch="1"></html>')).toThrow(
@@ -698,4 +700,160 @@ test('merge after partial erase keeps the cut', async () => {
   const merged = parsePage(mergePages(ours, base, base)).strokes.map((s) => s.id);
   expect(merged).not.toContain('a');
   expect(merged.sort()).toEqual(['p1', 'p2']);
+});
+
+// ---------- Neue Stifte und Version 2 ----------
+
+/** Ein Strich mit dem Stift `pen`, gebaut wie in der App: leicht geschwungen, mit Druck und Neigung. */
+function penStroke(pen: PenKind, color: InkColor = 'blau', id?: string): Stroke {
+  const b = new StrokeBuilder({ pen, color, widthMm: 0.4, sigma: 1, t: 5000 + ++counter, minDist: 0.5 });
+  for (let i = 0; i < 12; i++) b.add(100 + i * 8, 300 + Math.sin(i / 2) * 10, 0.3 + i * 0.05, 20, 30);
+  const s = b.stroke();
+  return id ? { ...s, id } : s;
+}
+
+const version = (svg: string) => /data-notizbuch="(\d+)"/.exec(svg)?.[1];
+
+test('a page with ballpoint strokes only stays version 1 without defs', () => {
+  const svg = serializePage(tagPage([penStroke('kugel')]), FIELDS, '');
+  expect(FORMAT_VERSION).toBe(2);
+  expect(version(svg)).toBe('1');
+  expect(svg).not.toContain('<defs>');
+  expect(svg).not.toContain('data-linie');
+});
+
+test('a fineliner stroke is a line with its own tool name and makes the page version 2', () => {
+  const s = penStroke('fineliner');
+  const svg = serializePage(tagPage([s]), FIELDS, '');
+  expect(version(svg)).toBe('2');
+  expect(svg).not.toContain('<defs>');
+  const line = lineOf(svg, s.id)!;
+  expect(line).toContain('data-werkzeug="fineliner"');
+  expect(line).toContain('fill="none"');
+  expect(line).toContain(`stroke="${INK.blau}"`);
+  expect(parsePage(svg).strokes[0].tool).toBe('fineliner');
+});
+
+test('a fountain pen stroke is a filled outline with its centre line and widths', () => {
+  const s = penStroke('fueller', 'blau');
+  const svg = serializePage(tagPage([s]), FIELDS, '');
+  expect(version(svg)).toBe('2');
+  const line = lineOf(svg, s.id)!;
+  expect(line).not.toContain('stroke=');
+  expect(line).toContain(`fill="${INK.blau}"`);
+  expect(line).toContain('data-linie="');
+  const back = parsePage(svg).strokes[0];
+  expect(back.tool).toBe('fueller');
+  expect(back.color).toBe('blau');
+  expect(back.pts).toHaveLength(s.pts.length);
+  s.pts.forEach((p, i) => {
+    expect(Math.abs(back.pts[i].x - p.x)).toBeLessThanOrEqual(0.05);
+    expect(Math.abs(back.pts[i].y - p.y)).toBeLessThanOrEqual(0.05);
+    expect(Math.abs(back.pts[i].w - p.w)).toBeLessThanOrEqual(0.05);
+  });
+});
+
+test('a pencil stroke is grey, see through and grainy, and the grain is defined once', () => {
+  const a = penStroke('bleistift');
+  const b = penStroke('bleistift');
+  const svg = serializePage(tagPage([a, b]), FIELDS, '');
+  expect(version(svg)).toBe('2');
+  expect(svg.match(/<defs>/g)).toHaveLength(1);
+  expect(svg.match(/id="bleistift"/g)).toHaveLength(1);
+  expect(svg.split('\n')[1]).toBe('  <defs>' + svg.split('\n')[1].slice(8));
+  const line = lineOf(svg, a.id)!;
+  expect(line).toContain('data-farbe="grau"');
+  expect(line).toContain(`fill="${INK.grau}"`);
+  expect(line).toContain('fill-opacity="0.85"');
+  expect(line).toContain('filter="url(#bleistift)"');
+  const back = parsePage(svg).strokes;
+  expect(back.map((x) => x.tool)).toEqual(['bleistift', 'bleistift']);
+  expect(back[0].color).toBe('grau');
+});
+
+test('a single point with the fountain pen survives the roundtrip', () => {
+  const b = new StrokeBuilder({ pen: 'fueller', color: 'schwarz', widthMm: 0.4, sigma: 1, t: 1, minDist: 0.5 });
+  b.add(300, 400, 0.5, 20, 30);
+  const s = b.stroke();
+  expect(s.pts).toHaveLength(1);
+  const svg = serializePage(tagPage([s]), FIELDS, '');
+  expect(lineOf(svg, s.id)).toMatch(/ d="M /);
+  const back = parsePage(svg).strokes;
+  expect(back).toHaveLength(1);
+  expect(back[0].tool).toBe('fueller');
+  expect(back[0].pts).toHaveLength(1);
+  expect(Math.abs(back[0].pts[0].w - s.pts[0].w)).toBeLessThanOrEqual(0.05);
+});
+
+test('a cut fountain pen stroke is still written as an outline', () => {
+  const s = penStroke('fueller', 'rot');
+  const left = { ...s, id: 'l1', pts: s.pts.slice(0, 4) };
+  const right = { ...s, id: 'r1', pts: s.pts.slice(8) };
+  const svg = serializePage(tagPage([left, right]), FIELDS, '');
+  expect(version(svg)).toBe('2');
+  for (const id of ['l1', 'r1']) expect(lineOf(svg, id)).toContain('data-linie="');
+  const back = parsePage(svg).strokes;
+  expect(back.map((x) => [x.id, x.tool, x.color, x.pts.length])).toEqual([
+    ['l1', 'fueller', 'rot', 4],
+    ['r1', 'fueller', 'rot', 4],
+  ]);
+});
+
+test('merging a version 1 page with a version 2 page gives version 2 with the grain', () => {
+  const ours = serializePage(tagPage([penStroke('kugel', 'blau', 'k1')]), FIELDS, '');
+  const theirs = serializePage(tagPage([penStroke('bleistift', 'blau', 'b1')]), FIELDS, '');
+  const merged = mergePages(ours, theirs);
+  expect(version(merged)).toBe('2');
+  expect(merged.match(/<defs>/g)).toHaveLength(1);
+  expect(merged).toContain('id="bleistift"');
+  expect(strokeIds(merged)).toEqual(['b1', 'k1']);
+  expect(lineOf(merged, 'b1')).toBe(lineOf(theirs, 'b1'));
+});
+
+test('when all new pens are erased the merged page goes back to version 1', () => {
+  const k = penStroke('kugel', 'blau', 'k1');
+  const p = penStroke('bleistift', 'blau', 'b1');
+  const base = serializePage(tagPage([k, p]), FIELDS, '');
+  const ours = serializePage(tagPage([k]), FIELDS, '');
+  const merged = mergePages(ours, base, base);
+  expect(strokeIds(merged)).toEqual(['k1']);
+  expect(version(merged)).toBe('1');
+  expect(merged).not.toContain('<defs>');
+});
+
+test('a page of version 3 is too new', () => {
+  const svg = svgWith('a').replace('data-notizbuch="1"', 'data-notizbuch="3"');
+  expect(() => parsePage(svg)).toThrow(PageTooNewError);
+  try {
+    parsePage(svg);
+  } catch (e) {
+    expect((e as PageTooNewError).version).toBe(3);
+    expect((e as Error).message).toBe('Diese Seite stammt aus einer neueren Version der App.');
+  }
+});
+
+test('a missing or broken version number is not a page of the notebook', () => {
+  for (const v of ['', '0', 'x', '1.5']) {
+    const svg = svgWith('a').replace('data-notizbuch="1"', `data-notizbuch="${v}"`);
+    let err: unknown;
+    try {
+      parsePage(svg);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(PageTooNewError);
+  }
+});
+
+test('a broken centre line or an unknown tool skips only that stroke', () => {
+  const good = penStroke('fueller', 'blau', 'gut');
+  const svg = serializePage(tagPage([good, penStroke('fueller', 'blau', 'x1'), penStroke('fueller', 'blau', 'x2'), penStroke('kugel', 'blau', 'x3')]), FIELDS, '');
+  const lines = svg.split('\n').map((l) => {
+    if (l.includes('data-id="x1"')) return l.replace(/data-linie="[^"]*"/, 'data-linie="1 2"');
+    if (l.includes('data-id="x2"')) return l.replace(/data-linie="[^"]*"/, 'data-linie="a b c"');
+    if (l.includes('data-id="x3"')) return l.replace('data-werkzeug="kugel"', 'data-werkzeug="pinsel"');
+    return l;
+  });
+  expect(parsePage(lines.join('\n')).strokes.map((s) => s.id)).toEqual(['gut']);
 });

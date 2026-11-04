@@ -31,6 +31,7 @@ function mount(tool: Tool = 'pen', o: { open?: boolean; partial?: boolean; face?
   render(
     h(QuickSwitch, {
       tool,
+      pen: 'kugel',
       partial: o.partial,
       filter,
       onToggle: () => {

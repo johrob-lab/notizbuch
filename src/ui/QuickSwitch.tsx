@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { TAP_SLOP_PX, type GestureFilter, type TouchMark } from '../ink/gestures';
 import { capturePointer, inside } from './pointerBits';
-import { Icon, type IconName } from './Toolbar';
+import type { PenKind } from '../ink/pens';
+import { Icon, PEN_ICON, type IconName } from './Toolbar';
 import type { Tool } from './toolChoices';
 
 /** Durchmesser des Knopfs und Abstand zum Rand der Bühne, in Bildschirmpunkten. */
@@ -13,6 +14,8 @@ export const HOLD_MS = 400;
 type Props = {
   /** Das Werkzeug, das gerade gilt. Der Knopf zeigt sein Symbol. */
   tool: Tool;
+  /** Der Stift, der gilt: Beim Stift zeigt der Knopf sein Symbol, und ein Tipp kehrt zu ihm zurück. */
+  pen: PenKind;
   /** Radiert der Radierer nur das Stück? Dann hat der Knopf einen gestrichelten Rand. */
   partial?: boolean;
   /** Ort des Knopfs als Anteil (0 bis 1) der Fläche, in der er liegen darf, von links und von oben. Ohne Angabe unten rechts. */
@@ -64,7 +67,7 @@ const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
  * Die Maus bleibt außen vor: Sie schreibt nicht, also wechselt sie auch kein Werkzeug. Mit `onOpen` (das Rad im Vollbild)
  * öffnen der gehaltene Stift, ein Fingertipp, ein Mausklick und die Tastatur die Werkzeuge; Fingertipps gehen durch dasselbe Tor.
  */
-export function QuickSwitch({ tool, partial, pos, filter, onToggle, onMove, onOpen, face }: Props) {
+export function QuickSwitch({ tool, pen, partial, pos, filter, onToggle, onMove, onOpen, face }: Props) {
   const drag = useRef<Drag | null>(null);
   const moving = useRef<[number, number] | null>(null);
   const hold = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -214,7 +217,7 @@ export function QuickSwitch({ tool, partial, pos, filter, onToggle, onMove, onOp
         if (e.detail === 0) (onOpen ?? onToggle)();
       }}
     >
-      <Icon name={face ? face.icon : tool === 'eraser' ? 'eraser' : 'pen'} />
+      <Icon name={face ? face.icon : tool === 'eraser' ? 'eraser' : PEN_ICON[pen]} />
     </button>
   );
 }

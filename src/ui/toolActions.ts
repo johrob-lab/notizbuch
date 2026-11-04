@@ -1,3 +1,4 @@
+import { PEN_NAMES, PENS, type PenKind } from '../ink/pens';
 import type { InkColor, WidthName } from '../ink/types';
 import type { EraserMode, EraserSize, InkPrefs } from '../lib/settings';
 import { COLORS, ERASER_MODES, ERASER_SIZES, WIDTHS, mm, type Tool } from './toolChoices';
@@ -5,7 +6,7 @@ import { COLORS, ERASER_MODES, ERASER_SIZES, WIDTHS, mm, type Tool } from './too
 // Welche Knöpfe Rad und Lasche zeigen, als reine Daten: Innen die Wahl zum Werkzeug, außen alles andere.
 
 export type ToolAction =
-  | { kind: 'tool'; tool: Tool } | { kind: 'color'; color: InkColor } | { kind: 'width'; width: WidthName }
+  | { kind: 'tool'; tool: Tool } | { kind: 'pen'; pen: PenKind } | { kind: 'color'; color: InkColor } | { kind: 'width'; width: WidthName }
   | { kind: 'eraserSize'; size: EraserSize } | { kind: 'eraserMode'; mode: EraserMode }
   | { kind: 'undo' } | { kind: 'redo' } | { kind: 'back' } | { kind: 'today' } | { kind: 'forward' } | { kind: 'fit' } | { kind: 'exit' };
 
@@ -49,15 +50,21 @@ export function toolActions(o: Options): { inner: ActionButton[]; outer: ActionB
         inner.push({ key: `eraserMode:${m.id}`, action: { kind: 'eraserMode', mode: m.id }, group: 'radierart', label: m.name, pressed: ink.eraserMode === m.id });
       }
     } else {
-      for (const c of COLORS) {
-        inner.push({ key: `color:${c.id}`, action: { kind: 'color', color: c.id }, group: 'farbe', label: c.label, pressed: ink.color === c.id });
+      // Der Bleistift hat eine feste Farbe (Graphit): Er bietet keine Farbwahl, nur die Breiten.
+      if (ink.pen !== 'bleistift') {
+        for (const c of COLORS) {
+          inner.push({ key: `color:${c.id}`, action: { kind: 'color', color: c.id }, group: 'farbe', label: c.label, pressed: ink.color === c.id });
+        }
       }
       for (const w of WIDTHS) {
         inner.push({ key: `width:${w.id}`, action: { kind: 'width', width: w.id }, group: 'breite', label: `${w.name} (${mm(w.id)})`, pressed: ink.width === w.id });
       }
     }
+    // Die vier Stifte in der Reihenfolge von `PENS`, dann der Radierer.
+    for (const pen of PENS) {
+      outer.push({ key: `pen:${pen}`, action: { kind: 'pen', pen }, group: 'werkzeug', label: PEN_NAMES[pen], pressed: ink.tool === 'pen' && ink.pen === pen });
+    }
     outer.push(
-      { key: 'tool:pen', action: { kind: 'tool', tool: 'pen' }, group: 'werkzeug', label: 'Kugelschreiber', pressed: ink.tool === 'pen' },
       { key: 'tool:eraser', action: { kind: 'tool', tool: 'eraser' }, group: 'werkzeug', label: 'Radierer', pressed: ink.tool === 'eraser' },
       { key: 'undo', action: { kind: 'undo' }, group: 'verlauf', label: 'Rückgängig', disabled: !o.canUndo, keepsOpen: true },
       { key: 'redo', action: { kind: 'redo' }, group: 'verlauf', label: 'Wiederholen', disabled: !o.canRedo, keepsOpen: true },

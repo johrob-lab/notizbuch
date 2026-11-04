@@ -1,3 +1,4 @@
+import type { PenKind } from '../ink/pens';
 import type { InkColor, SMOOTHING, WidthName } from '../ink/types';
 import type { Store } from '../sync/store';
 import type { Day } from './dates';
@@ -10,6 +11,8 @@ export type EraserMode = 'strich' | 'stueck';
 /** Die Wahl in der Werkzeugleiste. Sie gilt für alle Seiten und bleibt über einen Neustart erhalten. */
 export type InkPrefs = {
   tool: 'pen' | 'eraser';
+  /** Der Stift, mit dem geschrieben wird. */
+  pen: PenKind;
   color: InkColor;
   width: WidthName;
   eraserSize: EraserSize;
@@ -18,7 +21,7 @@ export type InkPrefs = {
   scribble: boolean;
 };
 
-export const DEFAULT_INK: InkPrefs = { tool: 'pen', color: 'schwarz', width: 'mittel', eraserSize: 'mittel', eraserMode: 'strich', scribble: true };
+export const DEFAULT_INK: InkPrefs = { tool: 'pen', pen: 'kugel', color: 'schwarz', width: 'mittel', eraserSize: 'mittel', eraserMode: 'strich', scribble: true };
 
 /** Womit man im Vollbild die Werkzeuge erreicht: ein Kreis um den Stift (`kreis`) oder eine Lasche am linken Rand (`tab`). */
 export type VollbildWerkzeuge = 'kreis' | 'tab';

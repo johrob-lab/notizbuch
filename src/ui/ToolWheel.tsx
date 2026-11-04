@@ -1,5 +1,6 @@
 import { useRef, useState } from 'preact/hooks';
 import type { GestureFilter } from '../ink/gestures';
+import type { PenKind } from '../ink/pens';
 import { QuickSwitch } from './QuickSwitch';
 import type { Pt } from './ringLayout';
 import type { ActionButton, ToolAction } from './toolActions';
@@ -12,6 +13,7 @@ const NEUTRAL: { icon: IconName; label: string } = { icon: 'menu', label: 'Blät
 
 type Props = {
   tool: Tool;
+  pen: PenKind;
   partial: boolean;
   pos?: [number, number];
   filter: GestureFilter;
@@ -48,6 +50,7 @@ export function ToolWheel(p: Props) {
     <div class="rad" ref={wrap}>
       <QuickSwitch
         tool={p.tool}
+        pen={p.pen}
         partial={p.partial}
         pos={p.pos}
         filter={p.filter}

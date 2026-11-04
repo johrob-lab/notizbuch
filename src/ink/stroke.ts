@@ -1,4 +1,25 @@
+import {
+  BLEISTIFT_PRESSURE,
+  DEFAULT_PEN_ANGLE,
+  FINELINER_FACTOR,
+  FUELLER_MIN,
+  FUELLER_PRESSURE,
+  SMOOTH_NEW,
+  doubled,
+  nibFactor,
+  penAngle,
+  pressureRamp,
+  type Doubled,
+  type PenKind,
+} from './pens';
+import { isShape } from './pens';
 import { MM, type InkColor, type Pt, type Stroke } from './types';
+
+/** Punkt zwischen `range.min` und `range.max`, `t` von 0 bis 1. */
+const lerp = (range: { min: number; max: number }, t: number): number => range.min + (range.max - range.min) * t;
+
+/** `a` und `b` gemischt, `b` mit dem Gewicht `SMOOTH_NEW`. */
+const mix = (a: Doubled, b: Doubled): Doubled => ({ c: a.c * (1 - SMOOTH_NEW) + b.c * SMOOTH_NEW, s: a.s * (1 - SMOOTH_NEW) + b.s * SMOOTH_NEW });
 
 /**
  * Zahl für die SVG-Datei: auf eine Nachkommastelle gerundet, ohne `.0` am Ende und nie als `-0`.
@@ -28,7 +49,7 @@ export function newStrokeId(t: number): string {
  * Druck geglättet, Breite aus dem Druck, Gauß-Glättung mit einem Fenster, das zu den Enden hin schrumpft.
  */
 export class StrokeBuilder {
-  private readonly opts: { color: InkColor; widthMm: number; sigma: number; t: number; minDist: number };
+  private readonly opts: { pen: PenKind; color: InkColor; widthMm: number; sigma: number; t: number; minDist: number };
   private readonly id: string;
   private readonly nomW: number;
   /** Halbe Fensterbreite der Glättung in Punkten, 0 heißt: nicht glätten. */
@@ -42,13 +63,17 @@ export class StrokeBuilder {
   /** Geglätteter Druck, `null` vor dem ersten Punkt. */
   private ps: number | null = null;
   private sumW = 0;
+  /** Strichrichtung als doppelter Winkel, geglättet. Länge 0 heißt: noch unbekannt. */
+  private dir: Doubled = { c: 0, s: 0 };
+  /** Federrichtung als doppelter Winkel, geglättet, `null` vor dem ersten Punkt. */
+  private nib: Doubled | null = null;
 
   /**
    * `minDist` ist der Mindestabstand zwischen zwei Rohpunkten in Seiteneinheiten (die App rechnet
    * 0.6 / Zoom, damit er auf dem Bildschirm gleich bleibt). `t` ist der Beginn des Strichs in Millisekunden.
    */
-  constructor(o: { color: InkColor; widthMm: number; sigma: number; t: number; minDist: number }) {
-    this.opts = { ...o };
+  constructor(o: { pen?: PenKind; color: InkColor; widthMm: number; sigma: number; t: number; minDist: number }) {
+    this.opts = { ...o, pen: o.pen ?? 'kugel' };
     this.id = newStrokeId(o.t);
     this.nomW = o.widthMm * MM;
     const sig = o.sigma;
@@ -58,9 +83,10 @@ export class StrokeBuilder {
 
   /**
    * Nimmt einen Stiftpunkt auf (Seiteneinheiten, Druck 0 bis 1). `false`, wenn der Punkt dem letzten behaltenen
-   * Punkt zu nah ist und deshalb verworfen wurde. Ohne Druckwert (0 oder keine Zahl) gilt 0.5.
+   * Punkt zu nah ist und deshalb verworfen wurde. Ohne Druckwert (0 oder keine Zahl) gilt 0.5. `tiltX` und `tiltY`
+   * (Neigung des Stifts) braucht nur die Füllfeder; ohne Neigung gilt die Haltung eines Rechtshänders.
    */
-  add(x: number, y: number, pressure: number): boolean {
+  add(x: number, y: number, pressure: number, tiltX = 0, tiltY = 0): boolean {
     const raw = this.raw;
     const last = raw[raw.length - 1];
     if (last) {
@@ -71,7 +97,7 @@ export class StrokeBuilder {
     }
     const pv = pressure > 0 ? pressure : 0.5;
     this.ps = this.ps === null ? pv : this.ps * 0.7 + pv * 0.3;
-    const pt: Pt = { x, y, w: this.nomW * (0.7 + 0.6 * this.ps) }; // Druck wirkt dezent auf die Breite
+    const pt: Pt = { x, y, w: this.widthAt(x, y, last, this.ps, tiltX, tiltY) };
     raw.push(pt);
     this.sumW += pt.w;
     this.smoothTail();
@@ -86,13 +112,35 @@ export class StrokeBuilder {
     const n = this.raw.length;
     return {
       id: this.id,
-      tool: 'kugel',
-      color: this.opts.color,
+      tool: this.opts.pen,
+      color: this.opts.pen === 'bleistift' ? 'grau' : this.opts.color,
       widthMm: this.opts.widthMm,
       t: this.opts.t,
       w: n ? this.sumW / n : this.nomW,
       pts: this.out.slice(),
     };
+  }
+
+  /** Breite am neuen Rohpunkt je nach Stift. `last` ist der vorige Rohpunkt, `ps` der geglättete Druck. */
+  private widthAt(x: number, y: number, last: Pt | undefined, ps: number, tiltX: number, tiltY: number): number {
+    const nomW = this.nomW;
+    switch (this.opts.pen) {
+      case 'fineliner':
+        return nomW * FINELINER_FACTOR;
+      case 'bleistift':
+        return nomW * lerp(BLEISTIFT_PRESSURE, pressureRamp(ps));
+      case 'fueller': {
+        if (last) this.dir = mix(this.dir, doubled(Math.atan2(y - last.y, x - last.x)));
+        const now = doubled(penAngle(tiltX, tiltY) ?? DEFAULT_PEN_ANGLE);
+        this.nib = this.nib ? mix(this.nib, now) : now;
+        const len = Math.hypot(this.nib.c, this.nib.s);
+        const nib = len > 0 ? { c: this.nib.c / len, s: this.nib.s / len } : now; // Länge 0: zwei Neigungen genau gegenüber
+        const w = nomW * lerp(FUELLER_PRESSURE, pressureRamp(ps)) * nibFactor(this.dir, nib);
+        return Math.max(w, nomW * FUELLER_MIN);
+      }
+      default:
+        return nomW * (0.7 + 0.6 * ps); // Druck wirkt dezent auf die Breite
+    }
   }
 
   /**
@@ -211,6 +259,15 @@ function segDist2(px: number, py: number, a: Pt, b: Pt): number {
  */
 export function hitStroke(s: Stroke, x: number, y: number, r: number): boolean {
   const q = s.pts;
+  // Füllfeder und Bleistift: Die Breite gilt an jeder Stelle einzeln, je Strecke die größere halbe Breite ihrer zwei Punkte.
+  if (isShape(s.tool)) {
+    if (q.length === 1) return (q[0].x - x) ** 2 + (q[0].y - y) ** 2 <= (r + q[0].w / 2) ** 2;
+    for (let i = 1; i < q.length; i++) {
+      const rr = r + Math.max(q[i - 1].w, q[i].w) / 2;
+      if (segDist2(x, y, q[i - 1], q[i]) <= rr * rr) return true;
+    }
+    return false;
+  }
   const rr = r + s.w / 2;
   if (q.length === 1) return (q[0].x - x) ** 2 + (q[0].y - y) ** 2 <= rr * rr;
   for (let i = 1; i < q.length; i++) if (segDist2(x, y, q[i - 1], q[i]) <= rr * rr) return true;

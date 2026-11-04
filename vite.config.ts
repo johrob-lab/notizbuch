@@ -7,10 +7,12 @@ export default defineConfig({
   plugins: [
     preact(),
     VitePWA({
-      // Neue Versionen werden automatisch geladen und aktiviert, ohne Rückfrage.
-      // Registriert wird in src/main.tsx. injectRegister bleibt auf dem Standard "auto":
-      // Nur dann setzt das Plugin bei autoUpdate skipWaiting und clientsClaim im Service Worker.
+      // Die App registriert den Service Worker selbst (src/lib/appUpdate.ts) und lädt eine neue Version im ruhigen Moment
+      // neu. Der Service Worker übernimmt sofort (skipWaiting, clientsClaim), damit beim Übergang von Paket 2, das beim
+      // Wechsel selbst neu lädt, einmal Neuladen genügt.
       registerType: 'autoUpdate',
+      injectRegister: false,
+      workbox: { skipWaiting: true, clientsClaim: true },
       manifest: {
         name: 'Notizbuch',
         short_name: 'Notizbuch',

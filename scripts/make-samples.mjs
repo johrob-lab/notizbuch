@@ -8,10 +8,11 @@
 // lädt es dann. Vite kommt mit "npm install". Alles Erzeugte ist erfunden: keine echten Namen, keine Vault-Inhalte. Jeder Lauf
 // ergibt dieselben Dateien.
 //
-// Im Ausgabeordner entstehen drei Unterordner:
+// Im Ausgabeordner entstehen vier Unterordner:
 //   lauf1/            Tagesseite, Besprechung über zwei Seiten (Projekt "Beispielprojekt A") und Wochenseite, Stand 29.10.2026 abends
 //   monat/            Monatsseite Oktober 2026
 //   lauf3-nachtrag/   dieselbe Tagesseite, am Nachmittag weitergeschrieben (der Anfang bleibt Strich für Strich gleich)
+//   stifte/           Tagesseite 30.10.2026 mit je einer Zeile in Kugelschreiber, Fineliner, Füllfeder und Bleistift (Seitenformat Version 2)
 // Darunter liegen die Dateien so, wie sie im Vault liegen (07 Anhänge/Notizbuch/2026/...). Sie lassen sich dorthin kopieren.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
