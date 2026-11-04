@@ -272,6 +272,7 @@ test('an old page without header data gets one from its name, written with the n
   expect(await queued(page)).toEqual({});
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
+  await bringToForeground(page); // zurück in der App, bevor weitergeschrieben wird
 
   await pen(page).stroke(LINE);
   await waitUntilQueued(page, PAGE1, STROKE);
@@ -708,6 +709,7 @@ test('delete asks first', async ({ page }) => {
   expect(repo.deletes).toEqual([]);
   expect(repo.read(PAGE2)).toBeDefined();
   expect(await hash(page)).toBe(hashOf(BASE, 2));
+  await bringToForeground(page); // zurück in der App, bevor weitergeschrieben wird
   await pen(page).stroke(LINE);
   await expect.poll(() => strokeCount(page)).toBe(1);
   await waitUntilQueued(page, PAGE2, STROKE);

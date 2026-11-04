@@ -226,6 +226,7 @@ test('lookupFresh reads GitHub when the copy is older than 30 s', async () => {
   expect(await h.store.get('files', A)).toMatchObject({ text: 'neuer Stand', sha: 's2', base: 'neuer Stand' });
   await quiet(); // auch im Hintergrund fragt danach niemand mehr
   expect(fake.count('get')).toBe(asked + 1);
+  expect(h.remoteChanges).toEqual([]); // den neuen Stand bekommt der Aufrufer direkt
   // Die Änderung danach geht vom neuen Stand aus: Beim Hochladen gibt es nichts zusammenzuführen.
   await e.write(A, 'neuer Stand mit Haken', 'md');
   expect(await h.store.get('outbox', A)).toMatchObject({ baseSha: 's2', baseText: 'neuer Stand' });
@@ -283,6 +284,61 @@ test('an error that is not about the network goes to onError, and lookupFresh ke
   };
   expect(await e.lookupFresh(A)).toEqual({ text: base, unknown: false });
   expect(h.errors).toEqual([{ path: A, error: expect.objectContaining({ status: 503 }) }]);
+});
+
+test('lookupFresh gives up after 2 s and keeps the copy', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  fake.files[A] = { text: 'neuer Stand', sha: 's2' };
+  later(30_001);
+  fake.hang.add('get'); // GitHub antwortet nicht (schlechtes Netz)
+  let answer: { text: string | null; unknown: boolean } | undefined;
+  void e.lookupFresh(A).then((found) => (answer = found));
+  await vi.advanceTimersByTimeAsync(1_999);
+  await quiet();
+  expect(fake.count('get')).toBe(2); // gefragt hat sie
+  expect(answer).toBeUndefined(); // und wartet noch auf die Antwort
+  await vi.advanceTimersByTimeAsync(1);
+  await until(() => answer !== undefined, 'die Antwort von lookupFresh');
+  expect(answer).toEqual({ text: base, unknown: false });
+  expect(h.errors).toEqual([]);
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+});
+
+test('a late answer after giving up does not replace a change made meanwhile', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  fake.files[A] = { text: 'neuer Stand', sha: 's2' };
+  later(30_001);
+  const pause = fake.pause('get');
+  const reading = e.lookupFresh(A);
+  await pause.reached; // die Anfrage ist unterwegs
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(await reading).toEqual({ text: base, unknown: false });
+  const ticked = `${base}- [x] Haken\n`;
+  await e.write(A, ticked, 'md'); // der Haken liegt sofort lokal, auf der Kopie
+  pause.release(); // jetzt kommt die Antwort mit dem neuen Stand
+  await until(() => fake.finished('get') === 2); // die Antwort ist da, eine Übernahme liefe jetzt an
+  await h.store.get('files', A); // und diese Abfrage kommt erst, wenn sie durch ist
+  expect(await h.store.get('files', A)).toMatchObject({ text: ticked, sha: 's1' });
+  expect(await h.store.get('outbox', A)).toMatchObject({ text: ticked, baseSha: 's1' }); // zusammengeführt wird beim Hochladen
+  expect(h.remoteChanges).toEqual([]);
+});
+
+test('a late answer after giving up is taken over like a refresh in the background when nothing waits', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  fake.files[A] = { text: 'neuer Stand', sha: 's2' };
+  later(30_001);
+  const pause = fake.pause('get');
+  const reading = e.lookupFresh(A);
+  await pause.reached;
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(await reading).toEqual({ text: base, unknown: false });
+  pause.release(); // geändert wurde nichts, die späte Antwort bringt den neuen Stand
+  await until(() => h.remoteChanges.length === 1);
+  expect(h.remoteChanges).toEqual([[A]]); // die Seite erfährt es und liest neu
+  expect(await h.store.get('files', A)).toMatchObject({ text: 'neuer Stand', sha: 's2', base: 'neuer Stand' });
 });
 
 test('without a copy, lookupFresh reads like lookup', async () => {

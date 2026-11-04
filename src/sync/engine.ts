@@ -21,6 +21,8 @@ const INK_DELAY_MS = 120_000;
 const MAX_WAIT_MS = 600_000;
 /** Ist der letzte Blick auf eine Datei bei GitHub älter, holt `lookupFresh` sie vor einer Änderung neu. */
 const FRESH_MS = 30_000;
+/** So lange wartet `lookupFresh` höchstens auf GitHub. Danach gilt die Kopie, damit die Änderung gleich lokal liegt. */
+const FRESH_WAIT_MS = 2_000;
 const POLL_INTERVAL_MS = 180_000;
 /** So oft versucht ein Abgleich eine Datei zusammenzuführen, die sich währenddessen schon wieder geändert hat. */
 const CONFLICT_ATTEMPTS = 3;
@@ -311,20 +313,16 @@ export class SyncEngine {
   /**
    * Wie `lookup`, aber vor einer Änderung (Haken, bearbeitete Zeile, Ergänzung), die vom neuesten Stand ausgehen soll: Wartet
    * keine eigene Änderung an der Datei und liegt der letzte Blick auf sie bei GitHub (`#looked`) mehr als `FRESH_MS` zurück,
-   * holt die Engine sie zuerst neu und übernimmt einen neueren Stand. Der Aufrufer bekommt ihn direkt, gemeldet wird nichts.
-   * Sonst gilt die Kopie, ohne Anfrage und ohne das Auffrischen im Hintergrund von `lookup`. Scheitert das Holen, gilt auch die
-   * Kopie: Kein Netz, Ratenlimit oder kein Zugang landet wie bei `lookup` im Status, jeder andere Fehler geht an `onError`. Das
-   * Zusammenführen beim Hochladen bleibt die zweite Sicherung. Ohne Kopie, und in einer Engine, die nur liest, wie `lookup`.
+   * holt die Engine sie zuerst neu und übernimmt einen neueren Stand. Der Aufrufer bekommt ihn direkt, gemeldet wird er nicht.
+   * Sonst gilt die Kopie, ohne Anfrage und ohne das Auffrischen im Hintergrund von `lookup`. Länger als `FRESH_WAIT_MS` wartet
+   * sie nicht auf GitHub, damit die Änderung gleich lokal liegt: Dann gilt die Kopie, und eine späte Antwort wird wie beim
+   * Auffrischen im Hintergrund behandelt (`#refreshBeforeChange`). Scheitert das Holen, gilt auch die Kopie: Kein Netz,
+   * Ratenlimit oder kein Zugang landet wie bei `lookup` im Status, jeder andere Fehler geht an `onError`. Das Zusammenführen
+   * beim Hochladen bleibt die zweite Sicherung. Ohne Kopie, und in einer Engine, die nur liest, wie `lookup`.
    */
   async lookupFresh(path: string): Promise<{ text: string | null; unknown: boolean }> {
     if (this.#frozen) return this.lookup(path);
-    if (!this.#lookedRecently(path)) {
-      try {
-        await this.#refreshCopy(path, false); // fragt nur, wenn es eine Kopie gibt und keine eigene Änderung an ihr wartet
-      } catch (error) {
-        if (!(error instanceof ReadOnlyError) && !this.#noteStop(error)) this.onError?.({ path, error });
-      }
-    }
+    if (!this.#lookedRecently(path)) await this.#refreshBeforeChange(path);
     const local = await this.#store.get('files', path);
     if (!local) return this.lookup(path);
     this.#pageGets(path, local.text, { sha: local.sha, baseText: local.base });
@@ -335,6 +333,32 @@ export class SyncEngine {
   #lookedRecently(path: string): boolean {
     const at = this.#looked.get(path);
     return at !== undefined && Date.now() - at <= FRESH_MS;
+  }
+
+  /**
+   * Frischt die Kopie vor einer Änderung auf (`#refreshCopy` fragt nur, wenn es eine Kopie gibt und keine eigene Änderung an ihr
+   * wartet) und wartet darauf höchstens `FRESH_WAIT_MS`: Ein Haken soll nicht ungesichert an einer langsamen Verbindung hängen.
+   * Eine spätere Antwort läuft weiter wie das Auffrischen im Hintergrund von `lookup`: Sie übernimmt einen neueren Stand nur, wenn
+   * für die Datei nichts wartet, und meldet ihn dann. Fehler kommen nie nach außen, auch späte nicht.
+   */
+  async #refreshBeforeChange(path: string): Promise<void> {
+    let late = false;
+    const refresh = (async () => {
+      try {
+        if ((await this.#refreshCopy(path, false)) && late) this.#remoteChanged([path]);
+      } catch (error) {
+        if (!(error instanceof ReadOnlyError) && !this.#noteStop(error)) this.onError?.({ path, error });
+      }
+    })();
+    let timer: Timer | undefined;
+    const gaveUp = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        late = true;
+        resolve();
+      }, FRESH_WAIT_MS);
+    });
+    await Promise.race([refresh, gaveUp]);
+    clearTimeout(timer);
   }
 
   /** Die Seite bekommt diesen Text, der auf dieser Fassung beruht. */
@@ -352,8 +376,9 @@ export class SyncEngine {
 
   /**
    * Speichert sofort lokal und stellt die Änderung in die Warteschlange. Hochgeladen wird nach einer Pause (Text 10 s, Handschrift
-   * 2 Minuten), spätestens 10 Minuten nach der ersten Änderung, und sofort, wenn die App in den Hintergrund geht (`#schedule`).
-   * Wirft, wenn sich der Text nicht mit einer wartenden Änderung vereinen lässt, die die Seite noch nicht gelesen hat (siehe unten).
+   * 2 Minuten), spätestens 10 Minuten nach der ersten Änderung, und sofort, wenn die App in den Hintergrund geht oder schon dort
+   * ist (`#schedule`). Wirft, wenn sich der Text nicht mit einer wartenden Änderung vereinen lässt, die die Seite noch nicht
+   * gelesen hat (siehe unten).
    */
   async write(path: string, text: string, kind: 'md' | 'svg'): Promise<void> {
     if (this.#frozen) throw new ReadOnlyError();
@@ -521,8 +546,15 @@ export class SyncEngine {
   /**
    * Zwei Wartezeiten, eine je Art. Jede beginnt mit der letzten Änderung ihrer Art neu, endet aber spätestens `MAX_WAIT_MS` nach
    * der ersten Änderung dieser Art seit dem letzten Durchgang: So geht auch regelmäßig hoch, was ohne Pause geschrieben wird.
+   * Ist die App verborgen, gibt es keine Wartezeit: Was erst nach dem Verlassen gespeichert wird (ein Haken, der auf GitHub
+   * gewartet hat, eine Seite, die noch sicherte), geht sofort hoch. Eine Wartezeit liefe dort womöglich erst ab, wenn die App
+   * zurückkommt, weil iPadOS sie anhält.
    */
   #schedule(kind: 'md' | 'svg'): void {
+    if (document.visibilityState === 'hidden') {
+      void this.flush();
+      return;
+    }
     const wait = this.#waits[kind];
     const now = Date.now();
     wait.first ??= now;

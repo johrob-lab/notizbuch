@@ -429,6 +429,19 @@ test('a hidden page sends what is waiting, a visible page polls', async () => {
   await until(() => fake.count('head') === 2);
 });
 
+test('a write while the app is hidden goes up at once', async () => {
+  await startIdle();
+  setVisibility('hidden'); // die App ist im Hintergrund, ihr Abgleich beim Verlassen ist durch
+  await e.flush();
+  // Erst jetzt wird gespeichert, zum Beispiel ein Haken, der auf GitHub gewartet hat, und eine Seite, die noch sicherte
+  await e.write(A, 'x', 'md');
+  await e.write(S, svgPage('a'), 'svg');
+  // Beides geht hoch, ohne dass eine Wartezeit abläuft: Die Zeit steht still
+  await until(() => fake.files[A]?.text === 'x' && fake.files[S]?.text === svgPage('a'));
+  await until(() => e.status.value.pending === 0);
+  expect(fake.count('put')).toBe(2);
+});
+
 test('a page that becomes visible again also sends what is still waiting, when sending on leaving did not get through', async () => {
   await startIdle();
   fake.offline = true;

@@ -259,6 +259,40 @@ test('a tick after a while starts from the newest note on GitHub', async ({ page
   expect(repo.puts.filter((put) => put.path.includes('(Konflikt)'))).toEqual([]);
 });
 
+test('a tick waits at most 2 seconds for GitHub, then it is saved on the copy', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await settled(page);
+  await expect.poll(() => lastHead(page)).not.toBeNull(); // die erste Abfrage ist durch, die nächste käme erst in 3 Minuten
+  const remote = NOTE_TEXT.replace('- 08:00 bis 14:00 Abstimmung', '- 09:00 bis 14:00 Abstimmung');
+  repo.commit(NOTE, remote); // auf GitHub ist die Notiz neuer
+  // Das Netz ist schlecht: GitHub antwortet auf die Notiz erst, wenn der Test es erlaubt.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route(
+    (url) => decodeURIComponent(url.pathname).endsWith(`/contents/${NOTE}`),
+    async (route) => {
+      if (route.request().method() === 'GET') await gate;
+      await route.fallback();
+    },
+  );
+  await page.clock.setFixedTime(new Date('2026-10-29T12:00:31+01:00')); // der letzte Blick ist älter als 30 Sekunden
+
+  await checkbox(page, NAME1).check();
+  await expect(checkbox(page, NAME1)).toBeChecked(); // der Haken zeigt sich sofort
+  await page.waitForTimeout(300);
+  expect(await queued(page)).toEqual({}); // die Karte wartet auf GitHub
+  await page.clock.fastForward(2_000); // nach 2 Sekunden gilt die Kopie
+  const ticked = NOTE_TEXT.replace(TASK1, TASK1.replace('[ ]', '[x]'));
+  await expect.poll(() => queuedText(page, NOTE)).toBe(ticked);
+
+  // Die späte Antwort ändert die wartende Fassung nicht. Beim Hochladen wird zusammengeführt, ohne Konfliktkopie.
+  release();
+  await upload(page, repo, 1);
+  expect(repo.puts[0]).toMatchObject({ path: NOTE, text: remote.replace(TASK1, TASK1.replace('[ ]', '[x]')) });
+  expect(repo.puts.filter((put) => put.path.includes('(Konflikt)'))).toEqual([]);
+});
+
 test('a second tap while the first is still being written is queued, not dropped', async ({ page }) => {
   const repo = await openSeeded(page, DAY);
   await expect(checkbox(page, NAME1)).toBeVisible();
@@ -660,6 +694,7 @@ test('a line that changed under the card gives a notice and writes nothing', asy
   expect(await queued(page)).toEqual({});
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
+  await bringToForeground(page); // zurück in der App, bevor weiter getippt wird
 
   // Ein zweiter Tipp trifft jetzt die richtige Zeile, und die Zeile darüber bleibt unberührt.
   await checkbox(page, NAME2).check();
@@ -684,6 +719,7 @@ test('an edit of a line that changed under the card keeps the typed text and the
   expect(await queued(page)).toEqual({});
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
+  await bringToForeground(page); // zurück in der App, bevor weiter getippt wird
 
   // Noch einmal: Jetzt gilt die Zeile in ihrer neuen Fassung, Haken und Marker bleiben.
   await editField(page).press('Enter');
