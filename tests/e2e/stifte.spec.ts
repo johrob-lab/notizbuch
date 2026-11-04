@@ -1,8 +1,8 @@
 import { expect, test as base, type Page } from '@playwright/test';
-import { BLEISTIFT_OPACITY, type PenKind } from '../../src/ink/pens';
+import { BLEISTIFT_OPACITY, DEFAULT_FUELLER, type PenKind } from '../../src/ink/pens';
 import { INK, PAPER, type WidthName } from '../../src/ink/types';
 import { changeStoredSettings, openSeeded, queued, savedSettings } from './helpers/app';
-import { colorAt, inkNear, pen, touch, wheel } from './helpers/pointer';
+import { colorAt, inkNear, onPixelCentre, pen, touch, wheel } from './helpers/pointer';
 
 // Die neuen Stifte auf der Schreibfläche. Bis die Werkzeugleiste den Stift wählen kann, wählt ihn jeder Test über die
 // gespeicherte Werkzeugwahl und lädt die App neu.
@@ -32,7 +32,7 @@ const PREDICTION = 'canvas[data-layer="vorhersage"]';
 /** Wählt den Stift über die gespeicherte Werkzeugwahl (alle Felder ausgeschrieben) und lädt neu. */
 async function choosePen(page: Page, chosen: PenKind, width: WidthName = 'mittel'): Promise<void> {
   await changeStoredSettings(page, {
-    ink: { tool: 'pen', pen: chosen, color: 'schwarz', width, eraserSize: 'mittel', eraserMode: 'strich', scribble: true },
+    ink: { tool: 'pen', pen: chosen, color: 'schwarz', width, eraserSize: 'mittel', eraserMode: 'strich', scribble: true, fueller: DEFAULT_FUELLER },
   });
   await page.reload();
   await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
@@ -74,19 +74,6 @@ async function shownColours(page: Page, from: [number, number], to: [number, num
 
 /** Die dunkelste Farbe einer Liste. */
 const darkestOf = (colours: number[][]): number[] => colours.reduce((a, b) => (a[0] + a[1] + a[2] <= b[0] + b[1] + b[2] ? a : b));
-
-/** Der Ort der Seite nahe `at`, der auf den Ebenen genau in die Mitte eines Bildpunkts fällt. */
-const onPixelCentre = (page: Page, at: [number, number]): Promise<[number, number]> =>
-  page.evaluate(([x, y]) => {
-    const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-layer="grund"]')!;
-    const box = canvas.getBoundingClientRect();
-    const k = canvas.width / box.width;
-    const origin = window.__notizbuch.toClient(0, 0);
-    const scale = window.__notizbuch.toClient(1, 0).x - origin.x;
-    const c = window.__notizbuch.toClient(x, y);
-    const centre = (v: number, edge: number) => edge + (Math.floor((v - edge) * k) + 0.5) / k;
-    return [x + (centre(c.x, box.left) - c.x) / scale, y + (centre(c.y, box.top) - c.y) / scale] as [number, number];
-  }, at);
 
 /** Die Seite, wie sie auf dem Gerät gespeichert ist. Ohne Netz bleibt sie in der Warteschlange und wird nicht hochgeladen. */
 const savedPage = async (page: Page): Promise<string> => (await queued(page))[TAG] ?? '';
@@ -164,9 +151,11 @@ test('held the other way, the fountain pen is wide on the other diagonal', async
 test('a tap with the fountain pen leaves a dot', async ({ page }) => {
   await openSeeded(page, DAY);
   await choosePen(page, 'fueller');
-  await pen(page).tap(400, 1053);
+  // Der Punkt ist so breit wie die Linie, bei ganzer Seitenbreite etwa ein Bildpunkt: getippt wird auf die Mitte eines Bildpunkts.
+  const at = await onPixelCentre(page, [400, 1053]);
+  await pen(page).tap(...at);
   await expect.poll(() => strokeTools(page)).toEqual(['fueller']);
-  expect(await inkNear(page, [400, 1053])).toBeGreaterThan(0);
+  expect(await inkNear(page, at)).toBeGreaterThan(0);
 });
 
 /**

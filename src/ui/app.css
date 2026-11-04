@@ -814,6 +814,15 @@ body {
   inset: 0;
 }
 
+/* Die Spitze der Füllfeder, wenn der Stift über der Seite schwebt: eine Ellipse in der Tintenfarbe, ohne Rand und halb
+   durchsichtig, damit sie nicht wie Tinte wirkt. Ort, Größe, Drehung und Farbe setzt die Schreibfläche. */
+.spitze {
+  position: absolute;
+  border-radius: 50%;
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .schnellwechsel {
   position: absolute;
   display: inline-flex;

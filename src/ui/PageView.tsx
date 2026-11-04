@@ -187,6 +187,7 @@ export function PageView(p: Props) {
       view.setWidth(chosen.width);
       view.setEraser(chosen.eraserSize, chosen.eraserMode);
       view.setScribble(chosen.scribble);
+      view.setFueller(chosen.fueller);
     });
     surface.current = view;
 

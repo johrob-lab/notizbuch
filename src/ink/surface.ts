@@ -6,7 +6,19 @@ import { History, restore, type Removed } from './history';
 import { fixedSegments, tailStart } from './live';
 import { InkMeter } from './meter';
 import { outlineOf } from './outline';
-import { BLEISTIFT_OPACITY, BLEISTIFT_PRESSURE, isShape, type PenKind } from './pens';
+import {
+  BLEISTIFT_OPACITY,
+  BLEISTIFT_PRESSURE,
+  DEFAULT_FUELLER,
+  DEFAULT_PEN_ANGLE,
+  MIN_DIST_PX,
+  STABIL_SIGMA,
+  isShape,
+  nibShape,
+  penAngle,
+  type FuellerSettings,
+  type PenKind,
+} from './pens';
 import { extrapolate } from './predict';
 import { isScribble, scribbleTargets } from './scribble';
 import { newStrokeId, StrokeBuilder } from './stroke';
@@ -21,7 +33,7 @@ import { INK, MM, PAGE_H, PAGE_W, PAPER, WIDTH_MM, type FieldBox, type InkColor,
 export type SurfaceOptions = {
   /** Nichts schreiben, radieren oder rückgängig machen, nur ansehen. Verschieben und Zoomen gehen weiter. */
   readOnly: boolean;
-  /** Stärke der Glättung (σ, siehe `SMOOTHING`). */
+  /** Stärke der Glättung (σ, siehe `SMOOTHING`). Die Füllfeder glättet stattdessen mit ihrer Strich-Stabilisierung. */
   sigma: number;
   prediction: boolean;
   /**
@@ -87,6 +99,10 @@ const HEAVY_POINTS = 8000;
 /** Zoom als Vielfaches der normalen Größe (`fit`, die Seite füllt die Breite): kleiner als normal wird die Seite nie. */
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 10;
+/** Die Spitze beim Schweben ist auf dem Bildschirm mindestens so lang (Punkte), sonst wäre sie in normaler Größe kaum zu sehen. */
+const TIP_MIN_PX = 8;
+/** So lange (ms) bleibt die Spitze nach der letzten Schwebe-Meldung stehen. */
+const TIP_HOLD_MS = 300;
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
@@ -199,8 +215,15 @@ export class InkSurface {
   private eraserPx = ERASER_PX.mittel;
   private eraserMode: EraserMode = 'strich';
   private scribble = true;
+  /** Die Regler der Füllfeder für die nächsten Striche. */
+  private fueller: FuellerSettings = DEFAULT_FUELLER;
   private flashTimer = 0;
   private flashEl: HTMLElement | null = null;
+  /** Richtung, in die der Stift beim letzten Strichpunkt mit Neigung zeigte (Bogenmaß). Beim Schweben meldet Safari keine Neigung. */
+  private penDir = DEFAULT_PEN_ANGLE;
+  /** Die Spitze der Füllfeder, solange der Stift über der Seite schwebt. */
+  private tipEl: HTMLElement | null = null;
+  private tipTimer = 0;
 
   // Ansicht: `view` rechnet Seiteneinheiten in Bildschirmpunkte um (x * s + x), `fit` ist der Maßstab für die Seitenbreite.
   private dpr = 1;
@@ -263,6 +286,7 @@ export class InkSurface {
     this.listen(el, 'pointermove', this.onMove, { passive: false });
     this.listen(el, 'pointerup', this.onUp);
     this.listen(el, 'pointercancel', this.onUp);
+    this.listen(el, 'pointerleave', this.onLeave);
     this.listen(el, 'wheel', this.onWheel, { passive: false });
     // Ohne diese Sperren zoomt oder scrollt Safari die ganze Seite, statt dass die Fläche die Geste bekommt.
     const prevent = (e: Event) => e.preventDefault();
@@ -326,13 +350,21 @@ export class InkSurface {
     return { ...this.head, meta: { ...this.head.meta }, strokes: this.strokes.slice() };
   }
 
+  /** Stift oder Radierer. Ein anderes Werkzeug blendet die Spitze beim Schweben aus. */
   setTool(t: 'pen' | 'eraser'): void {
+    if (t !== this.tool) this.hideTip();
     this.tool = t;
   }
 
-  /** Der Stift für die nächsten Striche. Ein Strich, der gerade entsteht, bleibt bei seinem. */
+  /** Der Stift für die nächsten Striche. Ein Strich, der gerade entsteht, bleibt bei seinem. Ein anderer Stift blendet die Spitze aus. */
   setPen(pen: PenKind): void {
+    if (pen !== this.pen) this.hideTip();
     this.pen = pen;
+  }
+
+  /** Die Regler der Füllfeder für die nächsten Striche. Ein Strich, der gerade entsteht, bleibt bei seinen. */
+  setFueller(s: FuellerSettings): void {
+    this.fueller = s;
   }
 
   setColor(c: InkColor): void {
@@ -436,6 +468,7 @@ export class InkSurface {
     clearTimeout(this.predTimer);
     clearTimeout(this.flashTimer);
     this.flashEl?.remove();
+    this.hideTip();
     for (const c of [this.base, this.live, this.pred, this.snap]) {
       c.remove();
       // Safari gibt den Speicher einer Zeichenfläche erst frei, wenn sie nichts mehr zu halten hat, und deckelt alle zusammen.
@@ -985,9 +1018,13 @@ export class InkSurface {
       pen,
       color: this.color,
       widthMm: this.widthMm,
-      sigma: this.opts.sigma,
+      // Die Füllfeder glättet mit ihrer Strich-Stabilisierung statt mit der Glättung aus den Einstellungen.
+      sigma: pen === 'fueller' ? STABIL_SIGMA * this.fueller.stabil : this.opts.sigma,
       t: Date.now(),
-      minDist: 0.6 / this.view.s, // auf dem Bildschirm immer gleich weit, egal wie weit hineingezoomt ist
+      minDist: MIN_DIST_PX / this.view.s, // auf dem Bildschirm immer gleich weit, egal wie weit hineingezoomt ist
+      // Nur die Füllfeder liest diese beiden: ihre Regler und wie viele Seiteneinheiten ein Bildschirmpunkt gerade ist.
+      fueller: this.fueller,
+      pxUnit: 1 / this.view.s,
     });
   }
 
@@ -998,6 +1035,8 @@ export class InkSurface {
 
   private addSample(ev: PointerEvent): void {
     const d = this.drawing!;
+    // Die Spitze beim Schweben steht wie die Feder beim letzten Strich.
+    this.penDir = penAngle(ev.tiltX ?? 0, ev.tiltY ?? 0) ?? this.penDir;
     const pos = this.local(ev);
     const pt = this.toPage(pos.x, pos.y);
     if (this.inNoInk(pt)) {
@@ -1026,9 +1065,12 @@ export class InkSurface {
     this.clearPredLayer();
   }
 
-  /** Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. Ein Gekritzel über Geschriebenem löscht es stattdessen. */
+  /**
+   * Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. Ein Gekritzel über Geschriebenem löscht es
+   * stattdessen. Gespeichert wird der fertige Strich, bei der Füllfeder mit beiden spitzen Enden.
+   */
   private commitStroke(d: Drawing): void {
-    const s = d.builder.stroke();
+    const s = d.builder.finish();
     if (!s.pts.length) return;
     if (this.scribble && this.eraseByScribble(s)) return;
     this.strokes.push(s);
@@ -1232,6 +1274,56 @@ export class InkSurface {
     if (g.moved) this.render();
   }
 
+  // ---------- Spitze beim Schweben ----------
+
+  /**
+   * Der Stift schwebt über der Seite, ohne sie zu berühren. Mit der Füllfeder auf einer Seite, die man beschreiben kann, zeigt
+   * die Spitze, wo er aufsetzen würde: die Form der Feder bei mittlerem Druck (`nibShape`), gedreht wie beim letzten Strich.
+   */
+  private hover(e: PointerEvent): void {
+    if (this.readOnly || this.tool !== 'pen' || this.pen !== 'fueller' || this.drawing) {
+      this.hideTip();
+      return;
+    }
+    this.refreshRect();
+    this.showTip(this.local(e));
+  }
+
+  /**
+   * Stellt die Spitze mit ihrer Mitte auf `at` (Bildschirmpunkte in der Fläche): ein eigenes Element über den Ebenen, so löscht
+   * ihr Wandern nichts, was dort gezeichnet ist. Ohne neue Schwebe-Meldung geht sie nach `TIP_HOLD_MS`.
+   */
+  private showTip(at: Pt2): void {
+    const shape = nibShape(this.fueller, this.widthMm * MM, this.penDir);
+    // Bildschirmpunkte je Seiteneinheit: wie die Seite, aber so viele, dass die Spitze mindestens `TIP_MIN_PX` lang ist.
+    const k = Math.max(this.view.s, TIP_MIN_PX / shape.long);
+    const long = shape.long * k;
+    const short = shape.short * k;
+    if (!this.tipEl) {
+      const el = document.createElement('div');
+      el.className = 'spitze';
+      el.setAttribute('aria-hidden', 'true');
+      this.el.append(el);
+      this.tipEl = el;
+    }
+    Object.assign(this.tipEl.style, {
+      left: `${at.x - long / 2}px`,
+      top: `${at.y - short / 2}px`,
+      width: `${long}px`,
+      height: `${short}px`,
+      transform: `rotate(${shape.angle}rad)`,
+      background: INK[this.color],
+    });
+    clearTimeout(this.tipTimer);
+    this.tipTimer = window.setTimeout(() => this.hideTip(), TIP_HOLD_MS);
+  }
+
+  private hideTip(): void {
+    clearTimeout(this.tipTimer);
+    this.tipEl?.remove();
+    this.tipEl = null;
+  }
+
   // ---------- Eingabe ----------
 
   private capture(e: PointerEvent): void {
@@ -1257,6 +1349,7 @@ export class InkSurface {
   }
 
   private onDown = (e: PointerEvent): void => {
+    this.hideTip(); // der Stift setzt auf: Die Linie übernimmt
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
     this.refreshRect();
@@ -1306,7 +1399,7 @@ export class InkSurface {
       this.touches.set(e.pointerId, this.local(e));
       this.logFinger(e, 'move');
       this.moveGesture();
-    }
+    } else if (e.pointerType === 'pen' && e.buttons === 0) this.hover(e);
   };
 
   private onUp = (e: PointerEvent): void => {
@@ -1325,6 +1418,11 @@ export class InkSurface {
     if (isTwoFingerTap(this.fingerLog)) this.undo();
     else if (isFingerTap(this.tapLog)) this.opts.onTap?.(this.toPage(this.tapLog[0].x, this.tapLog[0].y));
     this.forgetTaps();
+  };
+
+  /** Der Stift verlässt die Fläche: Die Spitze beim Schweben geht mit. */
+  private onLeave = (e: PointerEvent): void => {
+    if (e.pointerType === 'pen') this.hideTip();
   };
 
   /** Mausrad: blättern, mit Strg (oder Cmd, so meldet das Trackpad Zwei-Finger-Zoomen) zoomen. */
