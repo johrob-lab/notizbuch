@@ -13,8 +13,16 @@ export { statusLabel, type SyncState, type SyncStatus } from './status';
  */
 export type SyncClient = Pick<GitHubClient, 'getFile' | 'putFile' | 'deleteFile' | 'listDir' | 'headSha' | 'changedFiles'>;
 
-const TEXT_DELAY_MS = 2000;
-const INK_DELAY_MS = 10_000;
+/** Text (die Tagesnotiz) geht hoch, wenn so lange keine neue Änderung kam: Mehrere Haken kurz hintereinander werden ein Commit. */
+const TEXT_DELAY_MS = 10_000;
+/** Handschrift geht hoch, wenn so lange kein neuer Strich kam. */
+const INK_DELAY_MS = 120_000;
+/** Spätestens so lange nach der ersten Änderung einer Art seit dem letzten Durchgang geht sie hoch, auch ohne jede Pause. */
+const MAX_WAIT_MS = 600_000;
+/** Ist der letzte Blick auf eine Datei bei GitHub älter, holt `lookupFresh` sie vor einer Änderung neu. */
+const FRESH_MS = 30_000;
+/** So lange wartet `lookupFresh` höchstens auf GitHub. Danach gilt die Kopie, damit die Änderung gleich lokal liegt. */
+const FRESH_WAIT_MS = 2_000;
 const POLL_INTERVAL_MS = 180_000;
 /** So oft versucht ein Abgleich eine Datei zusammenzuführen, die sich währenddessen schon wieder geändert hat. */
 const CONFLICT_ATTEMPTS = 3;
@@ -37,6 +45,11 @@ type Remote = { text: string; sha: string };
 /** Die Fassung auf GitHub, aus der der Text entstand, den die Seite gerade hält. */
 type PageVersion = { sha: string | null; baseText: string | null };
 type Timer = ReturnType<typeof setTimeout>;
+/**
+ * Die Wartezeit einer Art: wann ihre erste Änderung seit dem letzten Durchgang kam (`null`: keine), und ihr Zeitgeber, solange
+ * er läuft (`undefined`, sobald er abgelaufen oder gelöscht ist).
+ */
+type Wait = { first: number | null; timer: Timer | undefined };
 
 /** Fehler, bei denen der Abgleich anhält und alles in der Warteschlange bleibt: kein Netz, Ratenlimit, kein Zugang. */
 function isStop(error: unknown): boolean {
@@ -106,8 +119,14 @@ export class SyncEngine {
    * hier etwas anderes als das Hochgeladene, und die Fassung in `#page` darf nicht darauf vorrücken.
    */
   readonly #pageText = new Map<string, string>();
-  #textTimer: Timer | undefined;
-  #inkTimer: Timer | undefined;
+  /**
+   * Wann die Engine je Datei zuletzt bei GitHub nachgesehen hat (`Date.now()`): gelesen (jede Antwort, auch „gibt es nicht“)
+   * oder hochgeladen. Nur im Arbeitsspeicher: Nach dem Öffnen der App gilt keine Kopie als frisch, bis die Engine die Datei
+   * wieder bei GitHub gesehen hat.
+   */
+  readonly #looked = new Map<string, number>();
+  /** Je Art eine Wartezeit, nur im Arbeitsspeicher: Was nach einem Neustart noch wartet, lädt `start` sofort hoch. */
+  readonly #waits: Record<'md' | 'svg', Wait> = { md: { first: null, timer: undefined }, svg: { first: null, timer: undefined } };
   #pollTimer: ReturnType<typeof setInterval> | undefined;
   #stopListening: (() => void) | undefined;
   #started = false;
@@ -179,7 +198,9 @@ export class SyncEngine {
     };
     this.#pollTimer = setInterval(() => {
       void this.pollRemote();
-      if (this.#pending > 0) void this.flush();
+      // Läuft eine Wartezeit, lädt sie hoch, wenn sie um ist: Der Takt soll die Pause beim Schreiben nicht abkürzen. Ohne laufende
+      // Wartezeit wartet nur noch, was nicht hochging (kein Netz, ein Fehler): Der Takt versucht es neu.
+      if (this.#pending > 0 && !this.#waiting) void this.flush();
     }, POLL_INTERVAL_MS);
 
     void this.pollRemote();
@@ -191,8 +212,10 @@ export class SyncEngine {
     this.#stopListening?.();
     this.#stopListening = undefined;
     clearInterval(this.#pollTimer);
-    clearTimeout(this.#textTimer);
-    clearTimeout(this.#inkTimer);
+    for (const wait of Object.values(this.#waits)) {
+      clearTimeout(wait.timer);
+      wait.timer = undefined;
+    }
     this.#started = false;
   }
 
@@ -261,10 +284,10 @@ export class SyncEngine {
     if ((await this.#store.get('outbox', path))?.deleted) return { text: this.#pageGetsNothing(path), unknown: false };
     let remote: Remote | null;
     try {
-      remote = await this.#call(() => this.#client.getFile(path));
+      remote = await this.#fetch(path);
     } catch (error) {
       if (isStop(error)) {
-        if (!this.#frozen) this.#noteStop(error);
+        if (!this.#frozen) this.#noteStop(error, true);
         return { text: null, unknown: true };
       }
       throw error;
@@ -287,6 +310,52 @@ export class SyncEngine {
     return { text: kept.text, unknown: false };
   }
 
+  /**
+   * Wie `lookup`, aber vor einer Änderung (Haken, bearbeitete Zeile, Ergänzung), die vom neuesten Stand ausgehen soll: Wartet
+   * keine eigene Änderung an der Datei und liegt der letzte Blick auf sie bei GitHub (`#looked`) mehr als `FRESH_MS` zurück,
+   * holt die Engine sie zuerst neu und übernimmt einen neueren Stand. Der Aufrufer bekommt ihn direkt, gemeldet wird er nicht.
+   * Sonst gilt die Kopie, ohne Anfrage und ohne das Auffrischen im Hintergrund von `lookup`. Länger als `FRESH_WAIT_MS` wartet
+   * sie nicht auf GitHub, damit die Änderung gleich lokal liegt: Dann gilt die Kopie, und eine späte Antwort wird wie beim
+   * Auffrischen im Hintergrund behandelt (`#refreshBeforeChange`). Scheitert das Holen, gilt auch die Kopie: Kein Netz,
+   * Ratenlimit oder kein Zugang landet wie bei `lookup` im Status, jeder andere Fehler geht an `onError`. Das Zusammenführen
+   * beim Hochladen bleibt die zweite Sicherung. Ohne Kopie, und in einer Engine, die nur liest, wie `lookup`.
+   */
+  async lookupFresh(path: string): Promise<{ text: string | null; unknown: boolean }> {
+    if (this.#frozen) return this.lookup(path);
+    if (!this.#lookedRecently(path)) await this.#refreshBeforeChange(path);
+    const local = await this.#store.get('files', path);
+    if (!local) return this.lookup(path);
+    this.#pageGets(path, local.text, { sha: local.sha, baseText: local.base });
+    return { text: local.text, unknown: false };
+  }
+
+  /** Ob die Engine höchstens `FRESH_MS` zuvor bei GitHub nach dieser Datei gesehen hat. */
+  #lookedRecently(path: string): boolean {
+    const at = this.#looked.get(path);
+    return at !== undefined && Date.now() - at <= FRESH_MS;
+  }
+
+  /**
+   * Frischt die Kopie vor einer Änderung auf, wie `lookup` es im Hintergrund tut (`#refreshInBackground`: gefragt wird nur, wenn
+   * es eine Kopie gibt und keine eigene Änderung an ihr wartet, Fehler kommen nie nach außen), und wartet darauf höchstens
+   * `FRESH_WAIT_MS`: Ein Haken soll nicht ungesichert an einer langsamen Verbindung hängen. Einen neueren Stand, der rechtzeitig
+   * kommt, bekommt der Aufrufer direkt, gemeldet wird er nicht. Eine spätere Antwort übernimmt ihn nur, wenn für die Datei nichts
+   * wartet, und meldet ihn dann.
+   */
+  async #refreshBeforeChange(path: string): Promise<void> {
+    let late = false;
+    const refresh = this.#refreshInBackground(path, () => late);
+    let timer: Timer | undefined;
+    const gaveUp = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        late = true;
+        resolve();
+      }, FRESH_WAIT_MS);
+    });
+    await Promise.race([refresh, gaveUp]);
+    clearTimeout(timer);
+  }
+
   /** Die Seite bekommt diesen Text, der auf dieser Fassung beruht. */
   #pageGets(path: string, text: string, version: PageVersion): void {
     this.#page.set(path, version);
@@ -301,8 +370,10 @@ export class SyncEngine {
   }
 
   /**
-   * Speichert sofort lokal und stellt die Änderung in die Warteschlange. Hochgeladen wird nach 2 s (Text) bzw. 10 s (Handschrift).
-   * Wirft, wenn sich der Text nicht mit einer wartenden Änderung vereinen lässt, die die Seite noch nicht gelesen hat (siehe unten).
+   * Speichert sofort lokal und stellt die Änderung in die Warteschlange. Hochgeladen wird nach einer Pause (Text 10 s, Handschrift
+   * 2 Minuten), spätestens 10 Minuten nach der ersten Änderung, und sofort, wenn die App in den Hintergrund geht oder schon dort
+   * ist (`#schedule`). Wirft, wenn sich der Text nicht mit einer wartenden Änderung vereinen lässt, die die Seite noch nicht
+   * gelesen hat (siehe unten).
    */
   async write(path: string, text: string, kind: 'md' | 'svg'): Promise<void> {
     if (this.#frozen) throw new ReadOnlyError();
@@ -403,11 +474,16 @@ export class SyncEngine {
     this.#publish();
   }
 
-  /** Hält ein Fehler den Abgleich an? Dann merkt sich der Status, warum. */
-  #noteStop(error: unknown): boolean {
+  /**
+   * Hält ein Fehler den Abgleich an? Dann merkt sich der Status, warum. Scheitert nur ein Lesen (`reading`: frisches Lesen,
+   * Auffrischen, Abfrage) an Netz oder Ratenlimit, während eine Wartezeit läuft, bleibt der Status: Hochgeladen wird erst, wenn
+   * sie um ist, und erst dieser Versuch zeigt, ob das Netz fehlt. Sonst stünde „Wartet auf Netz“ bis zu 10 Minuten da, obwohl
+   * nichts gescheitert ist, was schon hochgehen sollte.
+   */
+  #noteStop(error: unknown, reading = false): boolean {
     if (error instanceof AuthError) this.#setState('zugang');
     else if (error instanceof OfflineError || error instanceof RateLimitError) {
-      if (this.#pending > 0) this.#setState('wartet');
+      if (this.#pending > 0 && !(reading && this.#waiting)) this.#setState('wartet');
     } else return false;
     return true;
   }
@@ -432,6 +508,20 @@ export class SyncEngine {
     });
   }
 
+  /** Holt eine Datei von GitHub. Jede Antwort, auch „gibt es nicht“, ist ein Blick auf die Datei (`#looked`). */
+  async #fetch(path: string): Promise<Remote | null> {
+    const remote = await this.#call(() => this.#client.getFile(path));
+    this.#looked.set(path, Date.now());
+    return remote;
+  }
+
+  /** Lädt eine Fassung hoch (über `#upload`). Danach liegt genau sie auf GitHub: Auch das ist ein Blick auf die Datei. */
+  async #put(path: string, text: string, sha: string | null): Promise<{ sha: string }> {
+    const uploaded = await this.#upload(() => this.#client.putFile(path, text, sha, this.#message(path)));
+    this.#looked.set(path, Date.now());
+    return uploaded;
+  }
+
   /**
    * Jede Änderung am Speicher geht hier durch. Die Prüfung und das Anlegen der Transaktion folgen ohne Pause aufeinander, und
    * eine Transaktion steht in der Reihenfolge, in der sie angelegt wird: Wer `close` ruft und danach den Speicher leert,
@@ -453,15 +543,35 @@ export class SyncEngine {
 
   // ---------- Hochladen ----------
 
+  /**
+   * Zwei Wartezeiten, eine je Art. Jede beginnt mit der letzten Änderung ihrer Art neu, endet aber spätestens `MAX_WAIT_MS` nach
+   * der ersten Änderung dieser Art seit dem letzten Durchgang: So geht auch regelmäßig hoch, was ohne Pause geschrieben wird.
+   * Ist die App verborgen, gibt es keine Wartezeit: Was erst nach dem Verlassen gespeichert wird (ein Haken, der auf GitHub
+   * gewartet hat, eine Seite, die noch sicherte), geht sofort hoch. Eine Wartezeit liefe dort womöglich erst ab, wenn die App
+   * zurückkommt, weil iPadOS sie anhält.
+   */
   #schedule(kind: 'md' | 'svg'): void {
-    // Zwei Wartezeiten, jede beginnt mit der letzten Änderung ihrer Art neu.
-    if (kind === 'md') {
-      clearTimeout(this.#textTimer);
-      this.#textTimer = setTimeout(() => void this.flush(), TEXT_DELAY_MS);
-    } else {
-      clearTimeout(this.#inkTimer);
-      this.#inkTimer = setTimeout(() => void this.flush(), INK_DELAY_MS);
+    if (document.visibilityState === 'hidden') {
+      void this.flush();
+      return;
     }
+    const wait = this.#waits[kind];
+    const now = Date.now();
+    wait.first ??= now;
+    const pause = kind === 'md' ? TEXT_DELAY_MS : INK_DELAY_MS;
+    clearTimeout(wait.timer);
+    wait.timer = setTimeout(
+      () => {
+        wait.timer = undefined;
+        void this.flush();
+      },
+      Math.max(0, Math.min(pause, wait.first + MAX_WAIT_MS - now)),
+    );
+  }
+
+  /** Ob gerade eine Wartezeit läuft. Ein Zeitgeber, der abgelaufen oder gelöscht ist, zählt nicht. */
+  get #waiting(): boolean {
+    return Object.values(this.#waits).some((wait) => wait.timer !== undefined);
   }
 
   /**
@@ -501,6 +611,8 @@ export class SyncEngine {
   async #flushPass(): Promise<void> {
     this.#flushAgain = false;
     if (this.#frozen) return; // beendet, während der Durchgang auf das Schloss wartete
+    // Der Durchgang nimmt mit, was wartet. Was ab jetzt geschrieben wird, beginnt eine neue Wartezeit mit eigener Obergrenze.
+    for (const wait of Object.values(this.#waits)) wait.first = null;
     await this.#refreshPending(); // die Warteschlange kann aus einer früheren Sitzung oder einem anderen Tab stammen
     await this.#flushOnce();
     await this.#refreshPending();
@@ -552,7 +664,7 @@ export class SyncEngine {
       return this.#settle(entry, { sha: entry.baseSha, text: entry.text });
     }
     try {
-      const { sha } = await this.#upload(() => this.#client.putFile(entry.path, entry.text, entry.baseSha, this.#message(entry.path)));
+      const { sha } = await this.#put(entry.path, entry.text, entry.baseSha);
       await this.#settle(entry, { sha, text: entry.text });
     } catch (error) {
       if (!isStaleBase(error, entry.baseSha)) throw error;
@@ -627,7 +739,7 @@ export class SyncEngine {
     for (let attempt = 0; attempt < CONFLICT_ATTEMPTS; attempt++) {
       const entry = await this.#store.get('outbox', path);
       if (!entry || entry.deleted) return;
-      const remote = await this.#call(() => this.#client.getFile(path));
+      const remote = await this.#fetch(path);
       let text = entry.text;
       let baseSha: string | null = null; // Ist die Datei auf GitHub weg, wird die eigene als neue Datei hochgeladen.
       if (remote) {
@@ -638,7 +750,7 @@ export class SyncEngine {
         baseSha = remote.sha;
       }
       try {
-        const { sha } = await this.#upload(() => this.#client.putFile(path, text, baseSha, this.#message(path)));
+        const { sha } = await this.#put(path, text, baseSha);
         return await this.#settle(entry, { sha, text });
       } catch (error) {
         if (!isStaleBase(error, baseSha)) throw error; // sonst hat sich die Datei schon wieder geändert: noch einmal
@@ -689,7 +801,7 @@ export class SyncEngine {
 
   async #exists(path: string): Promise<boolean> {
     if ((await this.#store.get('files', path)) || (await this.#store.get('outbox', path))) return true;
-    return (await this.#call(() => this.#client.getFile(path))) !== null;
+    return (await this.#fetch(path)) !== null;
   }
 
   // ---------- Löschen ----------
@@ -699,7 +811,7 @@ export class SyncEngine {
     try {
       let sha = entry.baseSha;
       if (sha === null) {
-        const remote = await this.#call(() => this.#client.getFile(path));
+        const remote = await this.#fetch(path);
         if (!remote) return await this.#settleDelete(entry);
         // Ohne bekannte Fassung wird nur gelöscht, was genau unsere letzte Fassung ist. Alles andere hat dieses Gerät nie gesehen.
         if (remote.text !== entry.text) return await this.#cancelDelete(entry, remote);
@@ -712,7 +824,7 @@ export class SyncEngine {
       if (error instanceof ConflictError) return this.#cancelDelete(entry);
       if (isStop(error) || error instanceof PathNotAllowedError || error instanceof ReadOnlyError) throw error; // beendet: keine Anfrage mehr
       // Eine fehlende Datei meldet der Client als allgemeinen Fehler (404). Ist sie weg, ist das Löschen erledigt.
-      if ((await this.#call(() => this.#client.getFile(path))) === null) return this.#settleDelete(entry);
+      if ((await this.#fetch(path)) === null) return this.#settleDelete(entry);
       throw error;
     }
   }
@@ -738,7 +850,7 @@ export class SyncEngine {
    */
   async #cancelDelete(sent: OutboxEntry, known?: Remote): Promise<void> {
     const { path } = sent;
-    const remote = known ?? (await this.#call(() => this.#client.getFile(path)));
+    const remote = known ?? (await this.#fetch(path));
     if (!remote) return this.#settleDelete(sent);
     const wasBasedOn = await this.#transact(['files', 'outbox'], async (tx) => {
       const current = await tx.objectStore('outbox').get(path);
@@ -801,7 +913,7 @@ export class SyncEngine {
       await this.#rememberHead(head);
     } catch (error) {
       if (error instanceof ReadOnlyError) return; // beendet, während die Abfrage lief
-      if (!this.#noteStop(error)) this.onError?.({ path: '', error });
+      if (!this.#noteStop(error, true)) this.onError?.({ path: '', error });
     }
   }
 
@@ -821,7 +933,7 @@ export class SyncEngine {
   async #refreshCopy(path: string, dropIfGone: boolean): Promise<boolean> {
     const record = await this.#store.get('files', path);
     if (!record || (await this.#store.get('outbox', path))) return false;
-    const remote = await this.#call(() => this.#client.getFile(path));
+    const remote = await this.#fetch(path);
     if (remote === null && !dropIfGone) return false;
     // Gleicher Stand: dieselbe sha, oder keine Seite kennt die Datei. Eine Kopie, die nie auf GitHub war, bleibt also.
     if ((remote?.sha ?? null) === record.sha) return false;
@@ -844,12 +956,17 @@ export class SyncEngine {
     });
   }
 
-  async #refreshInBackground(path: string): Promise<void> {
+  /**
+   * Frischt eine Kopie ohne offene Änderung auf (`#refreshCopy`) und meldet einen neueren Stand, wenn `report` nach der Antwort
+   * ja sagt. Fehler kommen nie nach außen: Kein Netz, Ratenlimit oder kein Zugang gehen als Lesefehler in den Status
+   * (`#noteStop`), jeder andere Fehler an `onError`, und eine beendete Engine schweigt.
+   */
+  async #refreshInBackground(path: string, report: () => boolean = () => true): Promise<void> {
     try {
-      if (await this.#refreshCopy(path, false)) this.#remoteChanged([path]);
+      if ((await this.#refreshCopy(path, false)) && report()) this.#remoteChanged([path]);
     } catch (error) {
       if (error instanceof ReadOnlyError) return;
-      if (!this.#noteStop(error)) this.onError?.({ path, error });
+      if (!this.#noteStop(error, true)) this.onError?.({ path, error });
     }
   }
 }

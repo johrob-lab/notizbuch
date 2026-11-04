@@ -49,6 +49,26 @@ test('a read-only engine shows the local copy of the active window and does not 
   expect((await h.store.get('files', A))?.text).toBe('neu');
 });
 
+test('in a read-only engine lookupFresh reads like lookup: the copy without asking GitHub, without a copy from GitHub', async () => {
+  h.fake.files[A] = { text: 'alt', sha: 's1' };
+  await h.e.read(A); // die Kopie des Fensters, das schreibt
+  h.fake.files[A] = { text: 'neu', sha: 's2' }; // auf GitHub ist die Notiz weiter
+  h.fake.files[B] = { text: 'von GitHub', sha: 'sb1' };
+  const requests = h.fake.log.length;
+  const ro = readOnlyEngine();
+  // Diese Engine hat die Notiz nie bei GitHub gesehen, frisch lesen wäre fällig. Sie liest aber nur: keine Anfrage, kein Warten.
+  expect(await ro.lookupFresh(A)).toEqual({ text: 'alt', unknown: false });
+  await quiet();
+  expect(h.fake.log.length).toBe(requests);
+  // Ohne Kopie wie `lookup`: von GitHub, ohne etwas zu behalten, und ohne Netz ist offen, ob es die Datei gibt
+  expect(await ro.lookupFresh(B)).toEqual({ text: 'von GitHub', unknown: false });
+  h.fake.offline = true;
+  expect(await ro.lookupFresh(B)).toEqual({ text: null, unknown: true });
+  await quiet();
+  expect(await h.store.get('files', B)).toBeUndefined();
+  expect((await h.store.get('files', A))?.sha).toBe('s1');
+});
+
 test('a read-only engine that cannot ask GitHub says it does not know', async () => {
   h.fake.offline = true;
   expect(await readOnlyEngine().lookup(A)).toEqual({ text: null, unknown: true });

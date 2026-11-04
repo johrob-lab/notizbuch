@@ -7,7 +7,7 @@ import { unwrap } from 'idb';
 import { PathNotAllowedError } from '../../src/sync/paths';
 import { SyncEngine, statusLabel } from '../../src/sync/engine';
 import { fixture, lineOf } from './helpers';
-import { A, B, S, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
+import { A, B, S, quiet, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
 
 const base = fixture('05 Daily Notes/2026-10-29.md');
 
@@ -43,7 +43,7 @@ test('queues while offline', async () => {
   fake.offline = true;
   await e.write(A, 'x', 'md');
   await e.write(B, 'y', 'md');
-  await vi.advanceTimersByTimeAsync(2000);
+  await vi.advanceTimersByTimeAsync(10_000); // die Wartezeit für Text läuft ab, das Hochladen scheitert am Netz
   await until(() => e.status.value.state === 'wartet');
   expect(e.status.value).toEqual({ state: 'wartet', pending: 2 });
 });
@@ -105,11 +105,11 @@ test('commit message names the file and the device', async () => {
   expect(fake.messages).toEqual(['Notizbuch: 2026-10-29.md (iPad)', 'Notizbuch: 2026-10-29 Tag.svg (iPad)']);
 });
 
-test('text goes up 2 s and ink 10 s after the last change', async () => {
+test('text goes up 10 s and ink 2 min after the last change', async () => {
   await e.write(A, 'x', 'md');
-  await vi.advanceTimersByTimeAsync(1999);
+  await vi.advanceTimersByTimeAsync(9_999);
   await e.write(A, 'xy', 'md'); // jede Änderung beginnt die Wartezeit neu
-  await vi.advanceTimersByTimeAsync(1999);
+  await vi.advanceTimersByTimeAsync(9_999);
   expect(fake.count('put')).toBe(0);
   await vi.advanceTimersByTimeAsync(1);
   await until(() => fake.files[A]?.text === 'xy');
@@ -119,10 +119,54 @@ test('text goes up 2 s and ink 10 s after the last change', async () => {
 
   const page = svgPage('a');
   await e.write(S, page, 'svg');
-  await vi.advanceTimersByTimeAsync(9999);
+  await vi.advanceTimersByTimeAsync(119_999);
   expect(fake.files[S]).toBeUndefined();
   await vi.advanceTimersByTimeAsync(1);
   await until(() => fake.files[S]?.text === page);
+});
+
+test.each([
+  { name: 'handwriting every minute', kind: 'svg' as const, path: S, step: 60_000, pause: 120_000 },
+  { name: 'text every 5 s', kind: 'md' as const, path: A, step: 5_000, pause: 10_000 },
+])('changes that never pause go up 10 min after the first one ($name)', async ({ kind, path, step, pause }) => {
+  const MAX_WAIT = 600_000;
+  let n = 0;
+  const version = (i: number) => (kind === 'svg' ? svgPage(...Array.from({ length: i }, (_, j) => `s${j}`)) : `Fassung ${i}`);
+  const writeNext = () => e.write(path, version(++n), kind);
+  /** Schreibt `count` Fassungen im Abstand von `step` und bleibt bei der letzten stehen. Die Pause ist nie lang genug. */
+  const keepWriting = async (count: number) => {
+    for (let i = 0; i < count; i++) {
+      if (i > 0) await vi.advanceTimersByTimeAsync(step);
+      await writeNext();
+    }
+  };
+  const uploaded = async (count: number) => {
+    await until(() => fake.count('put') === count && fake.files[path]?.text === version(n));
+    await until(() => e.status.value.pending === 0);
+  };
+
+  // Die erste Änderung kommt bei 0, die letzte einen Schritt vor 10 Minuten.
+  await keepWriting(MAX_WAIT / step);
+  await vi.advanceTimersByTimeAsync(step - 1);
+  expect(fake.count('put')).toBe(0);
+  await vi.advanceTimersByTimeAsync(1); // 10 Minuten nach der ersten Änderung, ohne Pause dazwischen
+  await uploaded(1);
+
+  // Weiter ohne Pause: Die Obergrenze zählt ab der ersten Änderung nach diesem Durchgang, nicht ab der ersten überhaupt.
+  await vi.advanceTimersByTimeAsync(step);
+  await keepWriting(MAX_WAIT / step);
+  await vi.advanceTimersByTimeAsync(step - 1);
+  expect(fake.count('put')).toBe(1);
+  await vi.advanceTimersByTimeAsync(1);
+  await uploaded(2);
+
+  // Mit einer Pause geht es früher: nach der Wartezeit ab der letzten Änderung.
+  await vi.advanceTimersByTimeAsync(step);
+  await keepWriting(2);
+  await vi.advanceTimersByTimeAsync(pause - 1);
+  expect(fake.count('put')).toBe(2);
+  await vi.advanceTimersByTimeAsync(1);
+  await uploaded(3);
 });
 
 test('a new file goes up without sha and its sha is kept', async () => {
@@ -316,6 +360,64 @@ test('a write while the device is offline shows wartet right away', async () => 
   } finally {
     setOnLine(true);
   }
+});
+
+// Ein Lesen, das am Netz scheitert, während nur eine Wartezeit läuft: Hochgeladen wird erst, wenn sie um ist, und erst dieser
+// Versuch zeigt, ob das Netz fehlt. Bis dahin bleibt „Gesichert“, sonst stünde „Wartet auf Netz“ bis zu 10 Minuten falsch da.
+test.each([
+  {
+    name: 'the fresh read before a tick',
+    read: async () => {
+      vi.setSystemTime(Date.now() + 30_001); // der letzte Blick auf die Notiz ist älter als 30 s, ohne dass ein Zeitgeber abläuft
+      expect(await e.lookupFresh(A)).toEqual({ text: base, unknown: false });
+    },
+  },
+  {
+    name: 'the refresh in the background',
+    read: async () => {
+      expect(await e.read(A)).toBe(base);
+      await until(() => fake.finished('get') === 2);
+    },
+  },
+  { name: 'the poll', read: () => e.pollRemote() },
+  { name: 'a file without a copy', read: async () => expect(await e.lookup(B)).toEqual({ text: null, unknown: true }) },
+])('a read that fails on the network while a waiting time runs leaves Gesichert ($name)', async ({ read }) => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A); // die Kopie der Notiz
+  await e.write(S, svgPage('a'), 'svg'); // die 2 Minuten Pause laufen
+  fake.offline = true;
+  await read();
+  await quiet();
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 1 });
+
+  fake.offline = false; // das Netz war nur kurz weg, ohne dass das Gerät es meldet
+  await vi.advanceTimersByTimeAsync(120_000);
+  await until(() => fake.files[S]?.text === svgPage('a'));
+  await until(() => e.status.value.pending === 0);
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 });
+  expect(fake.count('put')).toBe(1);
+});
+
+test('an upload that fails when the waiting time is over still shows Wartet auf Netz', async () => {
+  await e.write(S, svgPage('a'), 'svg');
+  fake.offline = true;
+  await e.pollRemote(); // ein Lesen scheitert, der Status bleibt
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 1 });
+  await vi.advanceTimersByTimeAsync(120_000); // die Wartezeit ist um, das Hochladen scheitert am Netz
+  await until(() => e.status.value.state === 'wartet');
+  expect(e.status.value).toEqual({ state: 'wartet', pending: 1 });
+});
+
+test('without a running waiting time a read that fails on the network shows Wartet auf Netz, as before', async () => {
+  fake.putErrors.set(A, new Error('kaputt')); // das Hochladen scheitert an GitHub, nicht am Netz
+  await e.write(A, 'x', 'md');
+  await vi.advanceTimersByTimeAsync(10_000);
+  await until(() => h.errors.length === 1);
+  await quiet();
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 1 }); // die Änderung wartet, eine Wartezeit läuft nicht mehr
+  fake.offline = true;
+  await e.pollRemote();
+  expect(e.status.value).toEqual({ state: 'wartet', pending: 1 });
 });
 
 test('an upload that hangs for 30 s counts as offline', async () => {

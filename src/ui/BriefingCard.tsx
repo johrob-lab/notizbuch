@@ -173,16 +173,17 @@ export function BriefingCard({ engine, day, rect }: Props) {
   }, [state.notice]);
 
   /**
-   * Ein Vorgang an der Notiz. Er läuft in der Warteschlange und liest zuerst den neuesten Text. `change` bekommt ihn und liefert
-   * den neuen Text, `'stale'` (die Zeile gibt es so nicht mehr: nichts schreiben, den neuen Stand zeigen und es sagen) oder
-   * `null` (nichts zu tun). `after` sagt, was nach dem Schreiben sonst noch anders ist. `saves`: Der Vorgang speichert die
-   * offene Bearbeitung. Scheitert etwas, steht danach wieder da, was wirklich in der Notiz ist.
+   * Ein Vorgang an der Notiz. Er läuft in der Warteschlange und liest zuerst den neuesten Text (`lookupFresh`: von GitHub, wenn
+   * der letzte Blick dort länger als 30 Sekunden her ist). `change` bekommt ihn und liefert den neuen Text, `'stale'` (die Zeile
+   * gibt es so nicht mehr: nichts schreiben, den neuen Stand zeigen und es sagen) oder `null` (nichts zu tun). `after` sagt, was
+   * nach dem Schreiben sonst noch anders ist. `saves`: Der Vorgang speichert die offene Bearbeitung. Scheitert etwas, steht
+   * danach wieder da, was wirklich in der Notiz ist.
    */
   const act = (change: Change, o: { after?: () => Partial<State>; saves?: boolean } = {}): Promise<Outcome> => {
     update((now) => ({ pending: now.pending + 1, notice: null }));
     return queue.current(async (): Promise<Outcome> => {
       try {
-        const { text: latest, unknown } = await engine.lookup(path);
+        const { text: latest, unknown } = await engine.lookupFresh(path);
         if (unknown) {
           // Ob es die Notiz gibt, ist offen (kein Netz): Nichts schreiben, sonst entstünde neben ihr eine zweite.
           update({ notice: { text: OFFLINE, alert: false } });

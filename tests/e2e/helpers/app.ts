@@ -520,7 +520,7 @@ export async function lastHead(page: Page): Promise<string | null> {
   return (await idbRead(page, 'meta', 'lastHead')) as string | null;
 }
 
-/** Die App geht in den Hintergrund: Die Engine lädt dann sofort hoch, ohne die 10 Sekunden Wartezeit für Handschrift. */
+/** Die App geht in den Hintergrund: Die Engine lädt dann sofort hoch, ohne die Wartezeit (Handschrift 2 Minuten, Text 10 Sekunden). */
 export async function sendToBackground(page: Page): Promise<void> {
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });

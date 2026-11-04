@@ -70,6 +70,7 @@ function fakeEngine(initial: string | null = null, others: Record<string, string
     writes: [] as string[],
     active: 0,
     maxActive: 0,
+    /** Wie oft jemand `flush` aufrief. Die Sitzung tut es nie: Hochladen ist Sache der Engine. */
     flushes: 0,
     /** So viele der nächsten Schreibaufträge scheitern. Ein gescheiterter Auftrag ändert die Kopie nicht. */
     failWrites: 0,
@@ -572,7 +573,8 @@ test('a failed save is tried once more when the page is closed', async () => {
   expect(engine.writes).toHaveLength(2);
   expect(engine.writes[1]).toBe(engine.writes[0]);
   expect(ids(engine.text!)).toEqual(['a']);
-  expect(engine.log.slice(-2)).toEqual(['written', 'flush']);
+  expect(engine.log.slice(-2)).toEqual(['write', 'written']); // nur gespeichert, das Hochladen macht die Engine
+  expect(engine.flushes).toBe(0);
 });
 
 test('a change that arrives while a save fails is saved right away', async () => {
@@ -881,24 +883,31 @@ test('a stroke made while a vanished page was being read is kept', async () => {
 
 // ---------- Beenden ----------
 
-test('closing uploads once everything is saved and stops listening', async () => {
+test('closing a page saves but leaves the upload to the engine', async () => {
   const engine = fakeEngine(null);
   const surface = fakeSurface();
   const { session } = open(engine, surface);
   await session.reload();
-  expect(engine.listenerCount).toBe(1);
 
   const slow = engine.holdWrite();
   session.changed(pageOf(stroke('a', 1)));
   await slow.reached;
-  session.close();
-  await settle();
-  expect(engine.flushes).toBe(0); // das Speichern ist noch nicht fertig
+  session.close(); // während das Speichern noch läuft
   slow.release();
   await settle();
-  expect(engine.flushes).toBe(1);
-  expect(engine.log.slice(-2)).toEqual(['written', 'flush']);
+  expect(ids(engine.text!)).toEqual(['a']);
+  expect(engine.log.at(-1)).toBe('written');
+  // Hochgeladen wird nach der Wartezeit der Engine oder beim Verlassen der App, nicht beim Wechsel der Seite.
+  expect(engine.flushes).toBe(0);
+});
 
+test('closing stops listening for changes from other devices', async () => {
+  const engine = fakeEngine(svgOf(stroke('a', 1000)));
+  const { session } = open(engine, fakeSurface());
+  await session.reload();
+  expect(engine.listenerCount).toBe(1);
+
+  session.close();
   expect(engine.listenerCount).toBe(0);
   const reads = engine.reads;
   engine.notify([PATH]);
@@ -1033,7 +1042,7 @@ test('a retired session writes nothing any more: no change, no save that failed 
   await settle();
   expect(engine.writes).toHaveLength(1);
   expect(engine.text).toBeNull();
-  expect(engine.flushes).toBe(1); // beim Verlassen geht trotzdem hoch, was in der Warteschlange steht, auch das Löschen
+  expect(engine.flushes).toBe(0); // was in der Warteschlange steht, auch das Löschen, lädt die Engine nach ihrer Wartezeit hoch
 });
 
 test('retiring waits for the save that is running, and drops the change that waits behind it', async () => {

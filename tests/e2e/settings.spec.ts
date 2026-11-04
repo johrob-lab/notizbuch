@@ -199,6 +199,8 @@ test('prediction and device are saved, and the device applies at once', async ({
   await expect(page.getByRole('toolbar', { name: 'Werkzeuge' })).toHaveCount(0);
   // Abhaken geht dort, und der Commit nennt das neue Gerät
   await page.getByRole('checkbox', { name: NAME1, exact: true }).check();
+  await expect.poll(async () => Object.keys(await queued(page))).toEqual([NOTE]);
+  await sendToBackground(page);
   await expect.poll(() => repo.puts.map((p) => p.message)).toEqual(['Notizbuch: 2026-10-29.md (Firmen-PC)']);
   // und zurück an das iPad
   await toSettings(page);
@@ -263,6 +265,8 @@ test('a choice that can not be saved is taken back and says so, and works again 
   await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
   await expect(page.getByRole('toolbar', { name: 'Werkzeuge' })).toBeVisible();
   await page.getByRole('checkbox', { name: NAME1, exact: true }).check();
+  await expect.poll(async () => Object.keys(await queued(page))).toEqual([NOTE]);
+  await sendToBackground(page);
   await expect.poll(() => repo.puts.map((p) => p.message)).toEqual(['Notizbuch: 2026-10-29.md (iPad)']);
 
   // Geht das Speichern wieder, gilt die Wahl, und die Meldung ist weg
@@ -598,6 +602,7 @@ test('a change of the repository clears the local data and the app talks to the 
   // Ein Strich und ein Haken gehören dem neuen Repo
   await pen(page).stroke(LINE);
   await page.getByRole('checkbox', { name: 'Aufgabe aus dem anderen Repo', exact: true }).check();
+  await expect.poll(async () => Object.keys(await queued(page)).sort()).toEqual([NOTE, TAG].sort());
   await sendToBackground(page);
   await expect.poll(() => newRepo.puts.map((p) => p.path).sort()).toEqual([NOTE, TAG].sort());
   await expect(status(page)).toHaveText('Gesichert');

@@ -232,6 +232,75 @@ test('two ticks in a row both land in the note', async ({ page }) => {
   expect(repo.puts[0].text).toBe(NOTE_TEXT.replace(TASK1, TASK1.replace('[ ]', '[x]')).replace(TASK2, TASK2.replace('[ ]', '[x]')));
 });
 
+test('a tick after a while starts from the newest note on GitHub', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  const card = region(page, 'Morgenbriefing');
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await settled(page);
+  await expect.poll(() => lastHead(page)).not.toBeNull(); // die erste Abfrage ist durch, die nächste käme erst in 3 Minuten
+  // Auf GitHub ändert sich eine Zeile im Morgenbriefing (der Termin ist verschoben, neue sha). Die App erfährt es nicht.
+  const remote = NOTE_TEXT.replace('- 08:00 bis 14:00 Abstimmung', '- 09:00 bis 14:00 Abstimmung');
+  repo.commit(NOTE, remote);
+  // 31 Sekunden später: Der letzte Blick der App auf die Notiz ist älter als 30 Sekunden.
+  await page.clock.setFixedTime(new Date('2026-10-29T12:00:31+01:00'));
+  await expect(card.getByText('08:00 bis 14:00')).toBeVisible();
+
+  await checkbox(page, NAME1).check();
+  await waitUntilQueued(page, NOTE, '- [x] Liste Planobjekte ergänzen');
+  // Noch vor jedem Hochladen hat die wartende Fassung beides: die geänderte Zeile von GitHub und den Haken.
+  const ticked = remote.replace(TASK1, TASK1.replace('[ ]', '[x]'));
+  expect(await queuedText(page, NOTE)).toBe(ticked);
+  expect(repo.puts).toEqual([]);
+  await expect(card.getByText('09:00 bis 14:00')).toBeVisible();
+
+  await upload(page, repo, 1);
+  expect(repo.puts[0]).toMatchObject({ path: NOTE, text: ticked });
+  expect(repo.requests.filter((request) => request.startsWith('PUT '))).toHaveLength(1); // kein zweiter Versuch nach einem 409
+  expect(repo.puts.filter((put) => put.path.includes('(Konflikt)'))).toEqual([]);
+});
+
+test('a tick waits at most 2 seconds for GitHub, then it is saved on the copy', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await settled(page);
+  await expect.poll(() => lastHead(page)).not.toBeNull(); // die erste Abfrage ist durch, die nächste käme erst in 3 Minuten
+  const remote = NOTE_TEXT.replace('- 08:00 bis 14:00 Abstimmung', '- 09:00 bis 14:00 Abstimmung');
+  repo.commit(NOTE, remote); // auf GitHub ist die Notiz neuer
+  // Das Netz ist schlecht: GitHub antwortet auf die Notiz erst, wenn der Test es erlaubt.
+  let asked = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route(
+    (url) => decodeURIComponent(url.pathname).endsWith(`/contents/${NOTE}`),
+    async (route) => {
+      if (route.request().method() === 'GET') {
+        asked++;
+        await gate;
+      }
+      await route.fallback();
+    },
+  );
+  const later = new Date('2026-10-29T12:00:31+01:00');
+  await page.clock.setFixedTime(later); // der letzte Blick ist älter als 30 Sekunden
+  // Ab jetzt laufen die Zeitgeber der Seite nur, wenn der Test die Uhr weiterstellt: Was folgt, hängt nicht an echter Zeit.
+  await page.clock.pauseAt(later);
+
+  await checkbox(page, NAME1).check();
+  await expect(checkbox(page, NAME1)).toBeChecked(); // der Haken zeigt sich sofort
+  await expect.poll(() => asked, { message: 'die Karte fragt GitHub nach der Notiz' }).toBe(1); // die Antwort bleibt aus
+  await page.clock.runFor(1_999);
+  expect(await queued(page)).toEqual({}); // knapp 2 Sekunden: Die Karte wartet noch auf GitHub
+  await page.clock.runFor(1); // nach 2 Sekunden gilt die Kopie
+  const ticked = NOTE_TEXT.replace(TASK1, TASK1.replace('[ ]', '[x]'));
+  await expect.poll(() => queuedText(page, NOTE)).toBe(ticked);
+
+  // Die späte Antwort ändert die wartende Fassung nicht. Beim Hochladen wird zusammengeführt, ohne Konfliktkopie.
+  release();
+  await upload(page, repo, 1);
+  expect(repo.puts[0]).toMatchObject({ path: NOTE, text: remote.replace(TASK1, TASK1.replace('[ ]', '[x]')) });
+  expect(repo.puts.filter((put) => put.path.includes('(Konflikt)'))).toEqual([]);
+});
+
 test('a second tap while the first is still being written is queued, not dropped', async ({ page }) => {
   const repo = await openSeeded(page, DAY);
   await expect(checkbox(page, NAME1)).toBeVisible();
@@ -633,6 +702,7 @@ test('a line that changed under the card gives a notice and writes nothing', asy
   expect(await queued(page)).toEqual({});
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
+  await bringToForeground(page); // zurück in der App, bevor weiter getippt wird
 
   // Ein zweiter Tipp trifft jetzt die richtige Zeile, und die Zeile darüber bleibt unberührt.
   await checkbox(page, NAME2).check();
@@ -657,6 +727,7 @@ test('an edit of a line that changed under the card keeps the typed text and the
   expect(await queued(page)).toEqual({});
   await sendToBackground(page);
   expect(repo.puts).toEqual([]);
+  await bringToForeground(page); // zurück in der App, bevor weiter getippt wird
 
   // Noch einmal: Jetzt gilt die Zeile in ihrer neuen Fassung, Haken und Marker bleiben.
   await editField(page).press('Enter');
@@ -988,7 +1059,7 @@ test('an existing meeting is opened instead of a second one', async ({ page }) =
 
 test('an existing meeting that only this device has is opened too', async ({ page }) => {
   // Die Besprechung liegt nur im Speicher dieses Geräts: Das Hochladen scheitert, also steht sie in keiner Liste von GitHub.
-  // (Beim Verlassen einer Seite lädt die Engine sofort hoch, sonst wäre sie schon auf GitHub, bevor man zurückkommt.)
+  // (So bleibt es auch, wenn zwischendurch hochgeladen wird, zum Beispiel nach der Wartezeit.)
   const repo = await openSeeded(page, DAY);
   repo.failWrites = true;
   await meetings(page).getByRole('button', { name: /Abstimmung Beispiel 2027/ }).click();
@@ -1239,6 +1310,7 @@ test('a failing year listing does not stop the page', async ({ page }) => {
   await checkbox(page, NAME1).check();
   await entry.click();
   await expect.poll(() => hash(page)).toBe(hashOf(BASE, 1));
+  await expect.poll(async () => Object.keys(await queued(page)).sort()).toEqual([NOTE, PAGE1].sort());
   await upload(page, repo, 2);
 });
 
