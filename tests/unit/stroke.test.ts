@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+import { DEFAULT_FUELLER, pressureFactor, STABIL_SIGMA, type FuellerSettings } from '../../src/ink/pens';
 import { fmtNum, hitStroke, parsePathD, pathD, StrokeBuilder } from '../../src/ink/stroke';
 import { SMOOTHING, type InkColor, type Stroke } from '../../src/ink/types';
 
@@ -376,29 +377,17 @@ test('the fineliner draws 1.25 times the nominal width whatever the pressure', (
   for (const p of s.pts) expect(p.w).toBeCloseTo(1.5, 9);
 });
 
-test('a fountain pen stroke along the pen is wider than one across it', () => {
-  const along = penLine('fueller', [1, 1], 0.45).pts;
-  const across = penLine('fueller', [1, -1], 0.45).pts;
-  expect(Math.abs(along[along.length - 1].w / (1.2 * 1.25 * 1.5) - 1)).toBeLessThan(0.05);
-  expect(Math.abs(across[across.length - 1].w / (1.2 * 1.25 * 0.5) - 1)).toBeLessThan(0.05);
-});
-
 test('the fountain pen width follows the pressure', () => {
+  // Startwert der Druckempfindlichkeit 25 %: leicht 0,8-fach, fest 1,2-fach.
   const lo = penLine('fueller', [1, 1], 0.1).pts;
   const hi = penLine('fueller', [1, 1], 0.8).pts;
-  const ratio = hi[hi.length - 1].w / lo[lo.length - 1].w;
-  expect(Math.abs(ratio / 4 - 1)).toBeLessThan(0.05);
+  expect(hi[hi.length - 1].w / lo[lo.length - 1].w).toBeCloseTo(1.2 / 0.8, 9);
 });
 
 test('without tilt the fountain pen uses the right hand hold', () => {
   const a = penLine('fueller', [1, 0.3], 0.5, [0, 0]).pts;
   const b = penLine('fueller', [1, 0.3], 0.5, [40, 40]).pts;
   expect(a.map((p) => p.w)).toEqual(b.map((p) => p.w));
-});
-
-test('the fountain pen never gets thinner than a quarter of the nominal width', () => {
-  const s = penLine('fueller', [1, -1], 0.05);
-  for (const p of s.pts) expect(p.w).toBeGreaterThanOrEqual(0.3 - 1e-9);
 });
 
 test('a pencil stroke is grey and between 0.6 and 1.4 times the nominal width', () => {
@@ -421,4 +410,237 @@ test('odd input never gives NaN widths', () => {
     expect(Number.isFinite(p.w)).toBe(true);
     expect(p.w).toBeGreaterThan(0);
   }
+});
+
+// ---------- Füllfeder wie GoodNotes (Paket 3b) ----------
+
+/** Nennbreite 0,2 mm in Seiteneinheiten. */
+const NOM = 1.2;
+
+/**
+ * Füllfeder wie am iPad stark gezoomt: Ein Bildschirmpunkt ist 0,1 Seiteneinheiten, der Mindestabstand 0,05 lässt dichte
+ * Punkte durch. Ohne Glättung, damit die Punkte genau dort liegen, wo der Stift war. Ohne Angabe die Startwerte der Regler.
+ */
+function fueller(settings: Partial<FuellerSettings> = {}): StrokeBuilder {
+  return new StrokeBuilder({
+    pen: 'fueller',
+    color: 'schwarz',
+    widthMm: 0.2,
+    sigma: 0,
+    t: 1,
+    minDist: 0.05,
+    pxUnit: 0.1,
+    fueller: { ...DEFAULT_FUELLER, ...settings },
+  });
+}
+
+type XY = { x: number; y: number };
+
+/** Zahlen von 0 bis 1, die für denselben Startwert (nicht 0) immer gleich sind. */
+function random(seed: number): () => number {
+  return () => {
+    seed = (seed * 16807) % 2147483647;
+    return seed / 2147483647;
+  };
+}
+
+/** Punkte alle `step` Einheiten von `from` aus in Richtung `dir`, `len` Einheiten weit. `from` selbst ist nicht dabei. */
+function straight(from: XY, dir: [number, number], len: number, step: number): XY[] {
+  const l = Math.hypot(dir[0], dir[1]);
+  return Array.from({ length: Math.round(len / step) }, (_, i) => ({
+    x: from.x + (dir[0] / l) * step * (i + 1),
+    y: from.y + (dir[1] / l) * step * (i + 1),
+  }));
+}
+
+/** `n` Punkte zufällig im Umkreis `r` um `c`: ein Stift, der dort steht und zittert. */
+function around(c: XY, r: number, n: number, rnd: () => number): XY[] {
+  return Array.from({ length: n }, () => {
+    const a = 2 * Math.PI * rnd();
+    const d = r * Math.sqrt(rnd());
+    return { x: c.x + d * Math.cos(a), y: c.y + d * Math.sin(a) };
+  });
+}
+
+/** Gibt die Punkte mit gleichem Druck und gleicher Neigung in den Strich (Neigung 40, 40: der Stift zeigt nach rechts unten). */
+function feed(b: StrokeBuilder, pts: XY[], pressure = 0.45, tilt: [number, number] = [40, 40]): void {
+  for (const p of pts) b.add(p.x, p.y, pressure, tilt[0], tilt[1]);
+}
+
+const widths = (pts: readonly { w: number }[]): number[] => pts.map((p) => p.w);
+
+test('a resting, jittering pen does not grow a blob', () => {
+  const b = fueller();
+  const start = { x: 100, y: 100 };
+  const line = straight(start, [1, 1], 20, 0.1);
+  feed(b, [start, ...line]);
+  const moving = b.points()[b.points().length - 1].w;
+  const n = b.points().length;
+  // Der Stift bleibt am Ende stehen und zittert: 200 Punkte im Umkreis von 0,3 Einheiten (3 Bildschirmpunkte).
+  feed(b, around(line[line.length - 1], 0.3, 200, random(4711)));
+  // Beim Schreiben (points und stroke): Die Verjüngung am Ende kommt erst beim Abheben dazu.
+  const resting = widths(b.points().slice(n));
+  expect(resting.length).toBeGreaterThan(100);
+  expect(Math.max(...resting)).toBeLessThanOrEqual(1.05 * Math.min(...resting));
+  // Kein Klecks: Im Stand wird die Linie auch nicht breiter als in der Bewegung davor.
+  expect(Math.max(...resting)).toBeLessThanOrEqual(1.05 * moving);
+  expect(widths(b.stroke().pts.slice(n))).toEqual(resting);
+});
+
+test('jitter at the start does not eat the taper', () => {
+  const start = { x: 100, y: 100 };
+  const line = straight(start, [1, 1], 20, 0.1);
+  const at = line[44]; // 4,5 Einheiten vom Start, mitten in der Verjüngung am Anfang
+  const widthAt = (b: StrokeBuilder): number => b.points().find((p) => p.x === at.x && p.y === at.y)!.w;
+  const calm = fueller();
+  feed(calm, [start, ...line]);
+  // Der Stift setzt am Startpunkt auf, zittert dort 200 Punkte lang im Umkreis von 0,3 Einheiten und zieht dann los.
+  const shaky = fueller();
+  feed(shaky, [start, ...around(start, 0.3, 200, random(42)), ...line]);
+  expect(shaky.points().length).toBeGreaterThan(calm.points().length + 100);
+  const full = calm.points()[calm.points().length - 1].w;
+  expect(widthAt(calm)).toBeLessThan(0.85 * full); // dort wirkt die Verjüngung noch
+  expect(Math.abs(widthAt(shaky) / widthAt(calm) - 1)).toBeLessThanOrEqual(0.03);
+});
+
+test('a slow, jittery line keeps a smooth edge', () => {
+  // Nach rechts unten, Punkte alle 0,15 Einheiten, quer dazu bis zu 0,08 Einheiten Zittern, 60 Einheiten lang.
+  const rnd = random(2026);
+  const dir = { x: Math.SQRT1_2, y: Math.SQRT1_2 };
+  const pts = Array.from({ length: 401 }, (_, i) => {
+    const q = (2 * rnd() - 1) * 0.08;
+    return { x: 100 + dir.x * 0.15 * i - dir.y * q, y: 100 + dir.y * 0.15 * i + dir.x * q };
+  });
+  const b = fueller();
+  feed(b, pts);
+  const along = (p: XY): number => (p.x - 100) * dir.x + (p.y - 100) * dir.y;
+  const done = b.finish().pts;
+  let pairs = 0;
+  for (let i = 1; i < done.length; i++) {
+    // Nur außerhalb der Verjüngungen (je 9 Einheiten an jedem Ende, mit etwas Rand).
+    if (along(done[i - 1]) < 10 || along(done[i]) > 50) continue;
+    pairs++;
+    expect(Math.abs(done[i].w / done[i - 1].w - 1), `Punkt ${i}`).toBeLessThanOrEqual(0.03);
+  }
+  expect(pairs).toBeGreaterThan(200);
+});
+
+test('the fountain pen is thick along the pen and thin across it', () => {
+  // Neigung (40, 40): Der Stift zeigt nach rechts unten. Rundung 0 ist die ganz flache Feder, Druck 0,45 der mittlere Druck.
+  const middle = (dir: [number, number]): number => {
+    const b = fueller({ rundung: 0 });
+    const start = { x: 100, y: 100 };
+    feed(b, [start, ...straight(start, dir, 60, 0.15)]);
+    const pts = b.finish().pts;
+    return pts[Math.floor(pts.length / 2)].w;
+  };
+  expect(Math.abs(middle([1, 1]) / (1.7 * NOM) - 1)).toBeLessThanOrEqual(0.05);
+  expect(Math.abs(middle([1, -1]) / (0.3 * NOM) - 1)).toBeLessThanOrEqual(0.05);
+});
+
+test('both ends taper when the stroke is finished', () => {
+  const start = { x: 100, y: 100 };
+  const pts = [start, ...straight(start, [1, 1], 30, 0.15)];
+  // Die Grundbreite je Punkt: derselbe Strich ohne Verjüngung (Schärfe 0).
+  const blunt = fueller({ schaerfe: 0 });
+  feed(blunt, pts);
+  const base = widths(blunt.finish().pts);
+  const b = fueller(); // Schärfe 1
+  feed(b, pts);
+  const live = widths(b.points());
+  const done = widths(b.finish().pts);
+  const last = done.length - 1;
+  const mid = Math.floor(last / 2);
+  expect(base[0]).toBeCloseTo(NOM, 9); // am Anfang noch ohne Richtung: Federfaktor 1
+  expect(base[mid]).toBeCloseTo(1.469 * NOM, 9); // entlang der Feder bei Rundung 33 %
+  expect(done[0]).toBeCloseTo(0.15 * base[0], 9);
+  expect(done[last]).toBeCloseTo(0.15 * base[last], 9);
+  expect(done[mid]).toBeCloseTo(base[mid], 9);
+  // Beim Schreiben läuft nur der Anfang spitz zu, das Ende hat noch die volle Breite.
+  expect(live).toHaveLength(done.length);
+  expect(live[0]).toBeCloseTo(0.15 * base[0], 9);
+  expect(live[last]).toBeCloseTo(base[last], 9);
+});
+
+test('a short stroke tapers on half its length', () => {
+  // 6 Einheiten (1 mm): An jedem Ende ist die Verjüngung nur 3 Einheiten lang, die Mitte hat die volle Breite.
+  const start = { x: 100, y: 100 };
+  const pts = [start, ...straight(start, [1, 0], 6, 0.25)];
+  const blunt = fueller({ schaerfe: 0 });
+  feed(blunt, pts);
+  const base = widths(blunt.finish().pts);
+  const b = fueller();
+  feed(b, pts);
+  const done = b.finish().pts;
+  const last = done.length - 1;
+  const mid = done.findIndex((p) => p.x === 103); // Weg 3
+  expect(mid).toBe(12);
+  expect(done[mid].w).toBeCloseTo(base[mid], 9);
+  expect(done[0].w).toBeCloseTo(0.15 * base[0], 9);
+  expect(done[last].w).toBeCloseTo(0.15 * base[last], 9);
+  // Dazwischen wächst die Breite weich: auf halbem Weg zur Mitte (Weg 1,5) ein Viertel der Verjüngung.
+  const quarter = done.findIndex((p) => p.x === 101.5);
+  expect(done[quarter].w).toBeCloseTo((1 - 0.85 * 0.25) * base[quarter], 9);
+});
+
+test('a tap with the fountain pen keeps a round dot', () => {
+  const b = fueller();
+  b.add(100, 100, 0.45, 40, 40);
+  expect(b.add(100.01, 100, 0.45, 40, 40)).toBe(false); // näher als der Mindestabstand
+  const s = b.finish();
+  // Ohne Weg gibt es keine Richtung (Federfaktor 1) und keine Verjüngung: die volle Grundbreite.
+  const base = NOM * pressureFactor(DEFAULT_FUELLER.druck, 0.45);
+  expect(s.pts).toHaveLength(1);
+  expect(s.pts[0].w).toBeCloseTo(base, 9);
+  expect(s.w).toBeCloseTo(base, 9);
+});
+
+test('extreme settings never give NaN or a width below the floor', () => {
+  for (let m = 0; m < 16; m++) {
+    const o: FuellerSettings = { schaerfe: m & 1, druck: (m >> 1) & 1, rundung: (m >> 2) & 1, stabil: (m >> 3) & 1 };
+    for (const tilt of [0, Number.NaN]) {
+      const make = () =>
+        new StrokeBuilder({ pen: 'fueller', color: 'schwarz', widthMm: 0.2, sigma: STABIL_SIGMA * o.stabil, t: 1, minDist: 0.05, pxUnit: 0.1, fueller: o });
+      const tap = make();
+      tap.add(50, 50, 0, tilt, tilt);
+      const short = make();
+      short.add(50, 60, Number.NaN, tilt, tilt);
+      short.add(50.1, 60, 1, tilt, tilt);
+      const wave = make();
+      // Eine Welle, der Druck wechselt zwischen 0, NaN und 1.
+      for (let i = 0; i <= 200; i++) wave.add(100 + i * 0.15, 100 + 5 * Math.sin(i / 15), [0, Number.NaN, 1][i % 3], tilt, tilt);
+      for (const [name, b] of [['tap', tap], ['short', short], ['wave', wave]] as const) {
+        for (const s of [b.stroke(), b.finish()]) {
+          const label = `${name} ${JSON.stringify(o)} Neigung ${tilt}`;
+          expect(Number.isFinite(s.w), label).toBe(true);
+          expect(widths(s.pts).filter((w) => !(Number.isFinite(w) && w >= 0.12)), label).toEqual([]);
+        }
+      }
+    }
+  }
+});
+
+test('other pens are unchanged', () => {
+  // Die Einstellungen der Füllfeder ändern bei den anderen Stiften nichts, und finish() ist dort gleich stroke().
+  const extreme: FuellerSettings = { schaerfe: 1, druck: 1, rundung: 0, stabil: 1 };
+  for (const pen of ['kugel', 'fineliner', 'bleistift'] as const) {
+    const plain = new StrokeBuilder({ pen, color: 'blau', widthMm: 0.2, sigma: 1.6, t: 1, minDist: 0.6 });
+    const set = new StrokeBuilder({ pen, color: 'blau', widthMm: 0.2, sigma: 1.6, t: 1, minDist: 0.6, fueller: extreme, pxUnit: 0.1 });
+    jitterPoints(40).forEach((p, i) => {
+      plain.add(p.x, p.y, [0.2, 0.5, 0.9][i % 3], 40, 40);
+      set.add(p.x, p.y, [0.2, 0.5, 0.9][i % 3], 40, 40);
+    });
+    const s = plain.stroke();
+    expect(plain.finish(), pen).toEqual(s);
+    expect({ ...set.stroke(), id: s.id }, pen).toEqual(s);
+    expect({ ...set.finish(), id: s.id }, pen).toEqual(s);
+  }
+  // Die Breiten wie in den Tests oben: Kugelschreiber 1,2 × (0,7 + 0,6 × geglätteter Druck), Fineliner 1,25-fach.
+  const ball = builder(1.6);
+  [0.2, 1.0, 1.0].forEach((p, i) => ball.add(i * 10, 0, p));
+  widths(ball.finish().pts).forEach((w, i) => expect(w).toBeCloseTo([0.984, 1.1568, 1.27776][i], 9));
+  expect(ball.finish().w).toBeCloseTo(1.13952, 9);
+  const liner = new StrokeBuilder({ pen: 'fineliner', color: 'schwarz', widthMm: 0.2, sigma: 0, t: 1, minDist: 0.5 });
+  for (let i = 0; i < 40; i++) liner.add(2 * i, 0, i % 2 ? 0.9 : 0.1);
+  for (const w of widths(liner.finish().pts)) expect(w).toBeCloseTo(1.5, 9);
 });
