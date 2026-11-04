@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import type { SyncEngine } from '../../src/sync/engine';
-import { A, B, S, httpError, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
+import { A, B, S, httpError, quiet, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
 
 let h: Harness;
 let fake: FakeClient;
@@ -453,7 +453,25 @@ test('coming online sends what is waiting', async () => {
   await until(() => e.status.value.state === 'gesichert');
 });
 
-test('every 3 minutes it polls, and sends only when something is waiting', async () => {
+test('the poll does not send changes whose waiting time still runs', async () => {
+  await startIdle(); // der Takt der Abfrage beginnt jetzt, bei 0
+  await e.write(S, svgPage('a'), 'svg');
+  await vi.advanceTimersByTimeAsync(100_000);
+  await e.write(S, svgPage('a', 'b'), 'svg'); // die 2 Minuten Pause beginnen neu und enden bei 220_000 ms
+  await vi.advanceTimersByTimeAsync(80_000); // der Takt bei 180_000 ms fragt ab, die Striche warten weiter
+  await until(() => fake.finished('head') === 2);
+  await quiet();
+  expect(fake.count('put')).toBe(0);
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 1 });
+
+  await vi.advanceTimersByTimeAsync(39_999);
+  expect(fake.count('put')).toBe(0);
+  await vi.advanceTimersByTimeAsync(1); // 220_000 ms: 2 Minuten nach dem letzten Strich
+  await until(() => fake.files[S]?.text === svgPage('a', 'b'));
+  expect(fake.count('put')).toBe(1);
+});
+
+test('the poll still retries what failed', async () => {
   await startIdle();
   await vi.advanceTimersByTimeAsync(180_000); // erster Takt: nichts wartet, es wird nur abgefragt
   await until(() => fake.count('head') === 2);
@@ -461,12 +479,28 @@ test('every 3 minutes it polls, and sends only when something is waiting', async
 
   fake.offline = true;
   await e.write(A, 'x', 'md');
-  await vi.advanceTimersByTimeAsync(179_000); // die Wartezeit des Schreibens läuft ab, das Hochladen scheitert
+  await vi.advanceTimersByTimeAsync(10_000); // die Wartezeit läuft ab, das Hochladen scheitert am Netz
   await until(() => e.status.value.state === 'wartet');
+  expect(e.status.value.pending).toBe(1); // die Änderung bleibt, eine Wartezeit läuft nicht mehr
   fake.offline = false;
-  await vi.advanceTimersByTimeAsync(1_000); // zweiter Takt
+  await vi.advanceTimersByTimeAsync(169_999);
+  expect(fake.count('put')).toBe(1); // nur der gescheiterte Versuch
+  await vi.advanceTimersByTimeAsync(1); // zweiter Takt, ohne neue Änderung
   await until(() => fake.files[A]?.text === 'x');
+  await until(() => e.status.value.state === 'gesichert');
   expect(fake.count('head')).toBeGreaterThanOrEqual(3);
+});
+
+test('queued entries of an earlier session go up when the engine starts', async () => {
+  // iPadOS beendet die App, während die Wartezeiten laufen: Die Änderungen sind gespeichert, aber nicht hochgeladen.
+  await e.write(S, svgPage('a'), 'svg');
+  await e.write(A, 'x', 'md');
+  e.stop(); // die Zeitgeber der beendeten App laufen nie ab
+  const next = await h.restart();
+  await next.start(); // ohne Wartezeit und ohne Takt der Abfrage: Die Zeit steht still
+  await until(() => fake.files[S]?.text === svgPage('a') && fake.files[A]?.text === 'x');
+  await until(() => next.status.value.pending === 0);
+  expect(fake.count('put')).toBe(2);
 });
 
 test('stop removes the listeners and the timers', async () => {

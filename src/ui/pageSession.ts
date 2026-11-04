@@ -16,7 +16,7 @@ export type PageSurface = {
 };
 
 /** Was die Sitzung von der Engine braucht. */
-export type SessionEngine = Pick<SyncEngine, 'read' | 'write' | 'flush' | 'addRemoteChangeListener'>;
+export type SessionEngine = Pick<SyncEngine, 'read' | 'write' | 'addRemoteChangeListener'>;
 
 /**
  * `bereit`: die Seite ist gelesen. `unlesbar`: die Datei ist kaputt (sie lässt sich nicht als Seite lesen) und wird nie
@@ -148,7 +148,10 @@ export class PageSession {
     return run;
   }
 
-  /** Die Seite wird verlassen: Die Engine lädt hoch, sobald alles lokal gespeichert ist. */
+  /**
+   * Die Seite wird verlassen: Was noch zu speichern ist, wird gespeichert. Hochladen macht die Engine nach ihrer Wartezeit oder
+   * sofort, wenn die App in den Hintergrund geht. Ein Wechsel der Seite allein lädt nichts hoch.
+   */
   close(): void {
     this.#closed = true;
     this.#stopListening();
@@ -157,7 +160,6 @@ export class PageSession {
       await this.#idle();
       // Was sich nicht speichern ließ, bekommt einen letzten Versuch, bevor die Seite verschwindet.
       if (this.#next !== null) await this.#startWriting();
-      await this.#o.engine.flush();
     })().catch(() => undefined);
   }
 

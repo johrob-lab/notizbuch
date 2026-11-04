@@ -43,7 +43,7 @@ test('queues while offline', async () => {
   fake.offline = true;
   await e.write(A, 'x', 'md');
   await e.write(B, 'y', 'md');
-  await vi.advanceTimersByTimeAsync(2000);
+  await vi.advanceTimersByTimeAsync(10_000); // die Wartezeit für Text läuft ab, das Hochladen scheitert am Netz
   await until(() => e.status.value.state === 'wartet');
   expect(e.status.value).toEqual({ state: 'wartet', pending: 2 });
 });
@@ -105,11 +105,11 @@ test('commit message names the file and the device', async () => {
   expect(fake.messages).toEqual(['Notizbuch: 2026-10-29.md (iPad)', 'Notizbuch: 2026-10-29 Tag.svg (iPad)']);
 });
 
-test('text goes up 2 s and ink 10 s after the last change', async () => {
+test('text goes up 10 s and ink 2 min after the last change', async () => {
   await e.write(A, 'x', 'md');
-  await vi.advanceTimersByTimeAsync(1999);
+  await vi.advanceTimersByTimeAsync(9_999);
   await e.write(A, 'xy', 'md'); // jede Änderung beginnt die Wartezeit neu
-  await vi.advanceTimersByTimeAsync(1999);
+  await vi.advanceTimersByTimeAsync(9_999);
   expect(fake.count('put')).toBe(0);
   await vi.advanceTimersByTimeAsync(1);
   await until(() => fake.files[A]?.text === 'xy');
@@ -119,10 +119,54 @@ test('text goes up 2 s and ink 10 s after the last change', async () => {
 
   const page = svgPage('a');
   await e.write(S, page, 'svg');
-  await vi.advanceTimersByTimeAsync(9999);
+  await vi.advanceTimersByTimeAsync(119_999);
   expect(fake.files[S]).toBeUndefined();
   await vi.advanceTimersByTimeAsync(1);
   await until(() => fake.files[S]?.text === page);
+});
+
+test.each([
+  { name: 'handwriting every minute', kind: 'svg' as const, path: S, step: 60_000, pause: 120_000 },
+  { name: 'text every 5 s', kind: 'md' as const, path: A, step: 5_000, pause: 10_000 },
+])('changes that never pause go up 10 min after the first one ($name)', async ({ kind, path, step, pause }) => {
+  const MAX_WAIT = 600_000;
+  let n = 0;
+  const version = (i: number) => (kind === 'svg' ? svgPage(...Array.from({ length: i }, (_, j) => `s${j}`)) : `Fassung ${i}`);
+  const writeNext = () => e.write(path, version(++n), kind);
+  /** Schreibt `count` Fassungen im Abstand von `step` und bleibt bei der letzten stehen. Die Pause ist nie lang genug. */
+  const keepWriting = async (count: number) => {
+    for (let i = 0; i < count; i++) {
+      if (i > 0) await vi.advanceTimersByTimeAsync(step);
+      await writeNext();
+    }
+  };
+  const uploaded = async (count: number) => {
+    await until(() => fake.count('put') === count && fake.files[path]?.text === version(n));
+    await until(() => e.status.value.pending === 0);
+  };
+
+  // Die erste Änderung kommt bei 0, die letzte einen Schritt vor 10 Minuten.
+  await keepWriting(MAX_WAIT / step);
+  await vi.advanceTimersByTimeAsync(step - 1);
+  expect(fake.count('put')).toBe(0);
+  await vi.advanceTimersByTimeAsync(1); // 10 Minuten nach der ersten Änderung, ohne Pause dazwischen
+  await uploaded(1);
+
+  // Weiter ohne Pause: Die Obergrenze zählt ab der ersten Änderung nach diesem Durchgang, nicht ab der ersten überhaupt.
+  await vi.advanceTimersByTimeAsync(step);
+  await keepWriting(MAX_WAIT / step);
+  await vi.advanceTimersByTimeAsync(step - 1);
+  expect(fake.count('put')).toBe(1);
+  await vi.advanceTimersByTimeAsync(1);
+  await uploaded(2);
+
+  // Mit einer Pause geht es früher: nach der Wartezeit ab der letzten Änderung.
+  await vi.advanceTimersByTimeAsync(step);
+  await keepWriting(2);
+  await vi.advanceTimersByTimeAsync(pause - 1);
+  expect(fake.count('put')).toBe(2);
+  await vi.advanceTimersByTimeAsync(1);
+  await uploaded(3);
 });
 
 test('a new file goes up without sha and its sha is kept', async () => {

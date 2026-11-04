@@ -988,7 +988,7 @@ test('an existing meeting is opened instead of a second one', async ({ page }) =
 
 test('an existing meeting that only this device has is opened too', async ({ page }) => {
   // Die Besprechung liegt nur im Speicher dieses Geräts: Das Hochladen scheitert, also steht sie in keiner Liste von GitHub.
-  // (Beim Verlassen einer Seite lädt die Engine sofort hoch, sonst wäre sie schon auf GitHub, bevor man zurückkommt.)
+  // (So bleibt es auch, wenn zwischendurch hochgeladen wird, zum Beispiel nach der Wartezeit.)
   const repo = await openSeeded(page, DAY);
   repo.failWrites = true;
   await meetings(page).getByRole('button', { name: /Abstimmung Beispiel 2027/ }).click();

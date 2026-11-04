@@ -452,8 +452,12 @@ test('switching pages never loses a stroke', async ({ page }) => {
   await waitForPageOf(page, 'tag', '2026-10-30');
   expect(await strokeIds(page)).toEqual([second]);
 
-  // Beim Verlassen jeder Seite geht ihr Stand hoch.
-  await expect.poll(() => repo.puts.map((p) => p.path).sort()).toEqual([TAG, `${FILES}/2026-10-30 Tag.svg`].sort());
+  // Ein Seitenwechsel lädt nichts hoch: Beide Seiten sind gespeichert und warten. Verlässt man die App, gehen beide hoch.
+  const both = [TAG, `${FILES}/2026-10-30 Tag.svg`].sort();
+  await expect.poll(async () => Object.keys(await queued(page)).sort()).toEqual(both);
+  expect(repo.puts).toEqual([]);
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.map((p) => p.path).sort()).toEqual(both);
 });
 
 test('the status pill is in the top bar, once', async ({ page }) => {

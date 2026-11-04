@@ -652,7 +652,9 @@ test('leaving the page in the middle of a stroke keeps the stroke', async ({ pag
   await writer.move(320, 1000);
   await leaveFor(page, NEXT_DAY); // der Stift liegt noch auf dem Bildschirm
   await waitForPageOf(page, '2026-10-30');
-  // Beim Verlassen einer Seite lädt die Engine hoch: Der Strich ist schon auf GitHub (im Mock).
+  // Der Strich ist gespeichert. Hoch geht er, sobald die App in den Hintergrund geht: Dann ist er auf GitHub (im Mock).
+  await expect.poll(async () => (await queued(page))[TAG] ?? '').toContain(STROKE);
+  await sendToBackground(page);
   await expect.poll(() => repo.puts.length).toBe(1);
   expect(repo.puts[0].path).toBe(TAG);
   expect(repo.puts[0].text).toContain(STROKE);
@@ -671,6 +673,8 @@ test('leaving the page in the middle of an erase keeps the erase', async ({ page
   expect(await strokeIds(page)).toEqual([]);
   await leaveFor(page, NEXT_DAY);
   await waitForPageOf(page, '2026-10-30');
+  await expect.poll(async () => Object.keys(await queued(page))).toEqual([TAG]); // gespeichert, hoch geht es im Hintergrund
+  await sendToBackground(page);
   await expect.poll(() => repo.puts.length).toBe(1);
   expect(repo.puts[0].path).toBe(TAG);
   expect(repo.puts[0].text).not.toContain('data-id="a"');

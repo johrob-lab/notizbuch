@@ -13,8 +13,12 @@ export { statusLabel, type SyncState, type SyncStatus } from './status';
  */
 export type SyncClient = Pick<GitHubClient, 'getFile' | 'putFile' | 'deleteFile' | 'listDir' | 'headSha' | 'changedFiles'>;
 
-const TEXT_DELAY_MS = 2000;
-const INK_DELAY_MS = 10_000;
+/** Text (die Tagesnotiz) geht hoch, wenn so lange keine neue Änderung kam: Mehrere Haken kurz hintereinander werden ein Commit. */
+const TEXT_DELAY_MS = 10_000;
+/** Handschrift geht hoch, wenn so lange kein neuer Strich kam. */
+const INK_DELAY_MS = 120_000;
+/** Spätestens so lange nach der ersten Änderung einer Art seit dem letzten Durchgang geht sie hoch, auch ohne jede Pause. */
+const MAX_WAIT_MS = 600_000;
 const POLL_INTERVAL_MS = 180_000;
 /** So oft versucht ein Abgleich eine Datei zusammenzuführen, die sich währenddessen schon wieder geändert hat. */
 const CONFLICT_ATTEMPTS = 3;
@@ -37,6 +41,11 @@ type Remote = { text: string; sha: string };
 /** Die Fassung auf GitHub, aus der der Text entstand, den die Seite gerade hält. */
 type PageVersion = { sha: string | null; baseText: string | null };
 type Timer = ReturnType<typeof setTimeout>;
+/**
+ * Die Wartezeit einer Art: wann ihre erste Änderung seit dem letzten Durchgang kam (`null`: keine), und ihr Zeitgeber, solange
+ * er läuft (`undefined`, sobald er abgelaufen oder gelöscht ist).
+ */
+type Wait = { first: number | null; timer: Timer | undefined };
 
 /** Fehler, bei denen der Abgleich anhält und alles in der Warteschlange bleibt: kein Netz, Ratenlimit, kein Zugang. */
 function isStop(error: unknown): boolean {
@@ -106,8 +115,8 @@ export class SyncEngine {
    * hier etwas anderes als das Hochgeladene, und die Fassung in `#page` darf nicht darauf vorrücken.
    */
   readonly #pageText = new Map<string, string>();
-  #textTimer: Timer | undefined;
-  #inkTimer: Timer | undefined;
+  /** Je Art eine Wartezeit, nur im Arbeitsspeicher: Was nach einem Neustart noch wartet, lädt `start` sofort hoch. */
+  readonly #waits: Record<'md' | 'svg', Wait> = { md: { first: null, timer: undefined }, svg: { first: null, timer: undefined } };
   #pollTimer: ReturnType<typeof setInterval> | undefined;
   #stopListening: (() => void) | undefined;
   #started = false;
@@ -179,7 +188,9 @@ export class SyncEngine {
     };
     this.#pollTimer = setInterval(() => {
       void this.pollRemote();
-      if (this.#pending > 0) void this.flush();
+      // Läuft eine Wartezeit, lädt sie hoch, wenn sie um ist: Der Takt soll die Pause beim Schreiben nicht abkürzen. Ohne laufende
+      // Wartezeit wartet nur noch, was nicht hochging (kein Netz, ein Fehler): Der Takt versucht es neu.
+      if (this.#pending > 0 && !this.#waiting) void this.flush();
     }, POLL_INTERVAL_MS);
 
     void this.pollRemote();
@@ -191,8 +202,10 @@ export class SyncEngine {
     this.#stopListening?.();
     this.#stopListening = undefined;
     clearInterval(this.#pollTimer);
-    clearTimeout(this.#textTimer);
-    clearTimeout(this.#inkTimer);
+    for (const wait of Object.values(this.#waits)) {
+      clearTimeout(wait.timer);
+      wait.timer = undefined;
+    }
     this.#started = false;
   }
 
@@ -301,7 +314,8 @@ export class SyncEngine {
   }
 
   /**
-   * Speichert sofort lokal und stellt die Änderung in die Warteschlange. Hochgeladen wird nach 2 s (Text) bzw. 10 s (Handschrift).
+   * Speichert sofort lokal und stellt die Änderung in die Warteschlange. Hochgeladen wird nach einer Pause (Text 10 s, Handschrift
+   * 2 Minuten), spätestens 10 Minuten nach der ersten Änderung, und sofort, wenn die App in den Hintergrund geht (`#schedule`).
    * Wirft, wenn sich der Text nicht mit einer wartenden Änderung vereinen lässt, die die Seite noch nicht gelesen hat (siehe unten).
    */
   async write(path: string, text: string, kind: 'md' | 'svg'): Promise<void> {
@@ -453,15 +467,28 @@ export class SyncEngine {
 
   // ---------- Hochladen ----------
 
+  /**
+   * Zwei Wartezeiten, eine je Art. Jede beginnt mit der letzten Änderung ihrer Art neu, endet aber spätestens `MAX_WAIT_MS` nach
+   * der ersten Änderung dieser Art seit dem letzten Durchgang: So geht auch regelmäßig hoch, was ohne Pause geschrieben wird.
+   */
   #schedule(kind: 'md' | 'svg'): void {
-    // Zwei Wartezeiten, jede beginnt mit der letzten Änderung ihrer Art neu.
-    if (kind === 'md') {
-      clearTimeout(this.#textTimer);
-      this.#textTimer = setTimeout(() => void this.flush(), TEXT_DELAY_MS);
-    } else {
-      clearTimeout(this.#inkTimer);
-      this.#inkTimer = setTimeout(() => void this.flush(), INK_DELAY_MS);
-    }
+    const wait = this.#waits[kind];
+    const now = Date.now();
+    wait.first ??= now;
+    const pause = kind === 'md' ? TEXT_DELAY_MS : INK_DELAY_MS;
+    clearTimeout(wait.timer);
+    wait.timer = setTimeout(
+      () => {
+        wait.timer = undefined;
+        void this.flush();
+      },
+      Math.max(0, Math.min(pause, wait.first + MAX_WAIT_MS - now)),
+    );
+  }
+
+  /** Ob gerade eine Wartezeit läuft. Ein Zeitgeber, der abgelaufen oder gelöscht ist, zählt nicht. */
+  get #waiting(): boolean {
+    return Object.values(this.#waits).some((wait) => wait.timer !== undefined);
   }
 
   /**
@@ -501,6 +528,8 @@ export class SyncEngine {
   async #flushPass(): Promise<void> {
     this.#flushAgain = false;
     if (this.#frozen) return; // beendet, während der Durchgang auf das Schloss wartete
+    // Der Durchgang nimmt mit, was wartet. Was ab jetzt geschrieben wird, beginnt eine neue Wartezeit mit eigener Obergrenze.
+    for (const wait of Object.values(this.#waits)) wait.first = null;
     await this.#refreshPending(); // die Warteschlange kann aus einer früheren Sitzung oder einem anderen Tab stammen
     await this.#flushOnce();
     await this.#refreshPending();
