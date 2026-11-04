@@ -11,7 +11,6 @@ import {
   DEFAULT_FUELLER,
   DEFAULT_PEN_ANGLE,
   MIN_DIST_PX,
-  STABIL_SIGMA,
   isShape,
   nibShape,
   penAngle,
@@ -798,7 +797,8 @@ export class InkSurface {
 
   /**
    * Zeichnet den entstehenden Strich weiter: Was fest geworden ist, kommt einmal auf die Live-Ebene, das Endstück (höchstens
-   * K + 3 Punkte) wird auf der Vorhersage-Ebene neu gezeichnet. So kostet jede Bewegung gleich viel, egal wie lang der Strich ist.
+   * K + 3 Punkte, bei der Füllfeder ab der ersten Richtung die Punkte in 2,5 σ vor dem Ende) wird auf der Vorhersage-Ebene neu
+   * gezeichnet. So kostet jede Bewegung gleich viel, egal wie lang der Strich ist.
    */
   private liveUpdate(): number {
     const d = this.drawing;
@@ -1002,8 +1002,8 @@ export class InkSurface {
       pen,
       color: this.color,
       widthMm: this.widthMm,
-      // Die Füllfeder glättet mit ihrer Strich-Stabilisierung statt mit der Glättung aus den Einstellungen.
-      sigma: pen === 'fueller' ? STABIL_SIGMA * this.fueller.stabil : this.opts.sigma,
+      // Die Glättung aus den Einstellungen. Die Füllfeder glättet stattdessen mit ihrer Strich-Stabilisierung (aus `fueller` und `pxUnit`).
+      sigma: this.opts.sigma,
       t: Date.now(),
       minDist: MIN_DIST_PX / this.view.s, // auf dem Bildschirm immer gleich weit, egal wie weit hineingezoomt ist
       // Nur die Füllfeder liest diese beiden: ihre Regler und wie viele Seiteneinheiten ein Bildschirmpunkt gerade ist.

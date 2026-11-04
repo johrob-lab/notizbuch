@@ -51,7 +51,7 @@ export type FuellerSettings = {
   druck: number;
   /** Rundung der Spitze: 0 ganz flache Feder, 1 runde Spitze, die Linie ist überall gleich breit. */
   rundung: number;
-  /** Strich-Stabilisierung: glättet die Orte mit σ = `STABIL_SIGMA` × stabil Punkten. */
+  /** Strich-Stabilisierung: glättet die Orte nach der Strecke mit σ = `stabilSigmaPx(stabil)` Bildschirmpunkten (1,5 bis 12). */
   stabil: number;
 };
 
@@ -91,8 +91,16 @@ export const DIR_LEN = 2;
 /** Weglänge (Seiteneinheiten), über die der Druck geglättet wird. Steht der Stift still, bleibt der Druck. */
 export const PRESS_LEN = 1.5;
 
-/** Die Strich-Stabilisierung glättet die Orte mit σ = `STABIL_SIGMA` × stabil, gemessen in Punkten. */
-export const STABIL_SIGMA = 6;
+/**
+ * Die Strich-Stabilisierung glättet die Orte der Füllfeder nach der Strecke, mit σ in Bildschirmpunkten: so viele bei 0 % ...
+ */
+export const STABIL_MIN_PX = 1.5;
+
+/** ... und so viele bei 100 %. Dazwischen wächst σ gleichmäßig (`stabilSigmaPx`), beim Startwert 14 % sind es knapp 3. */
+export const STABIL_MAX_PX = 12;
+
+/** So viele σ weit (Strecke) reicht die Glättung zu jeder Seite. Weiter weg wäre das Gewicht unter 5 %. */
+export const STABIL_REACH = 2.5;
 
 /** Mindestabstand zweier Stiftpunkte in Bildschirmpunkten: Die Fläche gibt `minDist` = `MIN_DIST_PX` / Zoom mit. */
 export const MIN_DIST_PX = 0.6;
@@ -119,6 +127,11 @@ export function doubled(angle: number): Doubled {
 /** Druckfaktor der Füllfeder: 1 bei mittlerem Druck, von 1 − 0,8 × `druck` (leicht) bis 1 + 0,8 × `druck` (fest). */
 export function pressureFactor(druck: number, pressure: number): number {
   return 1 + druck * PRESSURE_SPAN * (2 * pressureRamp(pressure) - 1);
+}
+
+/** σ der Strich-Stabilisierung in Bildschirmpunkten: von `STABIL_MIN_PX` bei `stabil` 0 bis `STABIL_MAX_PX` bei 1. */
+export function stabilSigmaPx(stabil: number): number {
+  return STABIL_MIN_PX + (STABIL_MAX_PX - STABIL_MIN_PX) * stabil;
 }
 
 /**

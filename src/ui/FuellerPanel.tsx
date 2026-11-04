@@ -2,7 +2,7 @@ import { signal } from '@preact/signals';
 import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { GestureFilter } from '../ink/gestures';
 import { outlineD } from '../ink/outline';
-import { FLAT_NIB, PRESSURE_SPAN, STABIL_SIGMA, type FuellerSettings } from '../ink/pens';
+import { FLAT_NIB, PRESSURE_SPAN, type FuellerSettings } from '../ink/pens';
 import { StrokeBuilder, fmtNum } from '../ink/stroke';
 import { INK, MM, WIDTH_MM } from '../ink/types';
 import { inkPrefs, setInkPrefs } from './inkPrefs';
@@ -46,8 +46,9 @@ const CURVE_PRESSURE = { ends: 0.2, middle: 0.8 };
  * Einstellung dieser Breite passt: Beim Schieben eines Reglers bleibt die Kurve stehen, nur der Strich ändert sich.
  */
 export function previewD(o: FuellerSettings, widthMm: number): { d: string; viewBox: string } {
-  // Der Mindestabstand ist der Punktabstand, so fällt kein Punkt weg. Seiteneinheiten je Bildschirmpunkt leitet der Builder daraus ab.
-  const builder = new StrokeBuilder({ pen: 'fueller', color: 'schwarz', widthMm, sigma: STABIL_SIGMA * o.stabil, t: 0, minDist: STEP, fueller: o });
+  // Der Mindestabstand ist der Punktabstand, so fällt kein Punkt weg. Seiteneinheiten je Bildschirmpunkt leitet der Builder daraus ab
+  // und rechnet damit das σ der Strich-Stabilisierung. `sigma` gilt nur für die anderen Stifte.
+  const builder = new StrokeBuilder({ pen: 'fueller', color: 'schwarz', widthMm, sigma: 0, t: 0, minDist: STEP, fueller: o });
   const n = Math.round(CURVE.w / STEP);
   for (let i = 0; i <= n; i++) {
     const f = i / n;

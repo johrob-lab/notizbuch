@@ -8,6 +8,7 @@ import {
   penAngle,
   pressureFactor,
   pressureRamp,
+  stabilSigmaPx,
   taperFactor,
 } from '../../src/ink/pens';
 
@@ -65,6 +66,14 @@ test('taperFactor makes sharp or round ends', () => {
     expect(taperFactor(1, s, 0)).toBe(1);
     expect(taperFactor(1, s, -2)).toBe(1);
   }
+});
+
+test('stabilSigmaPx grows evenly from 1.5 to 12 screen points', () => {
+  expect(stabilSigmaPx(0)).toBe(1.5);
+  expect(stabilSigmaPx(1)).toBe(12);
+  // Startwert 14 %: knapp 3 Bildschirmpunkte.
+  expect(stabilSigmaPx(0.14)).toBeCloseTo(2.97, 9);
+  expect(stabilSigmaPx(0.5)).toBeCloseTo(6.75, 9);
 });
 
 test('nibShape is a circle at 100 % roundness and turns with the pen', () => {

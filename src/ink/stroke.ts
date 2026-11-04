@@ -10,12 +10,14 @@ import {
   MIN_DIST_PX,
   PRESS_LEN,
   SMOOTH_NEW,
+  STABIL_REACH,
   TAPER_LEN,
   doubled,
   nibFactorR,
   penAngle,
   pressureFactor,
   pressureRamp,
+  stabilSigmaPx,
   taperFactor,
   type Doubled,
   type FuellerSettings,
@@ -65,6 +67,8 @@ export function newStrokeId(t: number): string {
  *
  * Die Füllfeder rechnet ihre Breite mit den Reglern (`FuellerSettings`) und glättet Druck und Richtung über den Weg statt
  * je Punkt: Stark gezoomt liegen die Stiftpunkte so dicht, dass sonst das Zittern des Stifts die Breite springen ließe.
+ * Ebenso glättet sie die Orte nach der Strecke statt nach der Zahl der Punkte (`smoothArc`), mit σ aus der
+ * Strich-Stabilisierung in Bildschirmpunkten: Wie dicht die Punkte kommen, hängt am Tempo und am Zoom.
  * Beim Schreiben läuft der Anfang spitz zu, `finish()` gibt den fertigen Strich mit beiden spitzen Enden. Steht die erste
  * Richtung fest, rechnet sie die Punkte davor einmal nach, bis dahin ist bei ihr kein Punkt fest (`settled`).
  */
@@ -81,7 +85,7 @@ export class StrokeBuilder {
   };
   private readonly id: string;
   private readonly nomW: number;
-  /** Halbe Fensterbreite der Glättung in Punkten, 0 heißt: nicht glätten. */
+  /** Halbe Fensterbreite der Glättung in Punkten, 0 heißt: nicht glätten. Die Füllfeder glättet nach der Strecke (`smoothArc`). */
   private readonly K: number;
   /** Gewichte des Fensters: `wts[j]` gehört zu einem Punkt im Abstand j. */
   private readonly wts: number[];
@@ -113,12 +117,19 @@ export class StrokeBuilder {
   private readonly ways: number[] = [];
   /** Geglätteter Druck und Stiftrichtung der Punkte, solange die erste Richtung fehlt: Mit ihr werden sie nachgerechnet. */
   private early: { ps: number; nib: Doubled }[] = [];
+  /** σ der Glättung nach Strecke in Seiteneinheiten, 0 heißt: nicht glätten. */
+  private readonly arcSigma: number;
+  /** Je Rohpunkt die Strecke ab dem Anfang: die Summe der Abstände der Rohpunkte, in Seiteneinheiten. */
+  private readonly arc: number[] = [];
+  /** So viele Punkte am Anfang liegen mehr als 2,5 σ (Strecke) vor dem letzten: Ihr geglätteter Ort ändert sich nicht mehr. */
+  private fixed = 0;
 
   /**
    * `minDist` ist der Mindestabstand zwischen zwei Rohpunkten in Seiteneinheiten (die App rechnet
    * 0.6 / Zoom, damit er auf dem Bildschirm gleich bleibt). `t` ist der Beginn des Strichs in Millisekunden.
-   * Nur für die Füllfeder: `fueller` sind die Regler (ohne Angabe die Startwerte), `pxUnit` sind Seiteneinheiten je
-   * Bildschirmpunkt (ohne Angabe aus `minDist`).
+   * `sigma` ist die Glättung in Punkten (`SMOOTHING`) und gilt nicht für die Füllfeder: Sie glättet nach der Strecke mit ihrer
+   * Strich-Stabilisierung. Nur für die Füllfeder: `fueller` sind die Regler (ohne Angabe die Startwerte), `pxUnit` sind
+   * Seiteneinheiten je Bildschirmpunkt (ohne Angabe aus `minDist`).
    */
   constructor(o: {
     pen?: PenKind;
@@ -138,9 +149,13 @@ export class StrokeBuilder {
     };
     this.id = newStrokeId(o.t);
     this.nomW = o.widthMm * MM;
-    const sig = o.sigma;
+    const fueller = this.opts.pen === 'fueller';
+    const sig = fueller ? 0 : o.sigma;
     this.K = sig > 0 ? Math.ceil(2.5 * sig) : 0;
     this.wts = sig > 0 ? Array.from({ length: this.K + 1 }, (_, j) => Math.exp(-(j * j) / (2 * sig * sig))) : [];
+    // σ in Bildschirmpunkten, in Seiteneinheiten umgerechnet: So glättet sie auf dem Bildschirm gleich stark, wie weit auch gezoomt ist.
+    const arcSigma = fueller ? stabilSigmaPx(this.opts.fueller.stabil) * this.opts.pxUnit : 0;
+    this.arcSigma = arcSigma > 0 && Number.isFinite(arcSigma) ? arcSigma : 0;
   }
 
   /**
@@ -161,7 +176,8 @@ export class StrokeBuilder {
     const pt: Pt = { x, y, w: this.opts.pen === 'fueller' ? this.fuellerAt(x, y, last, pv, tiltX, tiltY) : this.widthAt(pv) };
     raw.push(pt);
     this.sumW += pt.w;
-    this.smoothTail();
+    if (this.opts.pen === 'fueller') this.smoothArc();
+    else this.smoothTail();
     return true;
   }
 
@@ -312,12 +328,12 @@ export class StrokeBuilder {
 
   /**
    * Wie viele Punkte am Anfang fest sind: Weitere Stiftpunkte ändern sie nicht mehr (die Glättung reicht nur K Punkte
-   * zurück). Ohne Glättung sind alle Punkte fest. Bei der Füllfeder ist keiner fest, bis die erste Richtung feststeht: Mit
-   * ihr ändert sich noch die Breite der Punkte davor.
+   * zurück). Ohne Glättung sind alle Punkte fest. Bei der Füllfeder sind es die Punkte mehr als 2,5 σ (Strecke) vor dem
+   * letzten, aber keiner, bis die erste Richtung feststeht: Mit ihr ändert sich noch die Breite der Punkte davor.
    */
   settled(): number {
+    if (this.opts.pen === 'fueller') return this.dir ? this.fixed : 0;
     const n = this.raw.length;
-    if (this.opts.pen === 'fueller' && !this.dir) return 0;
     return this.K ? Math.max(0, n - 1 - this.K) : n;
   }
 
@@ -333,8 +349,53 @@ export class StrokeBuilder {
   }
 
   /**
-   * Das Fenster wird zu den Enden hin kleiner: Anfang, Ende und Stiftspitze bleiben genau dort, wo der Stift war.
-   * Ein neuer Punkt ändert nur die letzten K + 1 Punkte, weiter vorn reicht das Fenster nicht bis zu ihm.
+   * Glättung der Orte der Füllfeder nach der Strecke: Jeder Punkt ist das Mittel der Punkte, deren Strecke höchstens `r` von
+   * seiner abliegt, gewichtet mit exp(−d² / 2σ²), `d` der Unterschied der Strecke. `r` ist 2,5 σ und wird zu den Enden hin
+   * kleiner, zu beiden Seiten gleich weit: Anfang, Ende und Stiftspitze bleiben genau dort, wo der Stift war. So glättet sie
+   * gleich stark, ob der Stift seine Punkte dicht (langsam) oder weit auseinander (schnell) schickt. Die Breite bleibt die des
+   * Rohpunkts. Ein neuer Punkt ändert nur Punkte, die noch nicht fest sind (`fixed`): Die Punkte davor liegen mehr als 2,5 σ
+   * vor dem vorigen letzten Punkt, ihr Fenster hängt nicht mehr am Ende und reicht nicht bis zum neuen Punkt.
+   */
+  private smoothArc(): void {
+    const { raw, out, arc } = this;
+    const n = raw.length;
+    const p = raw[n - 1];
+    const end = n > 1 ? arc[n - 2] + dist(raw[n - 2], p.x, p.y) : 0;
+    arc.push(end);
+    const sigma = this.arcSigma;
+    if (!sigma) {
+      out[n - 1] = p;
+      this.fixed = n;
+      return;
+    }
+    const reach = STABIL_REACH * sigma;
+    const k = 1 / (2 * sigma * sigma);
+    for (let i = this.fixed; i < n; i++) {
+      const s = arc[i];
+      const r = Math.min(reach, s, end - s);
+      let lo = i;
+      while (lo > 0 && s - arc[lo - 1] <= r) lo--;
+      let hi = i;
+      while (hi < n - 1 && arc[hi + 1] - s <= r) hi++;
+      let sx = 0;
+      let sy = 0;
+      let sw = 0;
+      for (let j = lo; j <= hi; j++) {
+        const d = arc[j] - s;
+        const w = Math.exp(-d * d * k);
+        sx += w * raw[j].x;
+        sy += w * raw[j].y;
+        sw += w;
+      }
+      out[i] = { x: sx / sw, y: sy / sw, w: raw[i].w };
+    }
+    while (this.fixed < n && end - arc[this.fixed] > reach) this.fixed++;
+  }
+
+  /**
+   * Glättung von Kugelschreiber, Fineliner und Bleistift nach der Zahl der Punkte. Das Fenster wird zu den Enden hin kleiner:
+   * Anfang, Ende und Stiftspitze bleiben genau dort, wo der Stift war. Ein neuer Punkt ändert nur die letzten K + 1 Punkte,
+   * weiter vorn reicht das Fenster nicht bis zu ihm.
    */
   private smoothTail(): void {
     const { raw, out, K, wts } = this;

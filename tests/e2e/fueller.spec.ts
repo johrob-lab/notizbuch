@@ -246,14 +246,16 @@ test('the stored pressure sensitivity reaches the stroke', async ({ page }) => {
 
 test('the stored stabilisation reaches the stroke', async ({ page }) => {
   await openSeeded(page, DAY, { offline: true });
-  // Eine waagrechte Gerade mit Zittern quer dazu: jeder Punkt abwechselnd eine Einheit darüber und darunter.
-  const jagged = (y: number): PathPoint[] => Array.from({ length: 101 }, (_, i): PathPoint => [200 + 2 * i, y + (i % 2 ? 1 : -1)]);
+  // Eine waagrechte Gerade mit Zittern quer dazu: jeder Punkt abwechselnd eine Einheit darüber und darunter, alle 4 Einheiten
+  // einer. Die Füllfeder glättet nach der Strecke: Bei 0 % reicht das (2,5 σ, 3,75 Bildschirmpunkte) nicht bis zum Nachbarpunkt,
+  // bei 100 % (30 Bildschirmpunkte) über mehrere Punkte.
+  const jagged = (y: number): PathPoint[] => Array.from({ length: 101 }, (_, i): PathPoint => [200 + 4 * i, y + (i % 2 ? 1 : -1)]);
   /** Wie weit die gespeicherten Punkte im Mittel von der Geraden bei `y` abweichen (Seiteneinheiten). */
   const offLine = (pts: { y: number }[], y: number): number => pts.reduce((sum, p) => sum + Math.abs(p.y - y), 0) / pts.length;
   const rough = offLine(await writeWith(page, { ...DEFAULT_FUELLER, schaerfe: 0, stabil: 0 }, jagged(900), 1), 900);
   const calm = offLine(await writeWith(page, { ...DEFAULT_FUELLER, schaerfe: 0, stabil: 1 }, jagged(1100), 2), 1100);
-  expect(rough, 'ohne Stabilisierung bleibt das Zittern').toBeGreaterThan(0.8);
-  expect(calm, `Abweichung mit voller Stabilisierung, ohne ${rough}`).toBeLessThanOrEqual(0.7 * rough);
+  expect(rough, 'bei 0 % bleibt das Zittern').toBeGreaterThan(0.8);
+  expect(calm, `Abweichung bei 100 %, bei 0 % ${rough}`).toBeLessThanOrEqual(0.7 * rough);
 });
 
 test('old strokes keep their shape when the settings change', async ({ page }) => {
