@@ -1,5 +1,7 @@
 import { expect, test as base, type Page } from '@playwright/test';
 import { BLEISTIFT_OPACITY, DEFAULT_FUELLER, type PenKind } from '../../src/ink/pens';
+import { StrokeBuilder } from '../../src/ink/stroke';
+import { serializePage } from '../../src/ink/svg';
 import { INK, PAPER, type WidthName } from '../../src/ink/types';
 import { changeStoredSettings, openSeeded, queued, savedSettings } from './helpers/app';
 import { colorAt, inkNear, onPixelCentre, pen, touch, wheel } from './helpers/pointer';
@@ -99,7 +101,7 @@ function centreLine(path: string): { x: number; y: number; w: number }[] {
 
 test('each pen writes its tool into the file', async ({ page }) => {
   await openSeeded(page, DAY, { offline: true });
-  const pens: PenKind[] = ['fineliner', 'fueller', 'bleistift'];
+  const pens: PenKind[] = ['fineliner', 'fueller'];
   for (const [i, chosen] of pens.entries()) {
     await choosePen(page, chosen);
     await pen(page).stroke(line([200, 760 + 80 * i], [400, 780 + 80 * i], 12));
@@ -108,8 +110,8 @@ test('each pen writes its tool into the file', async ({ page }) => {
   const svg = await savedPage(page);
   expect(svg).toContain('data-notizbuch="2"');
   const paths = strokePaths(svg);
-  expect(paths.map((path) => attr(path, 'data-werkzeug')).sort()).toEqual(['bleistift', 'fineliner', 'fueller']);
-  // Füllfeder und Bleistift sind Formen: Die Mittellinie mit der Breite je Punkt steht in `data-linie`.
+  expect(paths.map((path) => attr(path, 'data-werkzeug')).sort()).toEqual(['fineliner', 'fueller']);
+  // Die Füllfeder ist eine Form: Die Mittellinie mit der Breite je Punkt steht in `data-linie`.
   for (const path of paths) expect(attr(path, 'data-linie') !== undefined, path).toBe(attr(path, 'data-werkzeug') !== 'fineliner');
 });
 
@@ -217,92 +219,34 @@ test.describe('in portrait on the iPad', () => {
   });
 });
 
-test('a pencil stroke is grey and see through', async ({ page }) => {
-  await openSeeded(page, DAY);
-  await choosePen(page, 'bleistift');
+/** Ein waagerechter Bleistiftstrich, wie ihn frühere Versionen der App gespeichert haben. */
+function pencilPage(): string {
+  const b = new StrokeBuilder({ pen: 'bleistift', color: 'schwarz', widthMm: 0.4, sigma: 1, t: 5000, minDist: 0.5 });
+  for (let i = 0; i < 40; i++) b.add(250 + i * 5, 1010, 0.6, 20, 30);
+  return serializePage({ kind: 'tag', key: '2026-10-29', meta: {}, strokes: [b.stroke()] }, [], '');
+}
+
+test('a page with pencil strokes is still drawn grey and grainy', async ({ page }) => {
+  await openSeeded(page, DAY, { files: { [TAG]: pencilPage() } });
+  expect(await strokeTools(page)).toEqual(['bleistift']);
   // Hineingezoomt ist der Strich einige Bildpunkte breit: Die Proben auf seiner Mitte liegen ganz im Strich, nicht am Rand.
   await wheel(page, [350, 1010], { dy: -400, ctrl: true });
   await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
-  await pen(page).stroke(line([250, 1010], [450, 1010], 60)); // zwischen zwei Linien des Notizfelds
-  await expect.poll(() => strokeTools(page)).toEqual(['bleistift']);
   expect(await inkNear(page, [350, 1010])).toBeGreaterThan(0);
-  const samples = [await colorAt(page, [300, 1010]), await colorAt(page, [350, 1010]), await colorAt(page, [400, 1010])];
-  // Grau: alle drei Farbkanäle fast gleich.
-  for (const c of samples) expect(Math.max(...c) - Math.min(...c), `Farbe ${c.join(', ')}`).toBeLessThan(30);
-  // Durchscheinend: Das Papier hellt das Graphitgrau #4a4e55 auf (wo die Körnung deckt) oder scheint ganz durch.
-  const grau = [0x4a, 0x4e, 0x55];
-  expect(
-    samples.some((c) => c.every((v, i) => v > grau[i] + 20)),
-    samples.map((c) => c.join(', ')).join(' | '),
-  ).toBe(true);
-  // Auch die dunkelste Stelle auf der Mitte des Strichs, wo die Körnung deckt, ist nur Graphitgrau mit der Deckkraft des
-  // Bleistifts: Das Papier scheint überall durch.
-  const darkest = darkestOf(await Promise.all(line([260, 1010], [440, 1010], 37).map((at) => colorAt(page, at))));
+  const samples = await Promise.all(line([260, 1010], [440, 1010], 37).map((at) => colorAt(page, at)));
+  // Grau: alle drei Farbkanäle fast gleich, auch die dunkelste Stelle.
+  const darkest = darkestOf(samples);
+  expect(Math.max(...darkest) - Math.min(...darkest), `Farbe ${describe(darkest)}`).toBeLessThan(30);
+  // Durchscheinend und körnig: Wo die Körnung deckt, ist es Graphitgrau mit der Deckkraft des Bleistifts, dazwischen scheint das Papier durch.
   const want = pencilOnPaper();
   expect(darkest.every((v, i) => Math.abs(v - want[i]) <= 3), `dunkelste Stelle ${describe(darkest)}, erwartet ${describe(want)}`).toBe(true);
-});
-
-test('while writing, the pencil is nowhere darker than the finished stroke', async ({ page }) => {
-  await openSeeded(page, DAY);
-  await choosePen(page, 'bleistift', 'breit');
-  // Hineingezoomt ist das Gelenk zwischen Live- und Vorhersage-Ebene einige Bildpunkte groß.
-  await wheel(page, [350, 1010], { dy: -400, ctrl: true });
-  await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
-  const pts = line([250, 1010], [450, 1010], 60); // zwischen zwei Linien des Notizfelds
-  const writer = pen(page);
-  await writer.down(...pts[0]);
-  for (const q of pts.slice(1)) await writer.move(...q);
-  await page.waitForTimeout(60); // die Vorhersage ist wieder weg, das Endstück bleibt stehen
-  const shown = await shownColours(page, [250, 1007], [450, 1013]);
-  await writer.up(...pts[pts.length - 1]);
-  // Die Deckkraft wirkt einmal auf den ganzen Strich: Die dunkelste Stelle ist so hell wie beim fertigen Strich, nirgends dunkler.
-  const darkest = darkestOf(shown);
-  const want = pencilOnPaper();
-  expect(darkest.every((v, i) => Math.abs(v - want[i]) <= 3), `dunkelste Stelle ${describe(darkest)}, fertig ${describe(want)}`).toBe(true);
-});
-
-test('a fine pencil tap is visible', async ({ page }) => {
-  await openSeeded(page, DAY);
-  await choosePen(page, 'bleistift', 'fein');
-  // Ein feiner Tipp ist bei ganzer Seitenbreite nur einen Bildpunkt groß. Mit Körnung fiele er an manchen Stellen ganz in ein
-  // Loch. Getippt wird darum an vielen Stellen, jede genau auf die Mitte eines Bildpunkts.
-  const spots = await Promise.all(Array.from({ length: 16 }, (_, i) => onPixelCentre(page, [130 + 30 * i, 1010])));
-  for (const at of spots) await pen(page).tap(...at);
-  await expect.poll(async () => (await strokeTools(page)).length).toBe(spots.length);
-  const hidden: [number, number][] = [];
-  for (const at of spots) if ((await inkNear(page, at, 3)) === 0) hidden.push(at);
-  expect(hidden, 'Tipps ohne sichtbaren Punkt').toEqual([]);
-});
-
-test('the live layers are opaque again after a pencil stroke', async ({ page }) => {
-  await openSeeded(page, DAY);
-  await choosePen(page, 'bleistift');
-  const opacity = (selector: string) => page.evaluate((sel) => document.querySelector<HTMLCanvasElement>(sel)!.style.opacity, selector);
-  /** Mit welcher Deckkraft die Ebene zu sehen ist: ihre eigene mal die aller Elemente, in denen sie liegt. */
-  const shownOpacity = (selector: string) =>
-    page.evaluate((sel) => {
-      let o = 1;
-      for (let el = document.querySelector(sel); el; el = el.parentElement) o *= Number(getComputedStyle(el).opacity);
-      return o;
-    }, selector);
-  const writer = pen(page);
-  await writer.down(200, 1010);
-  await writer.move(230, 1012);
-  await writer.move(260, 1010);
-  // Beim Schreiben scheinen Live- und Vorhersage-Ebene durch, so wie der fertige Strich.
-  expect(await shownOpacity(LIVE)).toBeCloseTo(BLEISTIFT_OPACITY, 5);
-  expect(await shownOpacity(PREDICTION)).toBeCloseTo(BLEISTIFT_OPACITY, 5);
-  await writer.up(260, 1010);
-  expect(await opacity(LIVE)).toBe('');
-  expect(await shownOpacity(LIVE)).toBe(1);
-  expect(await shownOpacity(PREDICTION)).toBe(1);
-  await expect.poll(() => strokeTools(page)).toEqual(['bleistift']);
+  expect(samples.some((c) => c.every((v, i) => v > want[i] + 20)), 'Stellen ohne Körnung').toBe(true);
 });
 
 // Die Wahl des Stifts in Leiste, Rad, Lasche und Schnellwechsel.
 
 const QUICK = '[data-testid="quick-switch"]';
-const NAMES: Record<PenKind, string> = { kugel: 'Kugelschreiber', fineliner: 'Fineliner', fueller: 'Füllfeder', bleistift: 'Bleistift' };
+const NAMES = { kugel: 'Kugelschreiber', fineliner: 'Fineliner', fueller: 'Füllfeder' };
 const COLOUR_LABELS = ['Schwarz', 'Blau', 'Rot (offen)', 'Grün (erledigt)'];
 const ring = (page: Page) => page.locator('.ring-knopf');
 
@@ -314,7 +258,7 @@ const lastColour = async (page: Page): Promise<string | undefined> => {
   return attr(paths[paths.length - 1] ?? '', 'data-farbe');
 };
 
-test('the toolbar shows five tools and the pencil hides the colours', async ({ page }) => {
+test('the toolbar shows four tools and no pencil', async ({ page }) => {
   await openSeeded(page, DAY, { offline: true });
   const toolGroup = page.locator('.werkzeuge [role="group"][aria-label="Werkzeug"] button');
   expect(await toolGroup.evaluateAll((els) => els.map((el) => [el.getAttribute('aria-label'), el.getAttribute('title')]))).toEqual(
@@ -324,13 +268,10 @@ test('the toolbar shows five tools and the pencil hides the colours', async ({ p
   await expect(page.locator('.werkzeuge [aria-label="Farbe"]')).toBeVisible();
   const separators = await page.locator('.werkzeuge .sep').count();
 
-  await tool(page, 'Bleistift').click();
-  await expect(tool(page, 'Bleistift')).toHaveAttribute('aria-pressed', 'true');
-  await expect(tool(page, 'Kugelschreiber')).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.locator('.werkzeuge [aria-label="Farbe"]')).toHaveCount(0);
-  for (const label of COLOUR_LABELS) await expect(tool(page, label)).toHaveCount(0);
+  await expect(tool(page, 'Bleistift')).toHaveCount(0);
+  for (const label of COLOUR_LABELS) await expect(tool(page, label)).toHaveCount(1);
   await expect(page.locator('.werkzeuge [aria-label="Breite"] button')).toHaveCount(3);
-  expect(await page.locator('.werkzeuge .sep').count()).toBe(separators - 1); // ohne Farbe auch ohne ihren Trennstrich
+  expect(separators).toBeGreaterThan(0);
   for (const box of await toolGroup.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().width))) expect(box).toBeGreaterThanOrEqual(44);
 });
 
@@ -342,15 +283,10 @@ test('the colour stays when you switch pens', async ({ page }) => {
   await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(1);
   expect(await lastColour(page)).toBe('blau');
 
-  await tool(page, 'Bleistift').click();
-  await pen(page).stroke(line([200, 900], [400, 920], 12));
-  await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(2);
-  expect(await lastColour(page)).toBe('grau');
-
   await tool(page, 'Fineliner').click();
   await expect(tool(page, 'Blau')).toHaveAttribute('aria-pressed', 'true');
   await pen(page).stroke(line([200, 1000], [400, 1020], 12));
-  await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(3);
+  await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(2);
   expect(await lastColour(page)).toBe('blau');
 });
 
@@ -362,17 +298,17 @@ test('the toolbar stays on one line at 834 points, also with the eraser', async 
   await tool(page, 'Radierer').click();
   await expect(page.locator('.werkzeuge [aria-label="Radierart"] button')).toHaveCount(2);
   expect(await height()).toBeLessThanOrEqual(46);
-  await tool(page, 'Bleistift').click();
+  await tool(page, 'Füllfeder').click();
   expect(await height()).toBeLessThanOrEqual(46);
 });
 
 test('a pen tap on the quick switch goes between the last pen and the eraser', async ({ page }) => {
   await openSeeded(page, DAY, { offline: true });
-  await tool(page, 'Bleistift').click();
+  await tool(page, 'Füllfeder').click();
   const quick = page.getByTestId('quick-switch');
   const icon = (selector: string) => page.locator(`${selector} svg path`).first().getAttribute('d');
   // Das Symbol des Schnellwechsels ist das des gewählten Stifts.
-  expect(await icon(QUICK)).toBe(await icon('.werkzeuge button[aria-label="Bleistift"]'));
+  expect(await icon(QUICK)).toBe(await icon('.werkzeuge button[aria-label="Füllfeder"]'));
   expect(await icon(QUICK)).not.toBe(await icon('.werkzeuge button[aria-label="Kugelschreiber"]'));
 
   await pen(page).tapOn(QUICK);
@@ -380,33 +316,34 @@ test('a pen tap on the quick switch goes between the last pen and the eraser', a
   await expect(tool(page, 'Radierer')).toHaveAttribute('aria-pressed', 'true');
   await pen(page).tapOn(QUICK);
   await expect(quick).toHaveAttribute('data-tool', 'pen');
-  await expect(tool(page, 'Bleistift')).toHaveAttribute('aria-pressed', 'true');
-  await expect.poll(() => savedPen(page)).toBe('bleistift');
+  await expect(tool(page, 'Füllfeder')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => savedPen(page)).toBe('fueller');
 });
 
 const ringLabels = (page: Page) => ring(page).evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
 const ringButton = (label: string) => `.ring-knopf[aria-label="${label}"]`;
 
-test('the ring has 12 outer buttons with Heute at the bottom and only widths for the pencil', async ({ page }) => {
+test('the ring has 11 outer buttons with Heute at the bottom', async ({ page }) => {
   await openSeeded(page, DAY, { offline: true, settings: { vollbild: { an: true, werkzeuge: 'kreis' } } });
   await touch(page).tapOn(QUICK);
   await expect(ring(page).first()).toBeVisible();
-  // Mit Kugelschreiber: 4 Farben und 3 Breiten innen, 12 Knöpfe außen.
-  await expect(ring(page)).toHaveCount(4 + 3 + 12);
+  // Mit Kugelschreiber: 4 Farben und 3 Breiten innen, 11 Knöpfe außen.
+  await expect(ring(page)).toHaveCount(4 + 3 + 11);
   const all = await ringLabels(page);
   for (const name of [...Object.values(NAMES), 'Radierer', 'Heute']) expect(all, name).toContain(name);
 
-  await touch(page).tapOn(ringButton('Bleistift'));
+  expect(all).not.toContain('Bleistift');
+  await touch(page).tapOn(ringButton('Füllfeder'));
   await expect(ring(page)).toHaveCount(0); // eine Wahl schließt den Ring
-  await expect.poll(() => savedPen(page)).toBe('bleistift');
+  await expect.poll(() => savedPen(page)).toBe('fueller');
 
   await touch(page).tapOn(QUICK);
   await expect(ring(page).first()).toBeVisible();
-  await expect(ring(page)).toHaveCount(3 + 12); // beim Bleistift nur die drei Breiten innen
+  await expect(ring(page)).toHaveCount(4 + 3 + 11);
   const labels = await ringLabels(page);
-  for (const colour of COLOUR_LABELS) expect(labels).not.toContain(colour);
+  for (const colour of COLOUR_LABELS) expect(labels).toContain(colour);
   expect(labels.filter((l) => l?.includes(' mm)'))).toHaveLength(3);
-  await expect(page.locator(ringButton('Bleistift'))).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator(ringButton('Füllfeder'))).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator(ringButton('Kugelschreiber'))).toHaveAttribute('aria-pressed', 'false');
 
   // Heute liegt unten: tiefer als jeder andere Knopf.
@@ -421,7 +358,7 @@ test('the ring has 12 outer buttons with Heute at the bottom and only widths for
   for (const b of boxes) expect(b.y, b.label ?? '').toBeGreaterThan(0);
 });
 
-test('the tab shows the five tools', async ({ page }) => {
+test('the tab shows the four tools', async ({ page }) => {
   await openSeeded(page, DAY, { offline: true, settings: { vollbild: { an: true, werkzeuge: 'tab' } } });
   await touch(page).tapOn('button.lasche');
   await expect(page.locator('.lasche-leiste')).toBeVisible();
@@ -430,8 +367,8 @@ test('the tab shows the five tools', async ({ page }) => {
   await touch(page).tapOn('.lasche-knopf[aria-label="Füllfeder"]');
   await expect(page.locator('.lasche-knopf[aria-label="Füllfeder"]')).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(() => savedPen(page)).toBe('fueller');
-  await touch(page).tapOn('.lasche-knopf[aria-label="Bleistift"]');
-  await expect(page.locator('.lasche-knopf[data-gruppe="farbe"]')).toHaveCount(0);
+  await expect(page.locator('.lasche-knopf[aria-label="Bleistift"]')).toHaveCount(0);
+  await expect(page.locator('.lasche-knopf[data-gruppe="farbe"]')).toHaveCount(4);
   await expect(page.locator('.lasche-knopf[data-gruppe="breite"]')).toHaveCount(3);
 });
 

@@ -245,7 +245,7 @@ test('holding the pen on the wheel opens the ring and switches nothing', async (
   await stylus.upOn(QUICK, c.x + 3, c.y - 2);
   await expect(wheel).toHaveAttribute('data-tool', 'pen');
   await expect(page.locator(im('Kugelschreiber'))).toHaveAttribute('aria-pressed', 'true');
-  await expect(ring(page)).toHaveCount(19); // der Ring bleibt offen: innen 4 Farben und 3 Breiten, außen 12 Knöpfe
+  await expect(ring(page)).toHaveCount(18); // der Ring bleibt offen: innen 4 Farben und 3 Breiten, außen 11 Knöpfe
 });
 
 test('a finger tap on the wheel opens the ring, a colour applies and closes it', async ({ page }) => {
@@ -279,7 +279,7 @@ test('undo keeps the ring open', async ({ page }) => {
   await expect(page.locator(im('Wiederholen'))).toBeEnabled();
   await tapTop(page, 'pen', im('Wiederholen'));
   expect(await strokeCount(page)).toBe(1);
-  await expect(ring(page)).toHaveCount(19);
+  await expect(ring(page)).toHaveCount(18);
 });
 
 test('a tap next to the ring closes it and draws nothing', async ({ page }) => {
@@ -313,7 +313,7 @@ test('a hand resting beside the ring does not close it, the pen still picks a co
   const hand = await page.evaluate(() => window.__notizbuch.toClient(200, 1000));
   expect(await topmost(page, hand)).toBe('ring-schutz');
   await onScreen(page, 'touch', [{ type: 'pointerdown', ...hand }]);
-  await expect(ring(page)).toHaveCount(19);
+  await expect(ring(page)).toHaveCount(18);
   await tapTop(page, 'pen', im('Rot (offen)'));
   await expect(ring(page)).toHaveCount(0);
   await expect(page.locator(SCHUTZ)).toHaveCount(0);
@@ -332,7 +332,7 @@ test('the ring stays on the screen when the wheel sits in a corner', async ({ pa
   await touch(page).tapOn(QUICK);
   await expect(ring(page).first()).toBeVisible();
   const boxes = await ring(page).evaluateAll((els) => els.map((el) => el.getBoundingClientRect().toJSON() as DOMRect));
-  expect(boxes).toHaveLength(19);
+  expect(boxes).toHaveLength(18);
   const { width, height } = page.viewportSize()!;
   for (const b of boxes) {
     expect(b.left).toBeGreaterThanOrEqual(0);
@@ -562,7 +562,7 @@ test('the tab shows the groups top to bottom', async ({ page }) => {
   await openSeeded(page, DAY, { settings: TAB });
   await touch(page).tapOn(GRIFF);
   expect(await laLabels(page)).toEqual([
-    'Kugelschreiber', 'Fineliner', 'Füllfeder', 'Bleistift', 'Radierer',
+    'Kugelschreiber', 'Fineliner', 'Füllfeder', 'Radierer',
     'Schwarz', 'Blau', 'Rot (offen)', 'Grün (erledigt)',
     ...(await page.locator(`${LASCHE_KNOPF}[data-gruppe="breite"]`).evaluateAll((els) => els.map((el) => el.getAttribute('aria-label') as string))),
     'Rückgängig', 'Wiederholen',

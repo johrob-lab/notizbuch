@@ -8,7 +8,6 @@ import { InkMeter } from './meter';
 import { outlineOf } from './outline';
 import {
   BLEISTIFT_OPACITY,
-  BLEISTIFT_PRESSURE,
   DEFAULT_FUELLER,
   DEFAULT_PEN_ANGLE,
   MIN_DIST_PX,
@@ -63,8 +62,7 @@ export type SurfaceOptions = {
 };
 
 /**
- * Ein Strich, der entsteht, mit Stift und Farbe des Strichs (beim Bleistift `grau`). `grain`: Der Bleistift malt mit Körnung,
- * beim Aufsetzen einmal entschieden. `drawn` sagt, was schon fest auf der Live-Ebene steht: bei Linien das erste Segment, das
+ * Ein Strich, der entsteht, mit Stift und Farbe des Strichs. `drawn` sagt, was schon fest auf der Live-Ebene steht: bei Linien das erste Segment, das
  * noch fehlt (siehe `live.ts`), bei Formen die Zahl der Punkte, deren Viereck vom vorigen Punkt und deren Kreis dort stehen.
  * `tailArea` ist der Bereich des Endstücks auf der Vorhersage-Ebene.
  */
@@ -73,7 +71,6 @@ type Drawing = {
   builder: StrokeBuilder;
   pen: PenKind;
   color: StrokeColor;
-  grain: boolean;
   box: Box;
   drawn: number;
   tailArea: Box | null;
@@ -273,8 +270,7 @@ export class InkSurface {
     this.bctx = context(this.base);
     this.lctx = context(this.live, { desynchronized: true });
     this.pctx = context(this.pred);
-    // Live- und Vorhersage-Ebene liegen in einer Gruppe. Der Bleistift setzt seine Deckkraft auf die Gruppe: Sie wirkt einmal
-    // auf beide zusammen, und wo sich ihre Stücke überlappen, wird es nicht dunkler.
+    // Live- und Vorhersage-Ebene liegen in einer Gruppe.
     this.liveGroup = document.createElement('div');
     this.liveGroup.dataset.layers = 'live vorhersage';
     Object.assign(this.liveGroup.style, { position: 'absolute', inset: '0', pointerEvents: 'none', touchAction: 'none' });
@@ -839,7 +835,7 @@ export class InkSurface {
     if (d.drawn < settled) {
       const ctx = this.lctx;
       this.setView(ctx);
-      this.shapePaint(ctx, d.color, d.grain);
+      this.shapePaint(ctx, d.color, false);
       ctx.beginPath();
       count = addShape(ctx, p, d.drawn, settled, this.pixel());
       ctx.fill('nonzero');
@@ -886,7 +882,7 @@ export class InkSurface {
     const ctx = this.pctx;
     const px = this.pixel();
     this.setView(ctx);
-    this.shapePaint(ctx, d.color, d.grain);
+    this.shapePaint(ctx, d.color, false);
     ctx.beginPath();
     const count = addShape(ctx, p, d.drawn, n, px);
     ctx.fill('nonzero');
@@ -964,7 +960,7 @@ export class InkSurface {
     if (isShape(d.pen)) {
       // Eine Form: Viereck vom letzten Punkt zum vorhergesagten in der Breite des letzten Punkts, ein Kreis am Ende.
       const r = Math.max(last.w, this.pixel()) / 2;
-      this.shapePaint(pctx, d.color, d.grain);
+      this.shapePaint(pctx, d.color, false);
       pctx.beginPath();
       addQuad(pctx, last, r, t, r);
       addCircle(pctx, t, r);
@@ -996,21 +992,10 @@ export class InkSurface {
     const pen = this.pen;
     const builder = this.newBuilder(pen);
     const color = builder.stroke().color;
-    // Körnung nur, wenn der Strich auf dem Bildschirm breit genug werden kann: beim Aufsetzen einmal entschieden, mit der
-    // größten Breite, die der Druck zulässt.
-    const grain = pen === 'bleistift' && this.widthMm * MM * BLEISTIFT_PRESSURE.max * this.view.s * this.dpr >= GRAIN_MIN_PX;
-    this.drawing = { id: e.pointerId, builder, pen, color, grain, box: emptyBox(), drawn: nothingDrawn(pen), tailArea: null, hist: [] };
-    // Der Bleistift malt auf Live- und Vorhersage-Ebene voll deckend, seine Deckkraft gilt einmal für beide zusammen. So sieht
-    // er aus wie der fertige Strich, auch wo sich seine Stücke überlappen.
-    if (pen === 'bleistift') this.setLiveOpacity(String(BLEISTIFT_OPACITY));
+    this.drawing = { id: e.pointerId, builder, pen, color, box: emptyBox(), drawn: nothingDrawn(pen), tailArea: null, hist: [] };
     this.addSample(e);
     this.liveUpdate();
     this.startMeter();
-  }
-
-  /** Deckkraft von Live- und Vorhersage-Ebene zusammen (auf ihrer Gruppe, einmal für beide). Leer heißt: ganz deckend. */
-  private setLiveOpacity(value: string): void {
-    this.liveGroup.style.opacity = value;
   }
 
   private newBuilder(pen: PenKind): StrokeBuilder {
@@ -1134,7 +1119,6 @@ export class InkSurface {
     this.stopMeter();
     this.clearLive(true);
     this.clearPredLayer();
-    this.setLiveOpacity('');
     if (d && commit) this.commitStroke(d);
   }
 

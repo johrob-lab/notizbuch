@@ -1,4 +1,4 @@
-import { PEN_NAMES, PENS, type PenKind } from '../ink/pens';
+import { PEN_CHOICES, PEN_NAMES, type PenKind } from '../ink/pens';
 import type { InkColor, WidthName } from '../ink/types';
 import type { EraserMode, EraserSize, InkPrefs } from '../lib/settings';
 import { COLORS, ERASER_MODES, ERASER_SIZES, WIDTHS, mm, type Tool } from './toolChoices';
@@ -50,18 +50,15 @@ export function toolActions(o: Options): { inner: ActionButton[]; outer: ActionB
         inner.push({ key: `eraserMode:${m.id}`, action: { kind: 'eraserMode', mode: m.id }, group: 'radierart', label: m.name, pressed: ink.eraserMode === m.id });
       }
     } else {
-      // Der Bleistift hat eine feste Farbe (Graphit): Er bietet keine Farbwahl, nur die Breiten.
-      if (ink.pen !== 'bleistift') {
-        for (const c of COLORS) {
-          inner.push({ key: `color:${c.id}`, action: { kind: 'color', color: c.id }, group: 'farbe', label: c.label, pressed: ink.color === c.id });
-        }
+      for (const c of COLORS) {
+        inner.push({ key: `color:${c.id}`, action: { kind: 'color', color: c.id }, group: 'farbe', label: c.label, pressed: ink.color === c.id });
       }
       for (const w of WIDTHS) {
         inner.push({ key: `width:${w.id}`, action: { kind: 'width', width: w.id }, group: 'breite', label: `${w.name} (${mm(w.id)})`, pressed: ink.width === w.id });
       }
     }
-    // Die vier Stifte in der Reihenfolge von `PENS`, dann der Radierer.
-    for (const pen of PENS) {
+    // Die Stifte in der Reihenfolge von `PEN_CHOICES`, dann der Radierer.
+    for (const pen of PEN_CHOICES) {
       outer.push({ key: `pen:${pen}`, action: { kind: 'pen', pen }, group: 'werkzeug', label: PEN_NAMES[pen], pressed: ink.tool === 'pen' && ink.pen === pen });
     }
     outer.push(

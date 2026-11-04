@@ -53,6 +53,12 @@ test('a saved choice without a pen or with an unknown pen is the ballpoint', () 
   expect(inkPrefs.value.pen).toBe('fueller');
 });
 
+test('a saved pencil becomes the ballpoint', () => {
+  initInkPrefs({ ...settings, ink: { pen: 'bleistift', color: 'rot' } as never });
+  expect(inkPrefs.value.pen).toBe('kugel');
+  expect(inkPrefs.value.color).toBe('rot');
+});
+
 test('fountain pen settings fall back to the start values', () => {
   expect(DEFAULT_INK.fueller).toEqual(DEFAULT_FUELLER);
   // Fehlt die ganze Einstellung, oder ist sie kein Objekt: alle vier Startwerte.

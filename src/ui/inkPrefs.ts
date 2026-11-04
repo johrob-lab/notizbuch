@@ -1,5 +1,5 @@
 import { signal } from '@preact/signals';
-import { PENS, type FuellerSettings } from '../ink/pens';
+import { PEN_CHOICES, type FuellerSettings } from '../ink/pens';
 import { PALETTE, WIDTH_MM } from '../ink/types';
 import { DEFAULT_INK, updateSettings, type InkPrefs, type Settings } from '../lib/settings';
 import type { Store } from '../sync/store';
@@ -41,7 +41,7 @@ function sanitize(raw: Partial<InkPrefs> | undefined): InkPrefs {
   const r = raw ?? {};
   return {
     tool: oneOf(r.tool, ['pen', 'eraser'] as const, DEFAULT_INK.tool),
-    pen: oneOf(r.pen, PENS, DEFAULT_INK.pen),
+    pen: oneOf(r.pen, PEN_CHOICES, DEFAULT_INK.pen),
     color: oneOf(r.color, PALETTE, DEFAULT_INK.color),
     width: oneOf(r.width, Object.keys(WIDTH_MM) as InkPrefs['width'][], DEFAULT_INK.width),
     eraserSize: oneOf(r.eraserSize, ['klein', 'mittel', 'gross'] as const, DEFAULT_INK.eraserSize),

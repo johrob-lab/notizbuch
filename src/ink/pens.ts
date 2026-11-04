@@ -5,7 +5,11 @@
 
 export type PenKind = 'kugel' | 'fineliner' | 'fueller' | 'bleistift';
 
+/** Alle Stifte, die die App lesen und zeichnen kann (auch den Bleistift alter Seiten). */
 export const PENS: readonly PenKind[] = ['kugel', 'fineliner', 'fueller', 'bleistift'];
+
+/** Die Stifte, die man wählen kann. Der Bleistift fehlt: Alte Bleistiftstriche bleiben sichtbar, neue entstehen nicht mehr. */
+export const PEN_CHOICES: readonly PenKind[] = ['kugel', 'fineliner', 'fueller'];
 
 export const PEN_NAMES: Record<PenKind, string> = {
   kugel: 'Kugelschreiber',

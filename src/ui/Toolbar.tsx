@@ -1,5 +1,5 @@
 import type { ComponentChildren } from 'preact';
-import { PEN_NAMES, PENS, type PenKind } from '../ink/pens';
+import { PEN_CHOICES, PEN_NAMES, type PenKind } from '../ink/pens';
 import { INK, type InkColor, type WidthName } from '../ink/types';
 import type { EraserMode, EraserSize } from '../lib/settings';
 import type { ButtonRect } from './FuellerPanel';
@@ -72,12 +72,12 @@ function Group({ label, children }: { label: string; children: ComponentChildren
   );
 }
 
-/** Werkzeugleiste: vier Stifte und Radierer, vier Farben (nicht beim Bleistift) und drei Breiten (beim Radierer drei Größen und zwei Arten), Rückgängig und Wiederholen, ganze Seite. */
+/** Werkzeugleiste: drei Stifte und Radierer, vier Farben und drei Breiten (beim Radierer drei Größen und zwei Arten), Rückgängig und Wiederholen, ganze Seite. */
 export function Toolbar(p: Props) {
   return (
     <div class="werkzeuge" role="toolbar" aria-label="Werkzeuge">
       <Group label="Werkzeug">
-        {PENS.map((k) => (
+        {PEN_CHOICES.map((k) => (
           <button
             key={k}
             class="tb"
@@ -115,8 +115,6 @@ export function Toolbar(p: Props) {
         </>
       ) : (
         <>
-      {p.pen !== 'bleistift' && (
-        <>
       <Group label="Farbe">
         {COLORS.map((c) => (
           <button
@@ -133,8 +131,6 @@ export function Toolbar(p: Props) {
         ))}
       </Group>
       <div class="sep" aria-hidden="true" />
-        </>
-      )}
       <Group label="Breite">
         {WIDTHS.map((w) => (
           <button
