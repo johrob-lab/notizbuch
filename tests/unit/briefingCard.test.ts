@@ -16,12 +16,13 @@ const NAME2 = 'Urlaube im Plan nachziehen';
 
 type Answer = { text: string | null; unknown: boolean };
 
-/** Eine Engine, die nur kann, was die Karte braucht. `answer` ist, was `lookup` antwortet. */
+/** Eine Engine, die nur kann, was die Karte braucht. `answer` ist, was `lookup` und `lookupFresh` antworten. */
 function fakeEngine(first: Answer) {
   const state = { answer: first };
   const listeners = new Set<(paths: string[]) => void>();
   const engine = {
-    lookup: vi.fn(async (): Promise<Answer> => state.answer),
+    lookup: vi.fn(async (_path: string): Promise<Answer> => state.answer),
+    lookupFresh: vi.fn(async (_path: string): Promise<Answer> => state.answer),
     write: vi.fn(async (_path: string, text: string): Promise<void> => {
       state.answer = { text, unknown: false };
     }),
@@ -88,6 +89,23 @@ test('a write that fails puts the failure into the alert region and shows what t
   await settled(host);
   expect(box(host, NAME1)!.checked).toBe(false); // die Notiz hat den Haken nie bekommen
   expect(fake.state.answer.text).toBe(note);
+  // Vor der Änderung frisch gelesen, nach dem Fehler neu gelesen wie beim Anzeigen
+  expect(fake.engine.lookupFresh).toHaveBeenCalledTimes(1);
+  expect(fake.engine.lookup).toHaveBeenCalledTimes(2);
+});
+
+test('a tick starts from a fresh read', async () => {
+  const fake = fakeEngine({ text: note, unknown: false });
+  const host = mount(fake.as);
+  await loaded(host);
+  await settled(host);
+  const shownReads = fake.engine.lookup.mock.calls.length; // das Lesen zum Anzeigen
+  tick(host, NAME1);
+  await vi.waitFor(() => expect(fake.engine.write).toHaveBeenCalledTimes(1));
+  await settled(host);
+  expect(fake.engine.lookupFresh.mock.calls).toEqual([['05 Daily Notes/2026-10-29.md']]);
+  expect(fake.engine.lookup).toHaveBeenCalledTimes(shownReads);
+  expect(fake.engine.write.mock.calls[0][1]).toBe(note.replace(TASK1, TASK1.replace('[ ]', '[x]')));
 });
 
 test('taps that come while a write is under way queue behind it, and each goes from the result of the one before', async () => {

@@ -602,6 +602,7 @@ test('a change of the repository clears the local data and the app talks to the 
   // Ein Strich und ein Haken gehören dem neuen Repo
   await pen(page).stroke(LINE);
   await page.getByRole('checkbox', { name: 'Aufgabe aus dem anderen Repo', exact: true }).check();
+  await expect.poll(async () => Object.keys(await queued(page)).sort()).toEqual([NOTE, TAG].sort());
   await sendToBackground(page);
   await expect.poll(() => newRepo.puts.map((p) => p.path).sort()).toEqual([NOTE, TAG].sort());
   await expect(status(page)).toHaveText('Gesichert');

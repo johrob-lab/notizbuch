@@ -232,6 +232,33 @@ test('two ticks in a row both land in the note', async ({ page }) => {
   expect(repo.puts[0].text).toBe(NOTE_TEXT.replace(TASK1, TASK1.replace('[ ]', '[x]')).replace(TASK2, TASK2.replace('[ ]', '[x]')));
 });
 
+test('a tick after a while starts from the newest note on GitHub', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  const card = region(page, 'Morgenbriefing');
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await settled(page);
+  await expect.poll(() => lastHead(page)).not.toBeNull(); // die erste Abfrage ist durch, die nächste käme erst in 3 Minuten
+  // Auf GitHub ändert sich eine Zeile im Morgenbriefing (der Termin ist verschoben, neue sha). Die App erfährt es nicht.
+  const remote = NOTE_TEXT.replace('- 08:00 bis 14:00 Abstimmung', '- 09:00 bis 14:00 Abstimmung');
+  repo.commit(NOTE, remote);
+  // 31 Sekunden später: Der letzte Blick der App auf die Notiz ist älter als 30 Sekunden.
+  await page.clock.setFixedTime(new Date('2026-10-29T12:00:31+01:00'));
+  await expect(card.getByText('08:00 bis 14:00')).toBeVisible();
+
+  await checkbox(page, NAME1).check();
+  await waitUntilQueued(page, NOTE, '- [x] Liste Planobjekte ergänzen');
+  // Noch vor jedem Hochladen hat die wartende Fassung beides: die geänderte Zeile von GitHub und den Haken.
+  const ticked = remote.replace(TASK1, TASK1.replace('[ ]', '[x]'));
+  expect(await queuedText(page, NOTE)).toBe(ticked);
+  expect(repo.puts).toEqual([]);
+  await expect(card.getByText('09:00 bis 14:00')).toBeVisible();
+
+  await upload(page, repo, 1);
+  expect(repo.puts[0]).toMatchObject({ path: NOTE, text: ticked });
+  expect(repo.requests.filter((request) => request.startsWith('PUT '))).toHaveLength(1); // kein zweiter Versuch nach einem 409
+  expect(repo.puts.filter((put) => put.path.includes('(Konflikt)'))).toEqual([]);
+});
+
 test('a second tap while the first is still being written is queued, not dropped', async ({ page }) => {
   const repo = await openSeeded(page, DAY);
   await expect(checkbox(page, NAME1)).toBeVisible();
@@ -1239,6 +1266,7 @@ test('a failing year listing does not stop the page', async ({ page }) => {
   await checkbox(page, NAME1).check();
   await entry.click();
   await expect.poll(() => hash(page)).toBe(hashOf(BASE, 1));
+  await expect.poll(async () => Object.keys(await queued(page)).sort()).toEqual([NOTE, PAGE1].sort());
   await upload(page, repo, 2);
 });
 

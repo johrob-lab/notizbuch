@@ -113,6 +113,7 @@ test('the first window keeps working while the second one reads', async ({ conte
 
   await page.getByRole('checkbox', { name: NAME1, exact: true }).check();
   await pen(page).stroke(LINE);
+  await expect.poll(async () => Object.keys(await queued(page)).sort()).toEqual([NOTE, TAG].sort());
   await sendToBackground(page);
   await expect.poll(() => [...new Set(repo.puts.map((p) => p.path))].sort()).toEqual([NOTE, TAG].sort());
   await expect(page.getByTestId('status')).toHaveText('Gesichert');
@@ -243,6 +244,7 @@ test('without Web Locks every window works as before', async ({ context, page })
   await expect(hint(second)).toHaveCount(0);
   await expect(second.getByRole('checkbox', { name: NAME1, exact: true })).toBeEnabled();
   await second.getByRole('checkbox', { name: NAME1, exact: true }).check();
+  await expect.poll(async () => Object.keys(await queued(second))).toEqual([NOTE]);
   await sendToBackground(second);
   await expect.poll(() => repo.puts.map((p) => p.path)).toEqual([NOTE]);
 });

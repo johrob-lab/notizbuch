@@ -19,6 +19,8 @@ const TEXT_DELAY_MS = 10_000;
 const INK_DELAY_MS = 120_000;
 /** Spätestens so lange nach der ersten Änderung einer Art seit dem letzten Durchgang geht sie hoch, auch ohne jede Pause. */
 const MAX_WAIT_MS = 600_000;
+/** Ist der letzte Blick auf eine Datei bei GitHub älter, holt `lookupFresh` sie vor einer Änderung neu. */
+const FRESH_MS = 30_000;
 const POLL_INTERVAL_MS = 180_000;
 /** So oft versucht ein Abgleich eine Datei zusammenzuführen, die sich währenddessen schon wieder geändert hat. */
 const CONFLICT_ATTEMPTS = 3;
@@ -115,6 +117,12 @@ export class SyncEngine {
    * hier etwas anderes als das Hochgeladene, und die Fassung in `#page` darf nicht darauf vorrücken.
    */
   readonly #pageText = new Map<string, string>();
+  /**
+   * Wann die Engine je Datei zuletzt bei GitHub nachgesehen hat (`Date.now()`): gelesen (jede Antwort, auch „gibt es nicht“)
+   * oder hochgeladen. Nur im Arbeitsspeicher: Nach dem Öffnen der App gilt keine Kopie als frisch, bis die Engine die Datei
+   * wieder bei GitHub gesehen hat.
+   */
+  readonly #looked = new Map<string, number>();
   /** Je Art eine Wartezeit, nur im Arbeitsspeicher: Was nach einem Neustart noch wartet, lädt `start` sofort hoch. */
   readonly #waits: Record<'md' | 'svg', Wait> = { md: { first: null, timer: undefined }, svg: { first: null, timer: undefined } };
   #pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -274,7 +282,7 @@ export class SyncEngine {
     if ((await this.#store.get('outbox', path))?.deleted) return { text: this.#pageGetsNothing(path), unknown: false };
     let remote: Remote | null;
     try {
-      remote = await this.#call(() => this.#client.getFile(path));
+      remote = await this.#fetch(path);
     } catch (error) {
       if (isStop(error)) {
         if (!this.#frozen) this.#noteStop(error);
@@ -298,6 +306,35 @@ export class SyncEngine {
     if (!kept) return { text: this.#pageGetsNothing(path), unknown: false };
     this.#pageGets(path, kept.text, { sha: kept.sha, baseText: kept.base });
     return { text: kept.text, unknown: false };
+  }
+
+  /**
+   * Wie `lookup`, aber vor einer Änderung (Haken, bearbeitete Zeile, Ergänzung), die vom neuesten Stand ausgehen soll: Wartet
+   * keine eigene Änderung an der Datei und liegt der letzte Blick auf sie bei GitHub (`#looked`) mehr als `FRESH_MS` zurück,
+   * holt die Engine sie zuerst neu und übernimmt einen neueren Stand. Der Aufrufer bekommt ihn direkt, gemeldet wird nichts.
+   * Sonst gilt die Kopie, ohne Anfrage und ohne das Auffrischen im Hintergrund von `lookup`. Scheitert das Holen, gilt auch die
+   * Kopie: Kein Netz, Ratenlimit oder kein Zugang landet wie bei `lookup` im Status, jeder andere Fehler geht an `onError`. Das
+   * Zusammenführen beim Hochladen bleibt die zweite Sicherung. Ohne Kopie, und in einer Engine, die nur liest, wie `lookup`.
+   */
+  async lookupFresh(path: string): Promise<{ text: string | null; unknown: boolean }> {
+    if (this.#frozen) return this.lookup(path);
+    if (!this.#lookedRecently(path)) {
+      try {
+        await this.#refreshCopy(path, false); // fragt nur, wenn es eine Kopie gibt und keine eigene Änderung an ihr wartet
+      } catch (error) {
+        if (!(error instanceof ReadOnlyError) && !this.#noteStop(error)) this.onError?.({ path, error });
+      }
+    }
+    const local = await this.#store.get('files', path);
+    if (!local) return this.lookup(path);
+    this.#pageGets(path, local.text, { sha: local.sha, baseText: local.base });
+    return { text: local.text, unknown: false };
+  }
+
+  /** Ob die Engine höchstens `FRESH_MS` zuvor bei GitHub nach dieser Datei gesehen hat. */
+  #lookedRecently(path: string): boolean {
+    const at = this.#looked.get(path);
+    return at !== undefined && Date.now() - at <= FRESH_MS;
   }
 
   /** Die Seite bekommt diesen Text, der auf dieser Fassung beruht. */
@@ -446,6 +483,20 @@ export class SyncEngine {
     });
   }
 
+  /** Holt eine Datei von GitHub. Jede Antwort, auch „gibt es nicht“, ist ein Blick auf die Datei (`#looked`). */
+  async #fetch(path: string): Promise<Remote | null> {
+    const remote = await this.#call(() => this.#client.getFile(path));
+    this.#looked.set(path, Date.now());
+    return remote;
+  }
+
+  /** Lädt eine Fassung hoch (über `#upload`). Danach liegt genau sie auf GitHub: Auch das ist ein Blick auf die Datei. */
+  async #put(path: string, text: string, sha: string | null): Promise<{ sha: string }> {
+    const uploaded = await this.#upload(() => this.#client.putFile(path, text, sha, this.#message(path)));
+    this.#looked.set(path, Date.now());
+    return uploaded;
+  }
+
   /**
    * Jede Änderung am Speicher geht hier durch. Die Prüfung und das Anlegen der Transaktion folgen ohne Pause aufeinander, und
    * eine Transaktion steht in der Reihenfolge, in der sie angelegt wird: Wer `close` ruft und danach den Speicher leert,
@@ -581,7 +632,7 @@ export class SyncEngine {
       return this.#settle(entry, { sha: entry.baseSha, text: entry.text });
     }
     try {
-      const { sha } = await this.#upload(() => this.#client.putFile(entry.path, entry.text, entry.baseSha, this.#message(entry.path)));
+      const { sha } = await this.#put(entry.path, entry.text, entry.baseSha);
       await this.#settle(entry, { sha, text: entry.text });
     } catch (error) {
       if (!isStaleBase(error, entry.baseSha)) throw error;
@@ -656,7 +707,7 @@ export class SyncEngine {
     for (let attempt = 0; attempt < CONFLICT_ATTEMPTS; attempt++) {
       const entry = await this.#store.get('outbox', path);
       if (!entry || entry.deleted) return;
-      const remote = await this.#call(() => this.#client.getFile(path));
+      const remote = await this.#fetch(path);
       let text = entry.text;
       let baseSha: string | null = null; // Ist die Datei auf GitHub weg, wird die eigene als neue Datei hochgeladen.
       if (remote) {
@@ -667,7 +718,7 @@ export class SyncEngine {
         baseSha = remote.sha;
       }
       try {
-        const { sha } = await this.#upload(() => this.#client.putFile(path, text, baseSha, this.#message(path)));
+        const { sha } = await this.#put(path, text, baseSha);
         return await this.#settle(entry, { sha, text });
       } catch (error) {
         if (!isStaleBase(error, baseSha)) throw error; // sonst hat sich die Datei schon wieder geändert: noch einmal
@@ -718,7 +769,7 @@ export class SyncEngine {
 
   async #exists(path: string): Promise<boolean> {
     if ((await this.#store.get('files', path)) || (await this.#store.get('outbox', path))) return true;
-    return (await this.#call(() => this.#client.getFile(path))) !== null;
+    return (await this.#fetch(path)) !== null;
   }
 
   // ---------- Löschen ----------
@@ -728,7 +779,7 @@ export class SyncEngine {
     try {
       let sha = entry.baseSha;
       if (sha === null) {
-        const remote = await this.#call(() => this.#client.getFile(path));
+        const remote = await this.#fetch(path);
         if (!remote) return await this.#settleDelete(entry);
         // Ohne bekannte Fassung wird nur gelöscht, was genau unsere letzte Fassung ist. Alles andere hat dieses Gerät nie gesehen.
         if (remote.text !== entry.text) return await this.#cancelDelete(entry, remote);
@@ -741,7 +792,7 @@ export class SyncEngine {
       if (error instanceof ConflictError) return this.#cancelDelete(entry);
       if (isStop(error) || error instanceof PathNotAllowedError || error instanceof ReadOnlyError) throw error; // beendet: keine Anfrage mehr
       // Eine fehlende Datei meldet der Client als allgemeinen Fehler (404). Ist sie weg, ist das Löschen erledigt.
-      if ((await this.#call(() => this.#client.getFile(path))) === null) return this.#settleDelete(entry);
+      if ((await this.#fetch(path)) === null) return this.#settleDelete(entry);
       throw error;
     }
   }
@@ -767,7 +818,7 @@ export class SyncEngine {
    */
   async #cancelDelete(sent: OutboxEntry, known?: Remote): Promise<void> {
     const { path } = sent;
-    const remote = known ?? (await this.#call(() => this.#client.getFile(path)));
+    const remote = known ?? (await this.#fetch(path));
     if (!remote) return this.#settleDelete(sent);
     const wasBasedOn = await this.#transact(['files', 'outbox'], async (tx) => {
       const current = await tx.objectStore('outbox').get(path);
@@ -850,7 +901,7 @@ export class SyncEngine {
   async #refreshCopy(path: string, dropIfGone: boolean): Promise<boolean> {
     const record = await this.#store.get('files', path);
     if (!record || (await this.#store.get('outbox', path))) return false;
-    const remote = await this.#call(() => this.#client.getFile(path));
+    const remote = await this.#fetch(path);
     if (remote === null && !dropIfGone) return false;
     // Gleicher Stand: dieselbe sha, oder keine Seite kennt die Datei. Eine Kopie, die nie auf GitHub war, bleibt also.
     if ((remote?.sha ?? null) === record.sha) return false;

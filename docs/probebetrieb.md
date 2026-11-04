@@ -67,7 +67,7 @@ Das Test-Repo hat nur für den 29.10.2026 ein Briefing. Diesen Tag öffnest du s
 2. Tippe am rechten Rand auf den Reiter **OKT**.
 3. Tippe mit dem Finger oben in das Feld mit der 29, dorthin, wo die Tageszahl steht. Mit dem Stift geht das nicht, der Stift schreibt nur.
 4. Du siehst die Tagesseite mit der Karte **Morgenbriefing**. Tippe auf das Kästchen vor **Urlaube im Plan nachziehen**. Der Haken erscheint sofort.
-5. Warte drei Sekunden. Oben steht **Gesichert**.
+5. Oben steht sofort **Gesichert**. Bei GitHub ist der Haken da, sobald du die App verlässt (am PC: sobald du zu einem anderen Tab oder Fenster wechselst), sonst nach etwa 10 Sekunden.
 6. Öffne bei GitHub das Test-Repo und tippe über der Dateiliste auf **Commits** (die Zahl neben dem Uhr-Symbol). Der oberste Commit heißt `Notizbuch: 2026-10-29.md (iPad)`. Tippe darauf: Aus `- [ ]` wurde `- [x]`.
 
 Klappt das, ist die Testkopie bereit.
@@ -87,7 +87,7 @@ Wo: Testkopie, iPad. Dauer: etwa 10 Minuten.
 3. Tippe auf das Kästchen vor **Liste Planobjekte ergänzen**. Der Haken erscheint sofort. Tippe noch einmal darauf: Er geht wieder weg. Tippe ein drittes Mal: Er ist wieder da. Im echten Vault hakst du später nur ab, was wirklich erledigt ist.
 4. Tippe am Ende einer Zeile auf das kleine Stift-Symbol. Ändere ein Wort und tippe auf **Speichern**.
 5. Tippe unten in der Karte in das Feld **Ergänzen**, schreib „Probe“ und tippe auf **Hinzufügen**. Der Schalter **Aufgabe** ist an, es entsteht also eine Aufgabe mit Kästchen. Sie steht im neuen Abschnitt **Ergänzungen**.
-6. Warte drei Sekunden. Oben steht **Gesichert**.
+6. Oben steht sofort **Gesichert**. Bei GitHub sind deine Änderungen da, sobald du die App verlässt (am PC: sobald du zu einem anderen Tab oder Fenster wechselst), sonst etwa 10 Sekunden nach der letzten Änderung.
 7. Öffne bei GitHub im Test-Repo die Datei `05 Daily Notes/2026-10-29.md`. Die Haken stehen als `[x]` da, deine Ergänzung unter `## Ergänzungen`, und die Markierungen zwischen `%%` am Zeilenende sind noch da.
 
 Erwartet: Jeder Haken zeigt sich sofort. Nach ein paar Sekunden steht **Gesichert** da. Bei GitHub gibt es Commits wie `Notizbuch: 2026-10-29.md (iPad)`.
@@ -383,6 +383,23 @@ Neben dem Kugelschreiber gibt es **Fineliner** und **Füllfeder**. Der Bleistift
 13. Ring und Lasche: Tippe oben auf **Vollbild**. Öffne den Ring (Finger auf den runden Knopf) und zähle die Knöpfe außen. Erwartet: Es sind 11 Knöpfe, alle gut zu treffen, darunter die drei Stifte. Wähle die Füllfeder und schreib. Öffne danach die Lasche am linken Rand. Erwartet: Die drei Stifte stehen auch dort, und der Wechsel klappt. Beende mit **Vollbild aus**.
 14. Verzögerung messen: Tippe oben auf das Zahnrad, dann bei **Messung anzeigen** auf **an** und oben auf **Heute**. Schreib mit einem Stift schnell Schleifen. Nach dem Abheben steht unten links über der Seite eine kleine Zeile, zum Beispiel „Arbeit 0,4 ms (max 1,2) · Bild 8,3 ms · Punkte je Bewegung 6“. Schreib sie dir mit dem Namen des Stifts auf. Mach das mit allen drei Stiften, einmal mit **Vorhersage** an und einmal aus (Zahnrad, **Vorhersage**, **an** oder **aus**, **Heute**). Tippe vor jedem neuen Stift auf das Zahnrad und dann auf **Heute**, so beginnt die Messung neu. Erwartet: Bei keinem Stift hängt die Linie spürbar hinter der Spitze her. Stelle zum Schluss **Messung anzeigen** wieder auf **aus**.
 15. Warte, bis oben **Gesichert** steht. Am nächsten Morgen prüfst du, ob die Abendroutine alles abgetippt hat: Öffne die Tagesnotiz in Obsidian. Erwartet: Das Geschriebene aller drei Stifte steht im Abschnitt **Handschrift** oder **Besprechungen**, und nichts fehlt.
+
+- [ ] Klappt
+
+### 3.12 Abgleich
+
+Die App lädt seltener hoch, damit Obsidian am iPad nicht mit vielen Commits kurz hintereinander kämpft. Handschrift geht hoch, wenn du 2 Minuten lang nicht schreibst, spätestens 10 Minuten nach der ersten Änderung, und sofort, wenn du die App verlässt. Haken, Ergänzungen und bearbeitete Zeilen gehen 10 Sekunden nach der letzten Änderung hoch. Oben steht dabei die ganze Zeit **Gesichert**: Deine Änderungen liegen sofort sicher auf dem iPad, nur das Hochladen wartet. Bevor die App die Tagesnotiz ändert, holt sie deren neuesten Stand von GitHub. Wo: echtes Vault, iPad mit Stift und Obsidian. Obsidian gleicht nur das echte Vault ab, darum geht dieser Punkt nicht in der Testkopie. Dauer: etwa 20 Minuten.
+
+Schreib echte Notizen und hake nur ab, was wirklich erledigt ist: Die Abendroutine tippt die Handschrift ab und meldet jeden Haken an Outlook.
+
+1. Merk dir die Uhrzeit. Lege eine Besprechung mit zwei Seiten an: Tippe oben auf **Heute**, in der Karte **Besprechungen** auf einen Termin von heute (oder auf **+ Besprechung**, trage Thema und Zeit ein und tippe auf **Anlegen**) und dann auf **+ Seite**. Schreib jetzt 10 Minuten lang mit dem Stift abwechselnd auf beiden Seiten: ein paar Zeilen auf Seite 2, oben in der Leiste **‹** zu Seite 1, ein paar Zeilen, **›** zurück zu Seite 2 und so weiter. Mach dabei nie 2 Minuten Pause und bleib in der App.
+2. Hör auf zu schreiben und warte 2 Minuten. Bleib dabei in der App.
+3. Öffne in Safari github.com, das Repo `johrob-lab/2-gehirn` und tippe über der Dateiliste auf **Commits** (die Zahl neben dem Uhr-Symbol). Zähle seit der Uhrzeit aus Schritt 1 die Commits, deren Text mit `S1.svg (iPad)` endet, und die mit `S2.svg (iPad)`. Erwartet: je Seite höchstens 2 Commits.
+4. Wechsle zurück ins Notizbuch: Wische vom unteren Rand nach oben, halte kurz und tippe auf das Notizbuch. Tippe oben auf **Heute** und hake in der Karte **Morgenbriefing** kurz hintereinander drei Punkte ab. Warte 10 Sekunden in der App. Sieh dann bei GitHub unter **Commits** nach (wie in Schritt 3). Erwartet: Es gibt genau einen neuen Commit `Notizbuch: JJJJ-MM-TT.md (iPad)` mit dem Datum von heute. Tippe darauf: Bei allen drei Punkten wurde aus `- [ ]` ein `- [x]`.
+5. Wechsle zurück ins Notizbuch, schreib auf der Tagesseite im Feld **Notizen** ein paar Wörter und wechsle sofort zu Obsidian (vom unteren Rand nach oben wischen, kurz halten, Obsidian antippen). Führe in Obsidian **Git: Pull** aus (Befehlspalette öffnen, „Git: Pull“ tippen) und öffne die Datei `07 Anhänge/Notizbuch/JJJJ/JJJJ-MM-TT Tag.svg` mit dem Datum von heute. Erwartet: Die Seite ist da, mit den Wörtern von eben. Fehlen sie noch, warte ein paar Sekunden und führe **Git: Pull** noch einmal aus.
+6. Wechsle zurück ins Notizbuch und hake in der Karte **Morgenbriefing** einen Punkt ab. Wechsle zu Obsidian, führe **Git: Pull** aus und öffne die Tagesnotiz von heute (`05 Daily Notes/JJJJ-MM-TT.md`). Erwartet: Der Punkt steht dort als `- [x]`. Bis auf diesen Haken ist der Abschnitt **Morgenbriefing (automatisch)** unverändert, ebenso **Abendüberblick (automatisch)**, wenn es ihn schon gibt: Nichts fehlt, nichts ist doppelt.
+
+Erwartet: Wenige Commits, auch wenn du lange am Stück schreibst. Was du in der App änderst, ist in Obsidian nach **Git: Pull** da, und die Tagesnotiz behält alles, was die Routinen geschrieben haben.
 
 - [ ] Klappt
 

@@ -3,7 +3,7 @@ import { parsePage } from '../../src/ink/svg';
 import { PathNotAllowedError } from '../../src/sync/paths';
 import type { SyncEngine } from '../../src/sync/engine';
 import { fixture } from './helpers';
-import { A, B, S, httpError, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
+import { A, B, S, httpError, quiet, svgPage, until, type FakeClient, type Harness, setupHarness } from './syncHelpers';
 
 const base = fixture('05 Daily Notes/2026-10-29.md');
 
@@ -209,6 +209,102 @@ test('a page removed while its first read is still fetching does not come back a
   expect(await reading).toBeNull();
   expect(await h.store.get('files', S)).toBeUndefined();
   expect(await e.read(S)).toBeNull(); // bis zum Löschen gilt die Seite als weg
+});
+
+// ---------- Frisch lesen vor einer Änderung ----------
+
+/** Die Uhr rückt vor, ohne dass ein Zeitgeber abläuft: Eine Wartezeit, die schon läuft, lädt dabei nichts hoch. */
+const later = (ms: number) => vi.setSystemTime(Date.now() + ms);
+
+test('lookupFresh reads GitHub when the copy is older than 30 s', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A); // die Kopie, eben von GitHub gelesen
+  fake.files[A] = { text: 'neuer Stand', sha: 's2' }; // danach ändert sich die Notiz auf GitHub
+  const asked = fake.count('get');
+  later(30_001);
+  expect(await e.lookupFresh(A)).toEqual({ text: 'neuer Stand', unknown: false });
+  expect(await h.store.get('files', A)).toMatchObject({ text: 'neuer Stand', sha: 's2', base: 'neuer Stand' });
+  await quiet(); // auch im Hintergrund fragt danach niemand mehr
+  expect(fake.count('get')).toBe(asked + 1);
+  // Die Änderung danach geht vom neuen Stand aus: Beim Hochladen gibt es nichts zusammenzuführen.
+  await e.write(A, 'neuer Stand mit Haken', 'md');
+  expect(await h.store.get('outbox', A)).toMatchObject({ baseSha: 's2', baseText: 'neuer Stand' });
+});
+
+test('within 30 s lookupFresh keeps the copy and does not ask GitHub', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  fake.files[A] = { text: 'neuer Stand', sha: 's2' };
+  const asked = fake.count('get');
+  later(29_999);
+  expect(await e.lookupFresh(A)).toEqual({ text: base, unknown: false });
+  later(1); // genau 30 s: noch nicht älter
+  expect(await e.lookupFresh(A)).toEqual({ text: base, unknown: false });
+  await quiet(); // auch kein Auffrischen im Hintergrund wie bei `lookup`
+  expect(fake.count('get')).toBe(asked);
+  expect(await h.store.get('files', A)).toMatchObject({ text: base, sha: 's1' });
+});
+
+test('with an own change waiting, lookupFresh keeps the copy', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  await e.write(A, 'mine', 'md');
+  fake.files[A] = { text: 'neuer Stand', sha: 's2' };
+  const asked = fake.count('get');
+  later(30_001); // mehr als 30 s, und hochgeladen ist noch nichts
+  expect(await e.lookupFresh(A)).toEqual({ text: 'mine', unknown: false });
+  await quiet();
+  expect(fake.count('get')).toBe(asked);
+  expect(fake.count('put')).toBe(0);
+  expect(await h.store.get('outbox', A)).toMatchObject({ text: 'mine', baseSha: 's1' }); // zusammengeführt wird beim Hochladen
+});
+
+test('offline, lookupFresh keeps the copy', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  fake.files[A] = { text: 'neuer Stand', sha: 's2' };
+  later(30_001);
+  fake.offline = true;
+  expect(await e.lookupFresh(A)).toEqual({ text: base, unknown: false });
+  expect(fake.count('get')).toBe(2); // gefragt hat sie, die Anfrage scheiterte am Netz
+  expect(h.errors).toEqual([]);
+  expect(e.status.value).toEqual({ state: 'gesichert', pending: 0 }); // es wartet ja nichts
+  // Der Haken geht auf die Kopie und wartet auf das Netz: Nichts geht verloren.
+  await e.write(A, `${base}- [x] ohne Netz\n`, 'md');
+  expect(await h.store.get('outbox', A)).toMatchObject({ text: `${base}- [x] ohne Netz\n`, baseSha: 's1' });
+});
+
+test('an error that is not about the network goes to onError, and lookupFresh keeps the copy', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A);
+  later(30_001);
+  fake.before = () => {
+    throw httpError(503);
+  };
+  expect(await e.lookupFresh(A)).toEqual({ text: base, unknown: false });
+  expect(h.errors).toEqual([{ path: A, error: expect.objectContaining({ status: 503 }) }]);
+});
+
+test('without a copy, lookupFresh reads like lookup', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  expect(await e.lookupFresh(A)).toEqual({ text: base, unknown: false });
+  expect(fake.log).toEqual([`get ${A}`]);
+  expect(await h.store.get('files', A)).toMatchObject({ text: base, sha: 's1', base });
+  expect(await e.lookupFresh(B)).toEqual({ text: null, unknown: false }); // die Datei gibt es nicht
+  expect(fake.log).toEqual([`get ${A}`, `get ${B}`]);
+  expect(await h.store.get('files', B)).toBeUndefined();
+  fake.offline = true; // ohne Netz ist offen, ob es sie gibt
+  expect(await e.lookupFresh(B)).toEqual({ text: null, unknown: true });
+});
+
+test('an upload counts as a look', async () => {
+  await e.write(A, 'x', 'md');
+  await e.flush();
+  expect(fake.log).toEqual([`put ${A} null`]);
+  later(29_999);
+  expect(await e.lookupFresh(A)).toEqual({ text: 'x', unknown: false });
+  await quiet();
+  expect(fake.count('get')).toBe(0);
 });
 
 // ---------- Löschen ----------
