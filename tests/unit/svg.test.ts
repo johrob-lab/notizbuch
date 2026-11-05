@@ -984,7 +984,7 @@ const OLD_PAGE = [
 test('zoomed strokes keep their shape through the file', () => {
   // Sechzehn Mal dieselben Schleifen, jedes Mal anders zittrig. Bei einem einzelnen Umriss schwankt der mittlere Eckwinkel schon bei
   // winzigen Änderungen um bis zu 2 Grad (die Vereinfachung wählt andere Ecken), über die Seite gemessen bleibt, was das Runden
-  // ausmacht. Auf eine Nachkommastelle gerundet knickt der Rand im Mittel um 15 Grad mehr ab, und fast jeder Umriss zerfällt.
+  // ausmacht. Auf eine Nachkommastelle gerundet knickt der Rand im Mittel um 17 Grad mehr ab, und jeder Umriss zerfällt.
   const written = Array.from({ length: 16 }, (_, k) => zoomedLoops(k + 1));
   const read = parsePage(serializePage(tagPage(written), FIELDS, '')).strokes;
   expect(read.map((s) => s.id)).toEqual(written.map((s) => s.id));
@@ -1168,8 +1168,8 @@ const loopRadius = (s: Stroke) => s.pts.reduce((sum, p) => sum + Math.hypot(p.x 
 
 test('an old dense stroke is repaired on reading', () => {
   // Die sechzehn Schleifen von oben, gezoomt mit der alten Stabilisierung geschrieben und so gespeichert, wie es die App vor Paket 3d
-  // tat. Ohne Reparatur knickt der Rand gelesen im Mittel um 16 Grad mehr ab als ungerundet, hat fast viermal so viele scharfe Ecken,
-  // und jeder Umriss zerfällt in Teile.
+  // tat. Ohne Reparatur knickt der Rand gelesen im Mittel um 17 Grad mehr ab als ungerundet, hat mehr als viermal so viele scharfe
+  // Ecken, und jeder Umriss zerfällt in Teile.
   const written = Array.from({ length: 16 }, (_, k) => zoomedLoops(k + 1, { sigmaPx: OLD_SIGMA_PX }));
   const old = written.map(asOld);
   expect(old.every((s) => s.pts.length >= 5 && medianStep(s.pts) < 0.35)).toBe(true);
@@ -1178,8 +1178,8 @@ test('an old dense stroke is repaired on reading', () => {
   const before = written.map((s) => outlinePolygons(s.pts));
   const after = read.map((s) => outlinePolygons(s.pts));
   const was = meanTurn(before.flat());
-  // Repariert so ruhig wie ungerundet: im Mittel höchstens 2 Grad mehr (geeicht 1,4: Der ausgedünnte Umriss hat weniger Ecken, in
-  // der Summe knickt er 5 % weniger ab), nicht mehr scharfe Ecken (geeicht 114 statt 134) und kein Umriss in mehr Teilen.
+  // Repariert so ruhig wie ungerundet: im Mittel höchstens 2 Grad mehr (gemessen 1,2: Der ausgedünnte Umriss hat weniger Ecken, in
+  // der Summe knickt er 5 % weniger ab), nicht mehr scharfe Ecken (gemessen 122 statt 140) und kein Umriss in mehr Teilen.
   expect(meanTurn(after.flat()), `ungerundet ${was.toFixed(1)} Grad`).toBeLessThanOrEqual(was + 2);
   expect(sharpCorners(after.flat())).toBeLessThanOrEqual(sharpCorners(before.flat()));
   expect(after.map((polys, i) => polys.length - before[i].length).filter((more) => more > 0)).toEqual([]);

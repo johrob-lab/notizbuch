@@ -5,7 +5,7 @@ import { GRAIN, GRAIN_MIN_PX, grainMask } from './grain';
 import { History, restore, type Removed } from './history';
 import { fixedSegments, tailStart } from './live';
 import { InkMeter } from './meter';
-import { outlineOf } from './outline';
+import { outlineOf, traceCurve } from './outline';
 import {
   BLEISTIFT_OPACITY,
   DEFAULT_FUELLER,
@@ -617,10 +617,10 @@ export class InkSurface {
   }
 
   /**
-   * Füllfeder und Bleistift: alle Vielecke des Umrisses (`outlineOf`) in einem Pfad mit einem `fill` (Regel nonzero), so hat
-   * die Form kein Loch. Keine Stelle ist dünner als ein Bildpunkt, sonst verschwände sie (die Datei behält die echten
-   * Breiten). Der Bleistift malt mit seiner Deckkraft in einem Zug, darum wird er dort, wo er sich selbst überlappt, nicht
-   * dunkler. Mit Körnung nur, wo er auf dem Bildschirm mindestens `GRAIN_MIN_PX` Bildpunkte breit ist.
+   * Füllfeder und Bleistift: alle Vielecke des Umrisses (`outlineOf`) als runde Kurven wie in der Datei (`traceCurve`) in einem
+   * Pfad mit einem `fill` (Regel nonzero), so hat die Form kein Loch. Keine Stelle ist dünner als ein Bildpunkt, sonst verschwände
+   * sie (die Datei behält die echten Breiten). Der Bleistift malt mit seiner Deckkraft in einem Zug, darum wird er dort, wo er sich
+   * selbst überlappt, nicht dunkler. Mit Körnung nur, wo er auf dem Bildschirm mindestens `GRAIN_MIN_PX` Bildpunkte breit ist.
    */
   private drawShape(ctx: CanvasRenderingContext2D, s: Stroke): void {
     if (!s.pts.length) return;
@@ -629,11 +629,7 @@ export class InkSurface {
     if (pencil) ctx.globalAlpha = BLEISTIFT_OPACITY;
     this.shapePaint(ctx, s.color, { grainy: pencil && boundsOf(s).maxW * this.view.s * this.dpr >= GRAIN_MIN_PX });
     ctx.beginPath();
-    for (const poly of outlineOf(s, this.pixel())) {
-      ctx.moveTo(poly[0].x, poly[0].y);
-      for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
-      ctx.closePath();
-    }
+    for (const poly of outlineOf(s, this.pixel())) traceCurve(ctx, poly);
     ctx.fill('nonzero');
     ctx.restore();
   }

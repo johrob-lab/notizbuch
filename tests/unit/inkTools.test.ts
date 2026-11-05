@@ -126,7 +126,7 @@ test('previewD changes with the settings', () => {
   for (const { d } of [flat, round]) {
     const { commands } = parse(d);
     expect(commands[0]).toBe('M');
-    expect([...new Set(commands)].sort()).toEqual(['L', 'M', 'Z']);
+    expect([...new Set(commands)].sort()).toEqual(['M', 'Q', 'Z']);
   }
   // Jeder Regler wirkt auf die Vorschau.
   for (const key of ['schaerfe', 'druck', 'stabil'] as const) {
