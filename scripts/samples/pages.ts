@@ -1,12 +1,12 @@
 // Erzeugt erfundene Beispielseiten des Notizbuchs (SVG) für den Probebetrieb und für den Trockenlauf der Abendroutine.
-// Benutzt die echten Funktionen der App: StrokeBuilder (Glättung, Breite), serializePage (SVG-Format) und die
-// Layouts (Felder, Hintergrund). Die Schrift ist eine einfache Einstrich-Schrift aus font.ts.
+// Benutzt die echten Funktionen der App: StrokeBuilder (Glättung, Breite), storedForm und serializePage (SVG-Format) und
+// die Layouts (Felder, Hintergrund). Die Schrift ist eine einfache Einstrich-Schrift aus font.ts.
 // Aufgerufen wird das über scripts/make-samples.mjs <Ausgabeordner>. Alles hier ist erfunden: keine echten Namen,
 // keine Vault-Inhalte. Reine Rechnung ohne Dateizugriff: `buildSamples` liefert die Seiten, geschrieben werden sie vom Skript.
 
 import type { PenKind } from '../../src/ink/pens';
 import { StrokeBuilder } from '../../src/ink/stroke';
-import { serializePage } from '../../src/ink/svg';
+import { serializePage, storedForm } from '../../src/ink/svg';
 import { SMOOTHING, type InkColor, type Page, type Stroke } from '../../src/ink/types';
 import { besprechungPagePath, monatPagePath, tagPagePath, wochePagePath } from '../../src/lib/filenames';
 import { besprechungLayout, monatLayout, tagLayout, wocheLayout, type Layout, type Rect } from '../../src/pages/layouts';
@@ -80,8 +80,9 @@ class Scribe {
       pressure = Math.min(0.78, Math.max(0.3, pressure + this.jitter() * 0.12));
       builder.add(x + this.jitter() * 0.45, y + this.jitter() * 0.45, pressure, opts.tiltX, opts.tiltY);
     }
-    // Fertig wie nach dem Abheben in der App: bei der Füllfeder mit beiden spitzen Enden, bei den anderen Stiften wie `stroke()`.
-    this.strokes.push(builder.finish());
+    // Fertig wie nach dem Abheben in der App: bei der Füllfeder mit beiden spitzen Enden, bei den anderen Stiften wie `stroke()`, und
+    // gleich in der Genauigkeit der Datei (`storedForm`), so wie die App den Strich aufnimmt und speichert.
+    this.strokes.push(storedForm(builder.finish()));
     this.t += 160 + this.rng() * 260;
   }
 

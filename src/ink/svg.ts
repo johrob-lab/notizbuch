@@ -1,6 +1,7 @@
 import { isValidDay, weekDays } from '../lib/dates';
 import { outlineD } from './outline';
 import { BLEISTIFT_OPACITY, PENS, isShape, type PenKind } from './pens';
+import { repairOldLine } from './repair';
 import { fmtCoord, fmtNum, parsePathD, pathD, toHundredths } from './stroke';
 import {
   INK,
@@ -89,16 +90,26 @@ function fmtWidth(n: number): string {
   return String(toHundredths(n));
 }
 
+/** Die mittlere Breite der Punkte: die Breite `w` eines Strichs von Füllfeder oder Bleistift. */
+function meanWidth(pts: readonly Pt[]): number {
+  return pts.reduce((sum, p) => sum + p.w, 0) / pts.length;
+}
+
 /**
  * Der Strich so, wie die Datei ihn festhält: neue Punkte mit x und y auf zwei Nachkommastellen, bei Füllfeder und Bleistift auch
- * die Breite je Punkt, sonst bleibt alles gleich. Kugelschreiber und Fineliner behalten die Breite je Punkt, ihre Datei hat eine
- * Breite für den ganzen Strich (`stroke-width`). Jede Zahl ist genau die, die `parsePage` aus der Datei liest (`fmtCoord` und
- * `fmtWidth` schreiben `toHundredths`). In dieser Form nimmt die Fläche einen fertigen Strich auf (nach dem Abheben und die Stücke
- * beim Teil-Radieren): Was dann zu sehen ist, ist genau das, was nach dem Speichern und Neuladen zu sehen ist.
+ * die Breite je Punkt, und `w` so, wie `parsePage` es aus der Datei rechnet: bei Füllfeder und Bleistift das Mittel der Breiten je
+ * Punkt, bei Kugelschreiber und Fineliner mit einer Nachkommastelle wie `stroke-width`. Sonst bleibt alles gleich. Kugelschreiber und
+ * Fineliner behalten die Breite je Punkt, ihre Datei hat eine Breite für den ganzen Strich. Jede Zahl ist genau die, die `parsePage`
+ * aus der Datei liest (`fmtCoord` und `fmtWidth` schreiben `toHundredths`). In dieser Form nimmt die Fläche einen fertigen Strich auf
+ * (nach dem Abheben und die Stücke beim Teil-Radieren): Was dann zu sehen ist, ist genau das, was nach dem Speichern und Neuladen zu
+ * sehen ist.
  */
 export function storedForm(s: Stroke): Stroke {
-  const shape = isShape(s.tool);
-  return { ...s, pts: s.pts.map((p) => ({ x: toHundredths(p.x), y: toHundredths(p.y), w: shape ? toHundredths(p.w) : p.w })) };
+  if (isShape(s.tool)) {
+    const pts = s.pts.map((p) => ({ x: toHundredths(p.x), y: toHundredths(p.y), w: toHundredths(p.w) }));
+    return { ...s, w: pts.length ? meanWidth(pts) : s.w, pts };
+  }
+  return { ...s, w: Number(fmtNum(s.w)), pts: s.pts.map((p) => ({ x: toHundredths(p.x), y: toHundredths(p.y), w: p.w })) };
 }
 
 /**
@@ -243,7 +254,10 @@ function readLine(value: string | null): Pt[] | null {
   return pts;
 }
 
-/** Der Strich zu einem <path>, oder `null`, wenn ein Attribut fehlt oder nicht stimmt. */
+/**
+ * Der Strich zu einem <path>, oder `null`, wenn ein Attribut fehlt oder nicht stimmt. Ein alter, gezoomt geschriebener Strich von
+ * Füllfeder oder Bleistift wird dabei repariert (`repairOldLine`).
+ */
 function readStroke(el: Element): Stroke | null {
   const id = el.getAttribute('data-id');
   const t = toNumber(el.getAttribute('data-t'));
@@ -255,10 +269,10 @@ function readStroke(el: Element): Stroke | null {
   const color0 = INK_COLORS.includes(farbe0) ? (farbe0 as StrokeColor) : 'schwarz';
   if (isShape(pen)) {
     if (!id || t === null || widthMm === null) return null;
-    const pts = readLine(el.getAttribute('data-linie'));
-    if (!pts) return null;
-    const w = pts.reduce((sum, p) => sum + p.w, 0) / pts.length;
-    return { id, tool: pen, color: pen === 'bleistift' ? 'grau' : color0, widthMm, t, w, pts };
+    const line = readLine(el.getAttribute('data-linie'));
+    if (!line) return null;
+    const pts = repairOldLine(line);
+    return { id, tool: pen, color: pen === 'bleistift' ? 'grau' : color0, widthMm, t, w: meanWidth(pts), pts };
   }
   const w = toNumber(el.getAttribute('stroke-width'));
   const points = parsePathD(el.getAttribute('d') ?? '');
@@ -311,9 +325,10 @@ function readDoc(svg: string): Doc {
 
 /**
  * Liest eine Seite. Der Hintergrund wird ignoriert. Ein Strich mit fehlenden oder falschen Angaben wird übersprungen,
- * eine unbekannte Farbe wird schwarz. Jeder Punkt eines gelesenen Strichs hat als Breite die Breite des Strichs. Wirft
- * einen Fehler, wenn die Datei kein SVG ist, keine Seite des Notizbuchs oder von einem unbekannten Seitentyp. Fehlt
- * der Schlüssel, ist er leer.
+ * eine unbekannte Farbe wird schwarz. Jeder Punkt eines Kugelschreiber- oder Fineliner-Strichs hat als Breite die Breite des
+ * Strichs. Alte, gezoomt geschriebene Striche von Füllfeder und Bleistift kommen repariert zurück (`repairOldLine`), die nächste
+ * Speicherung legt sie so ab. Wirft einen Fehler, wenn die Datei kein SVG ist, keine Seite des Notizbuchs oder von einem unbekannten
+ * Seitentyp. Fehlt der Schlüssel, ist er leer.
  */
 export function parsePage(svg: string): Page {
   const { head, groups } = readDoc(svg);
