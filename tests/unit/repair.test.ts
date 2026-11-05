@@ -3,6 +3,7 @@ import { repairOldLine } from '../../src/ink/repair';
 import { toHundredths } from '../../src/ink/stroke';
 import { storedForm } from '../../src/ink/svg';
 import type { Pt } from '../../src/ink/types';
+import { UPRIGHT } from './repairHelpers';
 
 // Die Reparatur alter zerfranster Striche als reine Rechnung, Orte in Seiteneinheiten. Wie sie beim Lesen einer Seite wirkt und dass
 // sie nur einmal greift, prüft svg.test.ts. Alles hier ist erfunden.
@@ -26,16 +27,6 @@ const oneDecimal = (v: number) => Math.round(v * 10) / 10;
 
 /** Die Punkte genau so, wie `serializePage` sie in die Datei schreibt und `parsePage` sie wieder liest (`storedForm`). */
 const inFile = (pts: Pt[]): Pt[] => storedForm({ id: 'x', tool: 'fueller', color: 'schwarz', widthMm: 0.2, t: 0, w: 0, pts }).pts;
-
-/** Ein kurzer senkrechter Strich der Füllfeder, gezoomt geschrieben und alt gespeichert. Repariert läge er wieder ganz auf dem Raster. */
-const UPRIGHT: Pt[] = [
-  { x: 243.9, y: 1099.7, w: 0.19 },
-  { x: 243.9, y: 1099.9, w: 0.88 },
-  { x: 243.9, y: 1100, w: 1.15 },
-  { x: 243.9, y: 1100.3, w: 1.14 },
-  { x: 243.9, y: 1100.5, w: 0.81 },
-  { x: 243.9, y: 1100.7, w: 0.18 },
-];
 
 /**
  * Ein alter, gezoomt geschriebener Strich ab (x0, y0): 30 Punkte geradeaus nach rechts, genau 0,1 auseinander, dann ein Viertelkreis

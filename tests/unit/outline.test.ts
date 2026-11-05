@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { Pt2 } from '../../src/ink/gestures';
-import { outlineD, outlineOf, outlinePolygons, SIMPLIFY, traceCurve } from '../../src/ink/outline';
+import { outlineD, outlineDOf, outlineOf, outlinePolygons, SIMPLIFY, traceCurve } from '../../src/ink/outline';
 import { FUELLER_FLOOR } from '../../src/ink/pens';
 import { fmtCoord } from '../../src/ink/stroke';
 import { MM, WIDTH_MM, type Pt, type Stroke } from '../../src/ink/types';
@@ -196,11 +196,21 @@ function hardShapes(): Record<string, Pt[]> {
       alternating,
     ),
     // Die dünnste Linie der Füllfeder (fein am Boden, 0,06): Der halbe Strich ist schmaler als zweimal SIMPLIFY, die Vereinfachung
-    // ist also durch seinen Abstand zur Mittellinie begrenzt.
+    // ist also durch seinen Abstand zur Mittellinie begrenzt (höchstens die Hälfte davon, `simplified`). Ein Loch gäbe es hier aber
+    // auch ohne diese Grenze nicht: Die Seiten liegen 0,03 neben der Mittellinie, weiter als SIMPLIFY. Die Grenze bewacht `thinArc`.
     thinCircle: sample(
       curve((t) => ({ x: 50 + 5 * Math.cos(t), y: 50 + 5 * Math.sin(t) }), 2 * Math.PI),
       fixed(FLOOR_W),
     ),
+    // Grenzfall unter dem Boden: So dünn (0,03) schreibt die Füllfeder nie, ihre dünnste Linie ist 0,06. Ein flacher Bogen, gezoomt
+    // geschrieben (Radius 20, 1,7 lang, Punkte 0,1 auseinander), mit halbem Strich 0,015, schmaler als SIMPLIFY. Seine Seiten weichen
+    // höchstens 0,018 von der Sehne zwischen ihren Enden ab, weniger als SIMPLIFY: Ohne die Grenze der Vereinfachung bei der Hälfte
+    // des kleinsten Abstands zur Mittellinie (`simplified`) würde jede Seite diese eine Sehne, und die läge in der Mitte jenseits der
+    // Mittellinie. Ohne die Grenze gemessen 8 Punkte der Mittellinie außerhalb des Umrisses und 8 außerhalb der Kurve.
+    thinArc: Array.from({ length: 18 }, (_, i) => {
+      const a = (i * ZOOMED_STEP) / 20;
+      return { x: 50 + 20 * Math.cos(a), y: 50 + 20 * Math.sin(a), w: 0.03 };
+    }),
   };
 }
 
@@ -300,6 +310,39 @@ test('the outline path uses only M, Q and Z', () => {
   expect(outlinePolygons(shapes[0])).toHaveLength(2);
 });
 
+test('the curve of a polygon with fewer than three corners is drawn without error, an empty one not at all', () => {
+  // `outlinePolygons` baut solche Vielecke nicht. `traceCurve` zeichnet sie trotzdem ohne Fehler und nach derselben Regel wie jedes
+  // andere: ein M in der Mitte der Seite vom letzten zum ersten Eckpunkt, je Eckpunkt ein Q, ein Z. Ein leeres zeichnet es gar nicht.
+  const calls = (poly: Pt2[]): (string | number)[] => {
+    const out: (string | number)[] = [];
+    traceCurve(
+      {
+        moveTo: (x, y) => {
+          out.push('M', x, y);
+        },
+        quadraticCurveTo: (cx, cy, x, y) => {
+          out.push('Q', cx, cy, x, y);
+        },
+        closePath: () => {
+          out.push('Z');
+        },
+      },
+      poly,
+    );
+    return out;
+  };
+  expect(calls([])).toEqual([]);
+  // Eine Ecke: Anfang, Kontrollpunkt und Ende liegen auf ihr.
+  expect(calls([{ x: 1, y: 2 }])).toEqual(['M', 1, 2, 'Q', 1, 2, 1, 2, 'Z']);
+  // Zwei Ecken: Anfang in der Mitte zwischen ihnen, je Ecke ein Stück zurück zu dieser Mitte.
+  expect(
+    calls([
+      { x: 0, y: 0 },
+      { x: 4, y: 2 },
+    ]),
+  ).toEqual(['M', 2, 1, 'Q', 0, 0, 2, 1, 'Q', 4, 2, 2, 1, 'Z']);
+});
+
 test('the curve covers taps, knicks and thin strokes', () => {
   const shapes: Record<string, Pt[]> = {
     tap: [{ x: 10, y: 10, w: 1.2 }],
@@ -312,6 +355,23 @@ test('the curve covers taps, knicks and thin strokes', () => {
       curve((t) => ({ x: 50 + 0.5 * Math.cos(t), y: 50 + 0.5 * Math.sin(t) }), 2 * Math.PI, ZOOMED_STEP),
       fixed(FLOOR_W),
     ),
+    // Ein sehr kurzer Strich: zwei Punkte, nur 0,05 auseinander.
+    short: [
+      { x: 10, y: 10, w: 1.2 },
+      { x: 10.05, y: 10, w: 1.2 },
+    ],
+    // Eine kleine Schleife, gezoomt geschrieben, deren halbe Breite (0,6) größer ist als ihr Radius (0,5): Die Innenseite rückt an
+    // die Mittellinie heran.
+    wideLoop: sample(
+      curve((t) => ({ x: 50 + 0.5 * Math.cos(t), y: 50 + 0.5 * Math.sin(t) }), 2 * Math.PI, ZOOMED_STEP),
+      fixed(1.2),
+    ),
+    // Gezoomt geschrieben, die Breite wächst von der dünnsten Linie auf 1,2 und fällt wieder: beide Enden verjüngt.
+    tapered: Array.from({ length: 31 }, (_, i) => ({
+      x: i * ZOOMED_STEP,
+      y: 0,
+      w: FLOOR_W + (1.2 - FLOOR_W) * Math.sin((Math.PI * i) / 30),
+    })),
   };
   expect(outlinePolygons(shapes.knick)).toHaveLength(3);
   expect(outlinePolygons(shapes.thinKnick)).toHaveLength(3);
@@ -413,6 +473,33 @@ test('the outline of a stroke is worked out once and follows its points', () => 
   };
   expect(outlineOf(s)).toBe(outlineOf(s));
   expect(outlineOf(s)).toEqual(outlinePolygons(s.pts));
+});
+
+test('the outline path of a stroke for the file is written once and follows its points', () => {
+  const s: Stroke = {
+    id: 'f1',
+    tool: 'fueller',
+    color: 'blau',
+    widthMm: 0.4,
+    t: 1,
+    w: 2.4,
+    pts: sample(
+      [
+        { x: 10, y: 10 },
+        { x: 30, y: 15 },
+      ],
+      fixed(2.4),
+    ),
+  };
+  const d = outlineDOf(s);
+  expect(d).toBe(outlineD(s.pts));
+  // Gemerkt: Ein fertiger Strich ändert sich nie. Bekäme er doch andere Punkte (das tut die App nie), käme sein erster Pfad zurück.
+  s.pts = s.pts.map((p) => ({ ...p, y: p.y + 5 }));
+  expect(outlineDOf(s)).toBe(d);
+  // Ein anderer Strich, zum Beispiel ein Stück beim Teil-Radieren, ist ein neues Objekt und bekommt seinen eigenen Pfad.
+  const other: Stroke = { ...s, id: 'f4' };
+  expect(outlineDOf(other)).toBe(outlineD(other.pts));
+  expect(outlineDOf(other)).not.toBe(d);
 });
 
 /** Wie bei der Füllfeder: ein breiter Abstrich (3) nach rechts unten, dann ein haarfeiner Aufstrich (0,15) nach rechts oben. */

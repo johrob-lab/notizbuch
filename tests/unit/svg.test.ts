@@ -6,7 +6,8 @@ import { StrokeBuilder, toHundredths } from '../../src/ink/stroke';
 import { INK } from '../../src/ink/types';
 import { DEFAULT_FUELLER, MIN_DIST_PX, stabilSigmaPx, type PenKind } from '../../src/ink/pens';
 import { FORMAT_VERSION, PageTooNewError, mergePages, parsePage, serializePage, storedForm } from '../../src/ink/svg';
-import type { FieldBox, InkColor, Page, Pt, Stroke } from '../../src/ink/types';
+import type { FieldBox, InkColor, Page, Stroke } from '../../src/ink/types';
+import { medianStep, UPRIGHT } from './repairHelpers';
 
 const DAY = '2026-10-29';
 
@@ -1135,16 +1136,6 @@ function asOld(s: Stroke): Stroke {
   return { ...s, pts: s.pts.map((p) => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10, w: toHundredths(p.w) })) };
 }
 
-/** Der Median der Abstände aufeinanderfolgender Punkte. */
-function medianStep(pts: readonly Pt[]): number {
-  const steps = pts
-    .slice(1)
-    .map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y))
-    .sort((a, b) => a - b);
-  const m = steps.length >> 1;
-  return steps.length % 2 ? steps[m] : (steps[m - 1] + steps[m]) / 2;
-}
-
 /**
  * Eine Schleife mit der Füllfeder, gezoomt geschrieben wie `zoomedLoops` mit der alten Stabilisierung: 1,25 Umläufe um (300, 400)
  * mit Radius `rPx` Bildschirmpunkten (6,7 sind 1 Einheit), je Messpunkt etwa 1,07 Bildschirmpunkte weiter, mit Zittern. Fertig wie
@@ -1224,17 +1215,9 @@ test('a stroke whose repair would lie on the old grid again stays as it is', () 
   // Ein kurzer senkrechter Strich, gezoomt geschrieben und alt gespeichert. Repariert läge er wieder ganz auf dem Raster der alten
   // Datei: Das nächste Lesen hielte ihn für alt und reparierte ihn noch einmal anders. Darum bleibt er, wie er ist, und nach dem ersten
   // Speichern ändert sich die Datei nicht mehr.
-  const pts: Pt[] = [
-    { x: 243.9, y: 1099.7, w: 0.19 },
-    { x: 243.9, y: 1099.9, w: 0.88 },
-    { x: 243.9, y: 1100, w: 1.15 },
-    { x: 243.9, y: 1100.3, w: 1.14 },
-    { x: 243.9, y: 1100.5, w: 0.81 },
-    { x: 243.9, y: 1100.7, w: 0.18 },
-  ];
-  const old: Stroke = { id: 'senkrecht', tool: 'fueller', color: 'schwarz', widthMm: 0.2, t: 1793853900000, w: 0.725, pts };
+  const old: Stroke = { id: 'senkrecht', tool: 'fueller', color: 'schwarz', widthMm: 0.2, t: 1793853900000, w: 0.725, pts: UPRIGHT };
   const read = parsePage(serializePage(tagPage([old]), FIELDS, '')).strokes;
-  expect(read[0].pts).toEqual(pts);
+  expect(read[0].pts).toEqual(UPRIGHT);
   const saved = serializePage(tagPage(read), FIELDS, '');
   const again = parsePage(saved).strokes;
   expect(again).toEqual(read);

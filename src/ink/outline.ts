@@ -258,11 +258,12 @@ export function outlineD(pts: readonly Pt[]): string {
   return parts.join(' ');
 }
 
-// Ein fertiger Strich ändert sich nie, sein Umriss und seine kleinste Breite werden darum nur einmal berechnet. Ist er
-// irgendwo dünner als eine verlangte Mindestbreite, wird dazu der Umriss für die zuletzt verlangte gemerkt.
+// Ein fertiger Strich ändert sich nie, sein Umriss, sein Pfad für die Datei und seine kleinste Breite werden darum nur einmal
+// berechnet. Ist er irgendwo dünner als eine verlangte Mindestbreite, wird dazu der Umriss für die zuletzt verlangte gemerkt.
 const known = new WeakMap<Stroke, Pt2[][]>();
 const thinnest = new WeakMap<Stroke, number>();
 const widened = new WeakMap<Stroke, { minW: number; polys: Pt2[][] }>();
+const written = new WeakMap<Stroke, string>();
 
 /** Die kleinste Breite eines Punkts, je Strich nur einmal berechnet. */
 function thinnestOf(s: Stroke): number {
@@ -294,4 +295,17 @@ export function outlineOf(s: Stroke, minW = 0): Pt2[][] {
     known.set(s, polys);
   }
   return polys;
+}
+
+/**
+ * Der Umriss eines fertigen Strichs als Pfad für die Datei (`outlineD`), je Strich nur einmal geschrieben: Gespeichert wird bei jedem
+ * Abheben die ganze Seite, und nur der neue Strich braucht dann einen neuen Pfad.
+ */
+export function outlineDOf(s: Stroke): string {
+  let d = written.get(s);
+  if (d === undefined) {
+    d = outlineD(s.pts);
+    written.set(s, d);
+  }
+  return d;
 }

@@ -326,14 +326,15 @@ type BaseRecord = { __base: string[] };
 
 /**
  * Schreibt ab jetzt mit, womit die Grundebene (fertige Striche) ihre Pfade baut: je Aufruf der Buchstabe wie in der Datei (M, L, Q,
- * Z) und die Zahlen in Seiteneinheiten, auf zwei Nachkommastellen gerundet wie in der Datei.
+ * Z) und die Zahlen in Seiteneinheiten, auf zwei Nachkommastellen gerundet wie in der Datei. Jeder neue Pfad (`beginPath`) beginnt
+ * mit `|`.
  */
 const recordBase = (page: Page) =>
   page.evaluate(() => {
     const calls: string[] = [];
     (window as unknown as BaseRecord).__base = calls;
     const proto = CanvasRenderingContext2D.prototype;
-    const letters = { moveTo: 'M', lineTo: 'L', quadraticCurveTo: 'Q', closePath: 'Z' } as const;
+    const letters = { beginPath: '|', moveTo: 'M', lineTo: 'L', quadraticCurveTo: 'Q', closePath: 'Z' } as const;
     for (const [name, letter] of Object.entries(letters)) {
       const original = proto[name as keyof typeof letters] as (this: CanvasRenderingContext2D, ...args: number[]) => void;
       Object.defineProperty(proto, name, {
@@ -359,10 +360,12 @@ test('zoomed in, a finished stroke is drawn with the curves of the file', async 
   await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(1);
   const d = attr(strokePaths(await savedPage(page))[0], 'd') ?? '';
   expect(d).toContain(' Q ');
-  // Die Grundebene hat den fertigen Strich mit genau den Kurven der Datei gezeichnet, und keine einzige Gerade.
+  // Die Grundebene hat den fertigen Strich mit genau den Kurven der Datei gezeichnet ...
   const drawn = (await page.evaluate(() => (window as unknown as BaseRecord).__base)).join(' ');
   expect(drawn).toContain(d);
-  expect(drawn).not.toContain('L');
+  // ... und in dem Pfad, mit dem sie ihn füllt, keine einzige Gerade. Nur dieser Pfad zählt: Papier und andere Striche haben eigene.
+  const own = drawn.split('|').filter((path) => path.includes(d));
+  expect(own.filter((path) => path.includes('L'))).toEqual([]);
 });
 
 test('the ends taper only after lifting the pen', async ({ page }) => {

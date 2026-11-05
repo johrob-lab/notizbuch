@@ -1,5 +1,5 @@
 import { isValidDay, weekDays } from '../lib/dates';
-import { outlineD } from './outline';
+import { outlineDOf } from './outline';
 import { BLEISTIFT_OPACITY, PENS, isShape, type PenKind } from './pens';
 import { repairOldLine } from './repair';
 import { fmtCoord, fmtNum, parsePathD, pathD, toHundredths } from './stroke';
@@ -125,7 +125,7 @@ function strokeMarkup(s: Stroke): string {
       ['data-breite', fmtNum(s.widthMm)],
       ['data-t', fmtNum(s.t)],
       ['data-linie', s.pts.map((p) => `${fmtCoord(p.x)} ${fmtCoord(p.y)} ${fmtWidth(p.w)}`).join(' ')],
-      ['d', outlineD(s.pts)],
+      ['d', outlineDOf(s)],
       ['fill', INK[s.color]],
     ];
     if (s.tool === 'bleistift') list.push(['fill-opacity', String(BLEISTIFT_OPACITY)], ['filter', 'url(#bleistift)']);
