@@ -1,4 +1,4 @@
-import { STABIL_REACH } from './pens';
+import { arcGaussAt } from './smooth';
 import { toHundredths } from './stroke';
 import type { Pt } from './types';
 
@@ -16,8 +16,19 @@ const DENSE = 0.35;
 const SAME = 0.01;
 /** σ der Glättung nach der Strecke in Seiteneinheiten (2 Bildschirmpunkte bei Zoom 6,7). */
 const SIGMA = 0.3;
+/**
+ * So viele σ weit (Strecke) reicht die Glättung zu jeder Seite. Gleich viel wie beim Schreiben (`STABIL_REACH`), aber eigens festgelegt:
+ * Die Reparatur ist an diesem Wert geeicht und bleibt gleich, wenn die Stabilisierung beim Schreiben einmal nachgestellt wird.
+ */
+const REACH = 2.5;
 /** Nach dem Glätten liegt kein Punkt näher als das am vorigen: Feiner hat die alte Datei die Orte nicht aufgelöst. */
 const GAP = 0.1;
+/**
+ * Spielraum bei Gleichstand (Seiteneinheiten). Auf dem Raster der alten Datei sind Abstände genau gleich: Ob ein Nachbar am Rand des
+ * Fensters noch mitzählt oder ein Punkt beim Ausdünnen bleibt, entschiede sonst das letzte Bit der Rechnung, und das kann je nach Lage des
+ * Strichs und je nach Gerät anders ausfallen. Mit dem Spielraum zählt ein Gleichstand immer mit.
+ */
+const TIE = 1e-9;
 
 /** Wahr, wenn x und y aller Punkte höchstens eine Nachkommastelle haben: So schrieb die App die Orte vor Paket 3d. */
 function oneDecimal(pts: readonly Pt[]): boolean {
@@ -38,34 +49,11 @@ function medianStep(pts: readonly Pt[]): number {
 }
 
 /**
- * Gauß-Glättung der Orte nach der Strecke `arc` mit σ `SIGMA`, wie beim Schreiben der Füllfeder (`smoothArc`): Jeder Punkt wird das
- * Mittel der Punkte, deren Strecke höchstens `r` von seiner abliegt, gewichtet mit exp(−d² / 2σ²). `r` ist 2,5 σ und wird zu den
- * Enden hin kleiner, zu beiden Seiten gleich weit: Anfang und Ende bleiben genau dort, wo sie waren.
+ * Gauß-Glättung aller Orte nach der Strecke `arc` (`arcGaussAt`) mit σ `SIGMA`, Nachbarn am Rand des Fensters mit Spielraum `TIE`: Anfang
+ * und Ende bleiben genau dort, wo sie waren.
  */
 function gauss(pts: readonly { x: number; y: number }[], arc: readonly number[]): { x: number; y: number }[] {
-  const n = pts.length;
-  const end = arc[n - 1];
-  const reach = STABIL_REACH * SIGMA;
-  const k = 1 / (2 * SIGMA * SIGMA);
-  return pts.map((_, i) => {
-    const s = arc[i];
-    const r = Math.min(reach, s, end - s);
-    let lo = i;
-    while (lo > 0 && s - arc[lo - 1] <= r) lo--;
-    let hi = i;
-    while (hi < n - 1 && arc[hi + 1] - s <= r) hi++;
-    let sx = 0;
-    let sy = 0;
-    let sw = 0;
-    for (let j = lo; j <= hi; j++) {
-      const d = arc[j] - s;
-      const w = Math.exp(-d * d * k);
-      sx += w * pts[j].x;
-      sy += w * pts[j].y;
-      sw += w;
-    }
-    return { x: sx / sw, y: sy / sw };
-  });
+  return pts.map((_, i) => arcGaussAt(pts, arc, i, SIGMA, REACH * SIGMA, TIE));
 }
 
 /**
@@ -77,9 +65,12 @@ function gauss(pts: readonly { x: number; y: number }[], arc: readonly number[])
  *    ein zweiter Durchgang über die geglätteten Punkte misst, wie weit, und die Punkte rücken um so viel wieder hinaus
  *    (2 G − G∘G). So werden auch kleine Schleifen nicht merklich kleiner. Anfang und Ende bleiben.
  * 3. Ausdünnen: Kein Punkt liegt näher als `GAP` am vorigen. Der letzte bleibt immer, dafür fällt sein Vorgänger weg, wenn er näher als
- *    `GAP` / 2 an ihm liegt.
+ *    `GAP` / 2 an ihm liegt. Gleichstände zählen als weit genug (`TIE`).
  * Die Orte kommen auf zwei Nachkommastellen gerundet zurück, die Breiten bleiben: genau so legt die Datei sie beim nächsten Speichern
- * ab. Danach hat der Strich die neue Genauigkeit, und die Reparatur greift nicht mehr.
+ * ab. Danach hat der Strich die neue Genauigkeit, und die Reparatur greift nicht mehr. Läge das Ergebnis in der Datei wieder ganz auf
+ * dem alten Raster, hielte das nächste Lesen den Strich für alt und reparierte ihn noch einmal, anders. Dann kommen dieselben Punkte
+ * zurück wie hineingegeben: So ändert sich ein Strich genau einmal oder nie. Das betrifft Geraden auf dem Raster (dort hat das Runden
+ * nichts zerfranst) und selten sehr kurze Striche.
  */
 export function repairOldLine(pts: Pt[]): Pt[] {
   if (pts.length < MIN_POINTS || !oneDecimal(pts) || !(medianStep(pts) < DENSE)) return pts;
@@ -95,11 +86,13 @@ export function repairOldLine(pts: Pt[]): Pt[] {
   const twice = gauss(once, arc);
   const smooth = line.map((p, i) => ({ x: 2 * once[i].x - twice[i].x, y: 2 * once[i].y - twice[i].y, w: p.w }));
   const kept = [smooth[0]];
-  for (let i = 1; i < smooth.length - 1; i++) if (dist(kept[kept.length - 1], smooth[i]) >= GAP) kept.push(smooth[i]);
+  for (let i = 1; i < smooth.length - 1; i++) if (dist(kept[kept.length - 1], smooth[i]) >= GAP - TIE) kept.push(smooth[i]);
   const end = smooth[smooth.length - 1];
   if (smooth.length > 1) {
-    if (kept.length > 1 && dist(kept[kept.length - 1], end) < GAP / 2) kept.pop();
+    if (kept.length > 1 && dist(kept[kept.length - 1], end) < GAP / 2 - TIE) kept.pop();
     kept.push(end);
   }
-  return kept.map((p) => ({ x: toHundredths(p.x), y: toHundredths(p.y), w: toHundredths(p.w) }));
+  // Genau die Zahlen der Datei: `fmtCoord` und `fmtWidth` schreiben `toHundredths`, `parsePage` liest dieselben Zahlen zurück.
+  const stored = kept.map((p) => ({ x: toHundredths(p.x), y: toHundredths(p.y), w: toHundredths(p.w) }));
+  return oneDecimal(stored) ? pts : stored;
 }

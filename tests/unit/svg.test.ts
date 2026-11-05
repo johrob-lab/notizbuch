@@ -1147,16 +1147,18 @@ function medianStep(pts: readonly Pt[]): number {
 
 /**
  * Eine Schleife mit der Füllfeder, gezoomt geschrieben wie `zoomedLoops` mit der alten Stabilisierung: 1,25 Umläufe um (300, 400)
- * mit Radius 6,7 Bildschirmpunkten (1 Einheit), je Messpunkt 0,16 rad weiter, mit Zittern. Fertig wie nach dem Abheben, noch ungerundet.
+ * mit Radius `rPx` Bildschirmpunkten (6,7 sind 1 Einheit), je Messpunkt etwa 1,07 Bildschirmpunkte weiter, mit Zittern. Fertig wie
+ * nach dem Abheben, noch ungerundet.
  */
-function zoomedCircle(seed: number): Stroke {
+function zoomedCircle(seed: number, rPx = 6.7): Stroke {
   const tremor = tremorOf(seed);
   const fueller = { ...DEFAULT_FUELLER, stabil: stabilFor(OLD_SIGMA_PX) };
   const b = new StrokeBuilder({ pen: 'fueller', color: 'schwarz', widthMm: 0.2, sigma: 1, t: 1793853950000 + seed, minDist: MIN_DIST_PX * ZOOMED, pxUnit: ZOOMED, fueller });
-  const steps = Math.round((2.5 * Math.PI) / 0.16);
+  const turn = 0.16 * (6.7 / rPx);
+  const steps = Math.round((2.5 * Math.PI) / turn);
   for (let i = 0; i <= steps; i++) {
-    const a = i * 0.16;
-    b.add(300 + (6.7 * Math.cos(a) + tremor()) * ZOOMED, 400 + (6.7 * Math.sin(a) + tremor()) * ZOOMED, 0.5, 40, 40, (i * 1000) / 240);
+    const a = i * turn;
+    b.add(300 + (rPx * Math.cos(a) + tremor()) * ZOOMED, 400 + (rPx * Math.sin(a) + tremor()) * ZOOMED, 0.5, 40, 40, (i * 1000) / 240);
   }
   return b.finish((steps * 1000) / 240);
 }
@@ -1203,15 +1205,40 @@ test('new precision is never repaired', () => {
 });
 
 test('the repair keeps loops and ends', () => {
-  const written = zoomedCircle(1);
-  const old = asOld(written);
-  const read = parsePage(serializePage(tagPage([old]), FIELDS, '')).strokes[0];
-  expect(places(read)).not.toEqual(places(old));
-  // Anfang und Ende bleiben genau dort, wo sie in der Datei stehen.
-  expect(places(read).at(0)).toEqual(places(old).at(0));
-  expect(places(read).at(-1)).toEqual(places(old).at(-1));
-  // Die Schleife wird höchstens 3 % kleiner als ungerundet (geeicht: 0,1 % kleiner).
-  expect(loopRadius(read) / loopRadius(written)).toBeGreaterThanOrEqual(0.97);
+  // Schleifen mit 4, 6,7 und 10 Bildschirmpunkten Radius.
+  for (const rPx of [4, 6.7, 10]) {
+    const written = zoomedCircle(1, rPx);
+    const old = asOld(written);
+    const read = parsePage(serializePage(tagPage([old]), FIELDS, '')).strokes[0];
+    expect(places(read), `${rPx}`).not.toEqual(places(old));
+    // Anfang und Ende bleiben genau dort, wo sie in der Datei stehen.
+    expect(places(read).at(0), `${rPx}`).toEqual(places(old).at(0));
+    expect(places(read).at(-1), `${rPx}`).toEqual(places(old).at(-1));
+    // Die Schleife wird höchstens 3 % kleiner als ungerundet (geeicht: bei 6,7 und 10 Punkten 0,1 und 0,4 % kleiner, bei 4 Punkten
+    // 1,9 % größer, das ist Rauschen des Rasters).
+    expect(loopRadius(read) / loopRadius(written), `${rPx}`).toBeGreaterThanOrEqual(0.97);
+  }
+});
+
+test('a stroke whose repair would lie on the old grid again stays as it is', () => {
+  // Ein kurzer senkrechter Strich, gezoomt geschrieben und alt gespeichert. Repariert läge er wieder ganz auf dem Raster der alten
+  // Datei: Das nächste Lesen hielte ihn für alt und reparierte ihn noch einmal anders. Darum bleibt er, wie er ist, und nach dem ersten
+  // Speichern ändert sich die Datei nicht mehr.
+  const pts: Pt[] = [
+    { x: 243.9, y: 1099.7, w: 0.19 },
+    { x: 243.9, y: 1099.9, w: 0.88 },
+    { x: 243.9, y: 1100, w: 1.15 },
+    { x: 243.9, y: 1100.3, w: 1.14 },
+    { x: 243.9, y: 1100.5, w: 0.81 },
+    { x: 243.9, y: 1100.7, w: 0.18 },
+  ];
+  const old: Stroke = { id: 'senkrecht', tool: 'fueller', color: 'schwarz', widthMm: 0.2, t: 1793853900000, w: 0.725, pts };
+  const read = parsePage(serializePage(tagPage([old]), FIELDS, '')).strokes;
+  expect(read[0].pts).toEqual(pts);
+  const saved = serializePage(tagPage(read), FIELDS, '');
+  const again = parsePage(saved).strokes;
+  expect(again).toEqual(read);
+  expect(serializePage(tagPage(again), FIELDS, '')).toBe(saved);
 });
 
 test('the repair happens once', () => {
