@@ -80,8 +80,8 @@ export function previewStroke(o: FuellerSettings, widthMm: number): Stroke {
  */
 export function previewD(o: FuellerSettings, widthMm: number): { d: string; viewBox: string } {
   // So weit reicht der Strich höchstens über die Kurve hinaus: die halbe Breite an der breitesten Stelle, die es geben kann (ganz
-  // flache Feder längs zur Strichrichtung, voller Druck bei voller Druckempfindlichkeit, langsam). Auf eine Stelle aufgerundet wie
-  // im Pfad.
+  // flache Feder längs zur Strichrichtung, voller Druck bei voller Druckempfindlichkeit, langsam). Auf eine Nachkommastelle
+  // aufgerundet, denn mit einer schreibt `fmtNum` die `viewBox`: So wird sie nie kleiner als nötig. Der Pfad selbst hat zwei.
   const reach = Math.ceil(((widthMm * MM * FLAT_NIB.along * (1 + PRESSURE_SPAN)) / 2) * 10) / 10;
   const viewBox = [-reach, -reach, CURVE.w + 2 * reach, CURVE.h + 2 * reach].map(fmtNum).join(' ');
   return { d: outlineD(previewStroke(o, widthMm).pts), viewBox };

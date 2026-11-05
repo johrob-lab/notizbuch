@@ -1,18 +1,24 @@
 import type { Pt2 } from './gestures';
-import { fmtNum } from './stroke';
+import { fmtCoord } from './stroke';
 import type { Pt, Stroke } from './types';
 
 // Der Umriss eines Strichs mit Breite je Punkt (Füllfeder und Bleistift): Vielecke, deren Vereinigung den Strich
-// samt runden Enden bedeckt. Reine Rechnung in Seiteneinheiten, ohne Bildschirm und ohne Datei. Die Datei schreibt den
-// Umriss mit `outlineD`, die Fläche füllt `outlineOf` mit einem `fill` (Regel nonzero): Darum laufen alle Vielecke
-// gleich herum, dann füllt sich ihre Vereinigung ohne Löcher.
+// samt runden Enden bedeckt. Reine Rechnung in Seiteneinheiten, ohne Bildschirm und ohne Datei. Gezeichnet wird jedes
+// Vieleck als runde Kurve (`traceCurve`), gleich in der Datei (`outlineD`) und auf der Fläche, die `outlineOf` mit
+// einem `fill` (Regel nonzero) füllt: Darum laufen alle Vielecke gleich herum, dann füllt sich ihre Vereinigung ohne
+// Löcher.
 
 /** Ein Knick, der stärker als 60 Grad ist (Kosinus kleiner als dieser Wert), teilt den Umriss. */
 export const CORNER_COS = 0.5;
 /** Die runden Enden haben alle 30 Grad eine Ecke, ein einzelner Punkt wird ein Zwölfeck. */
 export const ARC_STEP = Math.PI / 6;
-/** So weit (Seiteneinheiten) darf eine vereinfachte Seite des Umrisses höchstens von den gerechneten Randpunkten abweichen. */
-export const SIMPLIFY = 0.1;
+/**
+ * So weit (Seiteneinheiten) darf eine vereinfachte Seite des Umrisses höchstens von den gerechneten Randpunkten abweichen. Die Kurve
+ * durch ihre Ecken (`traceCurve`) liegt dann an den Seiten höchstens etwa 0,02 neben den Randpunkten, bei Zoom 6 etwa 0,1
+ * Bildschirmpunkte: Auch gezoomt sieht man keine Ecken. Kleiner behielte der Umriss das Rauschen der auf 0,01 gerundeten Punkte der
+ * Datei, und sie würde größer.
+ */
+export const SIMPLIFY = 0.019;
 
 /** Punkte, die näher als das am vorigen liegen, fallen weg: Sie hätten keine Richtung. */
 const SAME_POINT = 1e-6;
@@ -203,18 +209,61 @@ export function outlinePolygons(pts: readonly Pt[], minW?: number): Pt2[][] {
   return polys;
 }
 
-/** Der Umriss als Pfad für die Datei: je Vieleck `M x y L x y … Z`, nur absolute Zahlenpaare. Ohne Punkte leer. */
-export function outlineD(pts: readonly Pt[]): string {
-  return outlinePolygons(pts)
-    .map((poly) => poly.map((c, i) => `${i ? 'L' : 'M'} ${fmtNum(c.x)} ${fmtNum(c.y)}`).join(' ') + ' Z')
-    .join(' ');
+/** Was `traceCurve` zum Zeichnen braucht: Ein Canvas-Kontext kann es, für die Datei schreibt `outlineD` dieselben Schritte als Text. */
+export type CurveContext = {
+  moveTo(x: number, y: number): void;
+  quadraticCurveTo(cpx: number, cpy: number, x: number, y: number): void;
+  closePath(): void;
+};
+
+/**
+ * Hängt ein Vieleck des Umrisses als geschlossene Kurve an `ctx`: quadratische Bézier-Stücke mit den Ecken als Kontrollpunkten und
+ * den Mitten der Seiten als Kurvenpunkten. Sie beginnt in der Mitte der Seite vom letzten zum ersten Eckpunkt, dann folgt je Eckpunkt
+ * ein Stück bis zur Mitte der nächsten Seite. An jeder Mitte laufen beide Stücke entlang derselben Seite, die Richtung springt also
+ * nirgends, und der Rand wirkt auch gezoomt rund. Die Kurve bleibt in der Nähe ihrer Ecken (jedes Stück im Dreieck aus Eckpunkt und
+ * den beiden Mitten). Ein Vieleck mit weniger als drei Ecken (`outlinePolygons` baut keins) wird ebenso gezeichnet und hat keine
+ * Fläche, ein leeres gar nicht.
+ */
+export function traceCurve(ctx: CurveContext, poly: readonly Pt2[]): void {
+  const n = poly.length;
+  if (!n) return;
+  const last = poly[n - 1];
+  ctx.moveTo((last.x + poly[0].x) / 2, (last.y + poly[0].y) / 2);
+  for (let i = 0; i < n; i++) {
+    const v = poly[i];
+    const next = poly[i + 1 < n ? i + 1 : 0];
+    ctx.quadraticCurveTo(v.x, v.y, (v.x + next.x) / 2, (v.y + next.y) / 2);
+  }
+  ctx.closePath();
 }
 
-// Ein fertiger Strich ändert sich nie, sein Umriss und seine kleinste Breite werden darum nur einmal berechnet. Ist er
-// irgendwo dünner als eine verlangte Mindestbreite, wird dazu der Umriss für die zuletzt verlangte gemerkt.
+/**
+ * Der Umriss als Pfad für die Datei, dieselbe Kurve wie auf der Fläche (`traceCurve`): je Vieleck `M x y Q x y x y … Z`, nur absolute
+ * Zahlen mit höchstens zwei Nachkommastellen (`fmtCoord`). Ohne Punkte leer.
+ */
+export function outlineD(pts: readonly Pt[]): string {
+  const parts: string[] = [];
+  const writer: CurveContext = {
+    moveTo: (x, y) => {
+      parts.push(`M ${fmtCoord(x)} ${fmtCoord(y)}`);
+    },
+    quadraticCurveTo: (cpx, cpy, x, y) => {
+      parts.push(`Q ${fmtCoord(cpx)} ${fmtCoord(cpy)} ${fmtCoord(x)} ${fmtCoord(y)}`);
+    },
+    closePath: () => {
+      parts.push('Z');
+    },
+  };
+  for (const poly of outlinePolygons(pts)) traceCurve(writer, poly);
+  return parts.join(' ');
+}
+
+// Ein fertiger Strich ändert sich nie, sein Umriss, sein Pfad für die Datei und seine kleinste Breite werden darum nur einmal
+// berechnet. Ist er irgendwo dünner als eine verlangte Mindestbreite, wird dazu der Umriss für die zuletzt verlangte gemerkt.
 const known = new WeakMap<Stroke, Pt2[][]>();
 const thinnest = new WeakMap<Stroke, number>();
 const widened = new WeakMap<Stroke, { minW: number; polys: Pt2[][] }>();
+const written = new WeakMap<Stroke, string>();
 
 /** Die kleinste Breite eines Punkts, je Strich nur einmal berechnet. */
 function thinnestOf(s: Stroke): number {
@@ -246,4 +295,17 @@ export function outlineOf(s: Stroke, minW = 0): Pt2[][] {
     known.set(s, polys);
   }
   return polys;
+}
+
+/**
+ * Der Umriss eines fertigen Strichs als Pfad für die Datei (`outlineD`), je Strich nur einmal geschrieben: Gespeichert wird bei jedem
+ * Abheben die ganze Seite, und nur der neue Strich braucht dann einen neuen Pfad.
+ */
+export function outlineDOf(s: Stroke): string {
+  let d = written.get(s);
+  if (d === undefined) {
+    d = outlineD(s.pts);
+    written.set(s, d);
+  }
+  return d;
 }

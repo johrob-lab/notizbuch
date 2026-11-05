@@ -289,6 +289,85 @@ test('old strokes keep their shape when the settings change', async ({ page }) =
   expect(attr(old!, 'data-linie')).toBe(attr(before, 'data-linie'));
 });
 
+/** Drei kleine Schleifen ab `from` (Seiteneinheiten) mit Radius `r`, `n` Punkte je Schleife. */
+const loops = ([x0, y0]: [number, number], r: number, n: number): [number, number][] =>
+  Array.from({ length: 3 * n + 1 }, (_, i): [number, number] => {
+    const a = (2 * Math.PI * i) / n;
+    return [x0 + r * (0.45 * a - Math.sin(a)), y0 + 1.3 * r * (Math.cos(a) - 1)];
+  });
+
+test('zoomed in, the page shows exactly the stroke and the pieces that the file holds', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await changeStoredSettings(page, { ink: { ...inkWith(DEFAULT_FUELLER), eraserMode: 'stueck' } });
+  await page.reload();
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  // Weit hineingezoomt liegen die Punkte nur etwa 0,1 Einheiten auseinander.
+  await wheel(page, [440, 1010], { dy: -800, ctrl: true });
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+  expect((await viewOf(page)).scale, 'Bildschirmpunkte je Seiteneinheit').toBeGreaterThan(6);
+  const shown = () => page.evaluate(() => window.__notizbuch.currentPage().strokes.map((s) => s.pts));
+  const saved = async () => strokePaths(await savedPage(page)).map(pointsOf);
+
+  // Nach dem Abheben zeigt die Seite genau die Punkte, die in der Datei stehen: Neu geladen sieht der Strich gleich aus.
+  await pen(page, { tiltX: 40, tiltY: 40 }).stroke(loops([420, 1012], 1, 60));
+  await expect.poll(async () => (await saved()).length).toBe(1);
+  expect((await shown())[0].length, 'Punkte').toBeGreaterThan(100);
+  expect(await saved()).toEqual(await shown());
+
+  // Ebenso die Stücke, wenn der Radierer die mittlere Schleife durchschneidet.
+  await toolbarButton(page, 'Radierer').click();
+  await pen(page).stroke(line([424.2, 1007], [424.2, 1013], 7));
+  await expect.poll(async () => (await saved()).length).toBeGreaterThan(1);
+  expect(await saved()).toEqual(await shown());
+});
+
+/** Was die Grundebene seit `recordBase` zum Bauen ihrer Pfade aufgerufen hat. */
+type BaseRecord = { __base: string[] };
+
+/**
+ * Schreibt ab jetzt mit, womit die Grundebene (fertige Striche) ihre Pfade baut: je Aufruf der Buchstabe wie in der Datei (M, L, Q,
+ * Z) und die Zahlen in Seiteneinheiten, auf zwei Nachkommastellen gerundet wie in der Datei. Jeder neue Pfad (`beginPath`) beginnt
+ * mit `|`.
+ */
+const recordBase = (page: Page) =>
+  page.evaluate(() => {
+    const calls: string[] = [];
+    (window as unknown as BaseRecord).__base = calls;
+    const proto = CanvasRenderingContext2D.prototype;
+    const letters = { beginPath: '|', moveTo: 'M', lineTo: 'L', quadraticCurveTo: 'Q', closePath: 'Z' } as const;
+    for (const [name, letter] of Object.entries(letters)) {
+      const original = proto[name as keyof typeof letters] as (this: CanvasRenderingContext2D, ...args: number[]) => void;
+      Object.defineProperty(proto, name, {
+        configurable: true,
+        writable: true,
+        value(this: CanvasRenderingContext2D, ...args: number[]) {
+          if (this.canvas.dataset.layer === 'grund') calls.push(letter, ...args.map((v) => String(Math.round(v * 100) / 100 + 0)));
+          return original.apply(this, args);
+        },
+      });
+    }
+  });
+
+test('zoomed in, a finished stroke is drawn with the curves of the file', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  // Runde Spitze ohne Verjüngung: Kein Punkt ist dünner als ein Bildpunkt, die Fläche füllt also genau den Umriss der Datei.
+  await choose(page, { schaerfe: 0, druck: 0.25, rundung: 1, stabil: 0.14 });
+  await wheel(page, [440, 1010], { dy: -800, ctrl: true });
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+  expect((await viewOf(page)).scale, 'Bildschirmpunkte je Seiteneinheit').toBeGreaterThan(6);
+  await recordBase(page);
+  await pen(page, { tiltX: 40, tiltY: 40 }).stroke(loops([420, 1012], 1, 60));
+  await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(1);
+  const d = attr(strokePaths(await savedPage(page))[0], 'd') ?? '';
+  expect(d).toContain(' Q ');
+  // Die Grundebene hat den fertigen Strich mit genau den Kurven der Datei gezeichnet ...
+  const drawn = (await page.evaluate(() => (window as unknown as BaseRecord).__base)).join(' ');
+  expect(drawn).toContain(d);
+  // ... und in dem Pfad, mit dem sie ihn füllt, keine einzige Gerade. Nur dieser Pfad zählt: Papier und andere Striche haben eigene.
+  const own = drawn.split('|').filter((path) => path.includes(d));
+  expect(own.filter((path) => path.includes('L'))).toEqual([]);
+});
+
 test('the ends taper only after lifting the pen', async ({ page }) => {
   await openSeeded(page, DAY, { offline: true });
   await choose(page, { schaerfe: 1, druck: 0.25, rundung: 0.33, stabil: 0.14 });
@@ -708,7 +787,7 @@ test('a second tap on the fountain pen opens the panel in the toolbar, the ring 
 
   // Die Vorschau in der Tintenfarbe, darunter vier Regler von 0 bis 100 mit Namen und Wert, jeder mindestens 44 Punkte hoch.
   const path = page.locator(`${PANEL} .fueller-vorschau path`);
-  expect(await path.getAttribute('d')).toMatch(/^M -?[\d.]+ -?[\d.]+ L /);
+  expect(await path.getAttribute('d')).toMatch(/^M -?[\d.]+ -?[\d.]+ Q /);
   expect(await path.getAttribute('fill')).toBe(INK.schwarz);
   const sliders = page.locator(`${PANEL} input[type="range"]`);
   expect(await sliders.evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')))).toEqual(SLIDER_NAMES);

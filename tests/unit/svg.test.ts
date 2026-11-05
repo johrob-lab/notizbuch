@@ -1,9 +1,13 @@
 import { expect, test, vi } from 'vitest';
-import { StrokeBuilder } from '../../src/ink/stroke';
+import { cutStroke, ERASER_PX } from '../../src/ink/erase';
+import type { Pt2 } from '../../src/ink/gestures';
+import { outlinePolygons } from '../../src/ink/outline';
+import { StrokeBuilder, toHundredths } from '../../src/ink/stroke';
 import { INK } from '../../src/ink/types';
-import type { PenKind } from '../../src/ink/pens';
-import { FORMAT_VERSION, PageTooNewError, mergePages, parsePage, serializePage } from '../../src/ink/svg';
+import { DEFAULT_FUELLER, MIN_DIST_PX, stabilSigmaPx, type PenKind } from '../../src/ink/pens';
+import { FORMAT_VERSION, PageTooNewError, mergePages, parsePage, serializePage, storedForm } from '../../src/ink/svg';
 import type { FieldBox, InkColor, Page, Stroke } from '../../src/ink/types';
+import { medianStep, UPRIGHT } from './repairHelpers';
 
 const DAY = '2026-10-29';
 
@@ -124,7 +128,7 @@ test('the file has the fixed format: root attributes, background group, one path
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1192 1590" width="1192" height="1590" data-notizbuch="1" data-seite="tag" data-schluessel="2026-10-29">',
       `  <g data-hintergrund="1">${background}</g>`,
       '  <g data-feld="notizen" data-datum="2026-10-29">',
-      '    <path data-id="s1793251082972a" data-werkzeug="kugel" data-farbe="rot" data-breite="0.2" data-t="1793251082972" d="M 10.5 20 L 30 40" fill="none" stroke="#c62828" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>',
+      '    <path data-id="s1793251082972a" data-werkzeug="kugel" data-farbe="rot" data-breite="0.2" data-t="1793251082972" d="M 10.5 20 L 30 40.04" fill="none" stroke="#c62828" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>',
       '  </g>',
       '</svg>',
       '',
@@ -164,9 +168,10 @@ test('a drawn stroke survives the round trip within the rounding of the format',
   expect(back).toMatchObject({ id: stroke.id, tool: 'kugel', color: 'blau', widthMm: 0.4, t: 1793251082972 });
   expect(Math.abs(back.w - stroke.w)).toBeLessThanOrEqual(0.05 + 1e-9);
   expect(back.pts).toHaveLength(stroke.pts.length);
+  // Die Orte mit zwei Nachkommastellen, die Breite des Strichs (`stroke-width`) mit einer.
   back.pts.forEach((p, i) => {
-    expect(Math.abs(p.x - stroke.pts[i].x), `x ${i}`).toBeLessThanOrEqual(0.05 + 1e-9);
-    expect(Math.abs(p.y - stroke.pts[i].y), `y ${i}`).toBeLessThanOrEqual(0.05 + 1e-9);
+    expect(Math.abs(p.x - stroke.pts[i].x), `x ${i}`).toBeLessThanOrEqual(0.005 + 1e-9);
+    expect(Math.abs(p.y - stroke.pts[i].y), `y ${i}`).toBeLessThanOrEqual(0.005 + 1e-9);
   });
 });
 
@@ -747,13 +752,14 @@ test('a fountain pen stroke is a filled outline with its centre line and widths'
   expect(back.color).toBe('blau');
   expect(back.pts).toHaveLength(s.pts.length);
   s.pts.forEach((p, i) => {
-    expect(Math.abs(back.pts[i].x - p.x)).toBeLessThanOrEqual(0.05);
-    expect(Math.abs(back.pts[i].y - p.y)).toBeLessThanOrEqual(0.05);
-    expect(Math.abs(back.pts[i].w - p.w)).toBeLessThanOrEqual(0.005 + 1e-9); // die Breite mit zwei Nachkommastellen
+    // Orte und Breite mit zwei Nachkommastellen.
+    expect(Math.abs(back.pts[i].x - p.x)).toBeLessThanOrEqual(0.005 + 1e-9);
+    expect(Math.abs(back.pts[i].y - p.y)).toBeLessThanOrEqual(0.005 + 1e-9);
+    expect(Math.abs(back.pts[i].w - p.w)).toBeLessThanOrEqual(0.005 + 1e-9);
   });
 });
 
-test('the width in the centre line keeps two decimals', () => {
+test('the centre line keeps two decimals for places and widths', () => {
   const s: Stroke = {
     id: 'f1',
     tool: 'fueller',
@@ -767,16 +773,19 @@ test('the width in the centre line keeps two decimals', () => {
     ],
   };
   const svg = serializePage(tagPage([s]), FIELDS, '');
-  // x und y weiter mit einer Nachkommastelle, die Breite mit zwei, ohne Nullen am Ende.
-  expect(lineOf(svg, 'f1')).toContain(' data-linie="10 20.1 0.73 30 40 1.2" ');
+  // x, y und die Breite mit zwei Nachkommastellen, ohne Nullen am Ende.
+  expect(lineOf(svg, 'f1')).toContain(' data-linie="10.04 20.06 0.73 30 40.04 1.2" ');
   expect(parsePage(svg).strokes[0].pts).toEqual([
-    { x: 10, y: 20.1, w: 0.73 },
+    { x: 10.04, y: 20.06, w: 0.73 },
+    { x: 30, y: 40.04, w: 1.2 },
+  ]);
+  // Eine Datei von früher hat Orte und Breite mit einer Nachkommastelle: Sie wird weiter gelesen.
+  const old = svg.replace(' data-linie="10.04 20.06 0.73 30 40.04 1.2" ', ' data-linie="10 20.1 0.7 30 40 1.2" ');
+  expect(old).not.toBe(svg);
+  expect(parsePage(old).strokes[0].pts).toEqual([
+    { x: 10, y: 20.1, w: 0.7 },
     { x: 30, y: 40, w: 1.2 },
   ]);
-  // Eine Datei von früher hat die Breite mit einer Nachkommastelle: Sie wird weiter gelesen.
-  const old = svg.replace(' data-linie="10 20.1 0.73 30 40 1.2" ', ' data-linie="10 20.1 0.7 30 40 1.2" ');
-  expect(old).not.toBe(svg);
-  expect(parsePage(old).strokes[0].pts.map((p) => p.w)).toEqual([0.7, 1.2]);
 });
 
 test('a pencil stroke is grey, see through and grainy, and the grain is defined once', () => {
@@ -882,4 +891,369 @@ test('a broken centre line or an unknown tool skips only that stroke', () => {
     return l;
   });
   expect(parsePage(lines.join('\n')).strokes.map((s) => s.id)).toEqual(['gut']);
+});
+
+// ---------- Genauigkeit der Datei ----------
+
+/** Seiteneinheiten je Bildschirmpunkt bei Zoom 6,7: So weit hineingezoomt liegen die Punkte eines Strichs nur etwa 0,1 Einheiten auseinander. */
+const ZOOMED = 0.15;
+
+/** Leichtes Zittern des Stifts, bis 0,15 Bildschirmpunkte zu jeder Seite, je `seed` (ab 1) anders. */
+function tremorOf(seed: number): () => number {
+  let r = seed;
+  return () => {
+    r = (r * 16807) % 2147483647;
+    return (r / 2147483647 - 0.5) * 0.3;
+  };
+}
+
+/** Die Strich-Stabilisierung, mit der die Füllfeder um `px` Bildschirmpunkte glättet: `stabilSigmaPx` umgekehrt. */
+function stabilFor(px: number): number {
+  let lo = 0;
+  let hi = 1;
+  for (let k = 0; k < 50; k++) {
+    const mid = (lo + hi) / 2;
+    if (stabilSigmaPx(mid) < px) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
+/**
+ * Drei kleine Schleifen mit der Füllfeder, gezoomt geschrieben wie in der Probe im Konzept. Gemessen in Bildschirmpunkten: Radius
+ * 6,7, 240 Messpunkte je Sekunde (je Messpunkt 0,16 rad weiter auf der Schleife) und leichtes Zittern (`tremorOf`). Fertig wie
+ * nach dem Abheben, aber noch ungerundet. Der Strich liegt `seed` × 10 Einheiten tiefer. Mit `pxUnit` 1 in normaler Größe
+ * geschrieben, mit `pen` mit einem anderen Stift, mit `sigmaPx` mit dieser Stabilisierung statt der von heute.
+ */
+function zoomedLoops(seed: number, o: { pxUnit?: number; pen?: PenKind; sigmaPx?: number } = {}): Stroke {
+  const { pxUnit = ZOOMED, pen = 'fueller', sigmaPx } = o;
+  const tremor = tremorOf(seed);
+  const fueller = sigmaPx === undefined ? undefined : { ...DEFAULT_FUELLER, stabil: stabilFor(sigmaPx) };
+  const b = new StrokeBuilder({ pen, color: 'schwarz', widthMm: 0.2, sigma: 1, t: 1793853900000 + seed, minDist: MIN_DIST_PX * pxUnit, pxUnit, fueller });
+  const steps = Math.round((6 * Math.PI) / 0.16);
+  for (let i = 0; i <= steps; i++) {
+    const a = i * 0.16;
+    const x = 6.7 * (0.45 * a - Math.sin(a)) + tremor();
+    const y = 6.7 * 1.3 * (Math.cos(a) - 1) + tremor();
+    b.add(100 + x * pxUnit, 100 + 10 * seed + y * pxUnit, 0.5, 40, 40, (i * 1000) / 240);
+  }
+  return b.finish((steps * 1000) / 240);
+}
+
+/** Je Ecke aller Vielecke der Winkel in Grad, um den der Rand dort abknickt. */
+function cornerTurns(polys: Pt2[][]): number[] {
+  return polys.flatMap((poly) =>
+    poly.map((b, i) => {
+      const a = poly[(i + poly.length - 1) % poly.length];
+      const c = poly[(i + 1) % poly.length];
+      const [ux, uy, vx, vy] = [b.x - a.x, b.y - a.y, c.x - b.x, c.y - b.y];
+      return (Math.abs(Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy)) * 180) / Math.PI;
+    }),
+  );
+}
+
+/**
+ * Der mittlere Winkel in Grad, um den der Rand an den Ecken aller Vielecke abknickt. Ein zerfranster Umriss knickt an vielen Ecken
+ * stark ab (und zerfällt an Knicken über 60 Grad in mehrere Vielecke).
+ */
+function meanTurn(polys: Pt2[][]): number {
+  const turns = cornerTurns(polys);
+  return turns.reduce((sum, t) => sum + t, 0) / turns.length;
+}
+
+/** Wie viele Ecken aller Vielecke schärfer als 45 Grad abknicken. */
+const sharpCorners = (polys: Pt2[][]) => cornerTurns(polys).filter((t) => t > 45).length;
+
+/** Die Orte der Punkte ohne Breite. */
+const places = (s: Stroke) => s.pts.map(({ x, y }) => ({ x, y }));
+
+/**
+ * Eine Seite, wie die App sie vor Paket 3d schrieb: alle Orte mit höchstens einer Nachkommastelle, die Breiten in `data-linie`
+ * mit zwei. Ein Kugelschreiberstrich und ein locker geschriebener Füllfederstrich (die Punkte liegen gut 1,5 Einheiten auseinander).
+ */
+const OLD_PAGE = [
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1192 1590" width="1192" height="1590" data-notizbuch="2" data-seite="tag" data-schluessel="2026-10-29">',
+  '  <g data-hintergrund="1"></g>',
+  '  <g data-feld="frei" data-datum="2026-10-29">',
+  '    <path data-id="s1793253000000alt1" data-werkzeug="kugel" data-farbe="schwarz" data-breite="0.2" data-t="1793253000000" d="M 100.1 200.5 Q 103.8 201.2 105.7 200.6 Q 107.6 200 108.8 200.3 L 110 200.5" fill="none" stroke="#1c1f26" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>',
+  '    <path data-id="s1793253001000alt2" data-werkzeug="fueller" data-farbe="blau" data-breite="0.4" data-t="1793253001000" data-linie="120.3 300.1 0.42 121.9 301.4 1.37 123.6 302.2 2.05 125.4 302.6 2.31 127.2 302.5 1.88 128.9 301.9 0.56" d="M 120.2 300.3 L 121.5 302 L 123.3 303.2 L 125.3 303.8 L 127.4 303.4 L 129 302.2 L 129.1 302.1 L 129.2 302 L 129.2 301.8 L 129.1 301.7 L 129 301.6 L 128.8 301.6 L 123.9 301.2 L 122.3 300.8 L 120.4 299.9 L 120.3 299.9 L 120.2 299.9 L 120.1 300 L 120.1 300.1 L 120.1 300.2 Z" fill="#1f4fa3"/>',
+  '  </g>',
+  '</svg>',
+  '',
+].join('\n');
+
+test('zoomed strokes keep their shape through the file', () => {
+  // Sechzehn Mal dieselben Schleifen, jedes Mal anders zittrig. Bei einem einzelnen Umriss schwankt der mittlere Eckwinkel schon bei
+  // winzigen Änderungen um bis zu 2 Grad (die Vereinfachung wählt andere Ecken), über die Seite gemessen bleibt, was das Runden
+  // ausmacht. Auf eine Nachkommastelle gerundet knickt der Rand im Mittel um 17 Grad mehr ab, und jeder Umriss zerfällt.
+  const written = Array.from({ length: 16 }, (_, k) => zoomedLoops(k + 1));
+  const read = parsePage(serializePage(tagPage(written), FIELDS, '')).strokes;
+  expect(read.map((s) => s.id)).toEqual(written.map((s) => s.id));
+  const before = written.map((s) => outlinePolygons(s.pts));
+  const after = read.map((s) => outlinePolygons(s.pts));
+  const was = meanTurn(before.flat());
+  expect(meanTurn(after.flat()), `vorher ${was.toFixed(1)} Grad`).toBeLessThanOrEqual(was + 2);
+  // Kein Umriss zerfällt in mehr Teile als vorher.
+  expect(after.map((polys, i) => polys.length - before[i].length).filter((more) => more > 0)).toEqual([]);
+});
+
+test('storedForm rounds the points as the file keeps them and leaves the rest', () => {
+  const fueller: Stroke = {
+    id: 'f1',
+    tool: 'fueller',
+    color: 'blau',
+    widthMm: 0.4,
+    t: 5,
+    w: 0.968,
+    pts: [
+      { x: 10.004, y: -0.004, w: 0.736 },
+      { x: 20.006, y: 40.5, w: 1.2 },
+    ],
+  };
+  const copy = structuredClone(fueller);
+  // Füllfeder und Bleistift: Orte und Breite je Punkt mit zwei Nachkommastellen, nie -0. `w` ist das Mittel dieser Breiten, so wie
+  // `parsePage` es aus der Datei rechnet. Alles andere bleibt.
+  for (const tool of ['fueller', 'bleistift'] as const) {
+    expect(storedForm({ ...fueller, tool }), tool).toEqual({
+      ...fueller,
+      tool,
+      w: (0.74 + 1.2) / 2,
+      pts: [
+        { x: 10, y: 0, w: 0.74 },
+        { x: 20.01, y: 40.5, w: 1.2 },
+      ],
+    });
+  }
+  // Kugelschreiber und Fineliner: die Orte, und `w` mit einer Nachkommastelle wie `stroke-width` in der Datei. Die Breite je Punkt
+  // bleibt, die Datei hat für sie eine Breite je Strich.
+  for (const tool of ['kugel', 'fineliner'] as const) {
+    expect(storedForm({ ...fueller, tool }), tool).toEqual({
+      ...fueller,
+      tool,
+      w: 1,
+      pts: [
+        { x: 10, y: 0, w: 0.736 },
+        { x: 20.01, y: 40.5, w: 1.2 },
+      ],
+    });
+  }
+  // Neue Punkte: Der Strich, aus dem sie entstehen, bleibt, wie er war.
+  expect(fueller).toEqual(copy);
+});
+
+test('what you see after lifting is what is saved', () => {
+  // So nimmt die Fläche einen fertigen Strich auf: gezoomte Füllfeder, Kugelschreiber und Fineliner.
+  const shown = [storedForm(zoomedLoops(1)), storedForm(penStroke('kugel')), storedForm(penStroke('fineliner'))];
+  // Die Orte haben wirklich zwei Nachkommastellen, sonst bewiese der Vergleich wenig.
+  expect(shown[0].pts.some((p) => Math.round(p.x * 10) / 10 !== p.x)).toBe(true);
+  const svg = serializePage(tagPage(shown), FIELDS, '');
+  const back = parsePage(svg).strokes;
+  // Füllfeder: Ort und Breite jedes Punkts genau gleich.
+  expect(back[0].pts).toEqual(shown[0].pts);
+  // Kugelschreiber und Fineliner: jeder Ort genau gleich (die Breite steht für den ganzen Strich in `stroke-width`).
+  expect(back.slice(1).map(places)).toEqual(shown.slice(1).map(places));
+  // Die Breite des ganzen Strichs, mit der Kugelschreiber und Fineliner gezeichnet werden: bei jedem Stift genau gleich.
+  expect(back.map((s) => s.w)).toEqual(shown.map((s) => s.w));
+  // Noch einmal gespeichert: dieselbe Datei.
+  expect(serializePage(tagPage(back), FIELDS, '')).toBe(svg);
+
+  // Teil-Radieren mit dem kleinen Radierer: Die Stücke kommen ebenso in der Form der Datei auf die Seite.
+  let n = 0;
+  const cut = cutStroke(shown[0], shown[0].pts[60], ERASER_PX.klein * ZOOMED, () => `stueck${++n}`);
+  const pieces = (cut ?? []).map(storedForm);
+  expect(pieces.length).toBeGreaterThanOrEqual(2);
+  const backPieces = parsePage(serializePage(tagPage(pieces), FIELDS, '')).strokes;
+  expect(backPieces.map((s) => s.pts)).toEqual(pieces.map((s) => s.pts));
+  expect(backPieces.map((s) => s.w)).toEqual(pieces.map((s) => s.w));
+});
+
+test('old one decimal pages still read', () => {
+  const old = parsePage(OLD_PAGE);
+  expect(old.strokes).toEqual([
+    {
+      id: 's1793253000000alt1',
+      tool: 'kugel',
+      color: 'schwarz',
+      widthMm: 0.2,
+      t: 1793253000000,
+      w: 1.2,
+      pts: [
+        { x: 100.1, y: 200.5, w: 1.2 },
+        { x: 103.8, y: 201.2, w: 1.2 },
+        { x: 107.6, y: 200, w: 1.2 },
+        { x: 110, y: 200.5, w: 1.2 },
+      ],
+    },
+    {
+      id: 's1793253001000alt2',
+      tool: 'fueller',
+      color: 'blau',
+      widthMm: 0.4,
+      t: 1793253001000,
+      w: (0.42 + 1.37 + 2.05 + 2.31 + 1.88 + 0.56) / 6,
+      pts: [
+        { x: 120.3, y: 300.1, w: 0.42 },
+        { x: 121.9, y: 301.4, w: 1.37 },
+        { x: 123.6, y: 302.2, w: 2.05 },
+        { x: 125.4, y: 302.6, w: 2.31 },
+        { x: 127.2, y: 302.5, w: 1.88 },
+        { x: 128.9, y: 301.9, w: 0.56 },
+      ],
+    },
+  ]);
+  // Mit der neuen Genauigkeit gespeichert und wieder gelesen: dieselben Striche.
+  expect(parsePage(serializePage(old, [], '')).strokes).toEqual(old.strokes);
+});
+
+test('merging keeps the new precision', () => {
+  // Dieses Gerät hat die alte Seite gelesen und gezoomt weitergeschrieben, das andere hat noch die alte Fassung.
+  const old = parsePage(OLD_PAGE).strokes;
+  const fresh = [storedForm(zoomedLoops(1)), storedForm(penStroke('kugel', 'blau', 'k-neu'))];
+  const ours = serializePage(tagPage([...old, ...fresh]), FIELDS, '');
+  const merges = { 'mit Ausgangspunkt': mergePages(ours, OLD_PAGE, OLD_PAGE), ohne: mergePages(ours, OLD_PAGE), umgekehrt: mergePages(OLD_PAGE, ours) };
+  for (const [name, merged] of Object.entries(merges)) {
+    const strokes = parsePage(merged).strokes;
+    const byId = (id: string) => strokes.find((s) => s.id === id);
+    // Die neuen Striche Zeichen für Zeichen wie in ihrer Datei, also Punkt für Punkt mit zwei Nachkommastellen wie gezeigt.
+    expect(lineOf(merged, fresh[0].id), name).toBe(lineOf(ours, fresh[0].id));
+    expect(byId(fresh[0].id)?.pts, name).toEqual(fresh[0].pts);
+    expect(places(byId('k-neu')!), name).toEqual(places(fresh[1]));
+    // Die alten wie vorher.
+    for (const s of old) expect(byId(s.id), name).toEqual(s);
+  }
+});
+
+// ---------- Alte zerfranste Striche ----------
+
+/**
+ * Alte Striche entstanden mit der Stabilisierung, die bis Paket 3d galt: beim Startwert 14 % ein σ von 2,97 Bildschirmpunkten. Die
+ * Proben unten schreiben sie mit genau diesem σ, so bleiben sie gleich, auch wenn sich die Formel der Stabilisierung ändert.
+ */
+const OLD_SIGMA_PX = 2.97;
+
+/** Der Strich so, wie ihn die App vor Paket 3d in die Datei schrieb: Orte mit einer Nachkommastelle, Breiten mit zwei. */
+function asOld(s: Stroke): Stroke {
+  return { ...s, pts: s.pts.map((p) => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10, w: toHundredths(p.w) })) };
+}
+
+/**
+ * Eine Schleife mit der Füllfeder, gezoomt geschrieben wie `zoomedLoops` mit der alten Stabilisierung: 1,25 Umläufe um (300, 400)
+ * mit Radius `rPx` Bildschirmpunkten (6,7 sind 1 Einheit), je Messpunkt etwa 1,07 Bildschirmpunkte weiter, mit Zittern. Fertig wie
+ * nach dem Abheben, noch ungerundet.
+ */
+function zoomedCircle(seed: number, rPx = 6.7): Stroke {
+  const tremor = tremorOf(seed);
+  const fueller = { ...DEFAULT_FUELLER, stabil: stabilFor(OLD_SIGMA_PX) };
+  const b = new StrokeBuilder({ pen: 'fueller', color: 'schwarz', widthMm: 0.2, sigma: 1, t: 1793853950000 + seed, minDist: MIN_DIST_PX * ZOOMED, pxUnit: ZOOMED, fueller });
+  const turn = 0.16 * (6.7 / rPx);
+  const steps = Math.round((2.5 * Math.PI) / turn);
+  for (let i = 0; i <= steps; i++) {
+    const a = i * turn;
+    b.add(300 + (rPx * Math.cos(a) + tremor()) * ZOOMED, 400 + (rPx * Math.sin(a) + tremor()) * ZOOMED, 0.5, 40, 40, (i * 1000) / 240);
+  }
+  return b.finish((steps * 1000) / 240);
+}
+
+/** Der Radius der Schleife von `zoomedCircle`: der mittlere Abstand der Punkte von ihrem Mittelpunkt. */
+const loopRadius = (s: Stroke) => s.pts.reduce((sum, p) => sum + Math.hypot(p.x - 300, p.y - 400), 0) / s.pts.length;
+
+test('an old dense stroke is repaired on reading', () => {
+  // Die sechzehn Schleifen von oben, gezoomt mit der alten Stabilisierung geschrieben und so gespeichert, wie es die App vor Paket 3d
+  // tat. Ohne Reparatur knickt der Rand gelesen im Mittel um 17 Grad mehr ab als ungerundet, hat mehr als viermal so viele scharfe
+  // Ecken, und jeder Umriss zerfällt in Teile.
+  const written = Array.from({ length: 16 }, (_, k) => zoomedLoops(k + 1, { sigmaPx: OLD_SIGMA_PX }));
+  const old = written.map(asOld);
+  expect(old.every((s) => s.pts.length >= 5 && medianStep(s.pts) < 0.35)).toBe(true);
+  const read = parsePage(serializePage(tagPage(old), FIELDS, '')).strokes;
+  expect(read.map((s) => s.id)).toEqual(written.map((s) => s.id));
+  const before = written.map((s) => outlinePolygons(s.pts));
+  const after = read.map((s) => outlinePolygons(s.pts));
+  const was = meanTurn(before.flat());
+  // Repariert so ruhig wie ungerundet: im Mittel höchstens 2 Grad mehr (gemessen 1,2: Der ausgedünnte Umriss hat weniger Ecken, in
+  // der Summe knickt er 5 % weniger ab), nicht mehr scharfe Ecken (gemessen 122 statt 140) und kein Umriss in mehr Teilen.
+  expect(meanTurn(after.flat()), `ungerundet ${was.toFixed(1)} Grad`).toBeLessThanOrEqual(was + 2);
+  expect(sharpCorners(after.flat())).toBeLessThanOrEqual(sharpCorners(before.flat()));
+  expect(after.map((polys, i) => polys.length - before[i].length).filter((more) => more > 0)).toEqual([]);
+});
+
+test('an old loose stroke stays as it is', () => {
+  // Dieselben Schleifen in normaler Größe geschrieben (Zoom 1): Die Punkte liegen weit genug auseinander, das Runden stört nicht.
+  const loose = asOld(zoomedLoops(1, { pxUnit: 1, sigmaPx: OLD_SIGMA_PX }));
+  expect(medianStep(loose.pts)).toBeGreaterThan(0.35);
+  expect(parsePage(serializePage(tagPage([loose]), FIELDS, '')).strokes[0].pts).toEqual(loose.pts);
+});
+
+test('new precision is never repaired', () => {
+  // Gezoomt geschrieben und mit zwei Nachkommastellen gespeichert: so dicht wie die alten Striche oben, aber genau.
+  const fresh = [storedForm(zoomedLoops(1)), storedForm(zoomedLoops(2, { pen: 'bleistift' }))];
+  expect(fresh.every((s) => medianStep(s.pts) < 0.35)).toBe(true);
+  const read = parsePage(serializePage(tagPage(fresh), FIELDS, '')).strokes;
+  expect(read.map((s) => s.pts)).toEqual(fresh.map((s) => s.pts));
+  // Schon eine einzige Zahl mit zwei Nachkommastellen zeigt die neue Genauigkeit.
+  const old = asOld(zoomedLoops(3, { sigmaPx: OLD_SIGMA_PX }));
+  const mixed = { ...old, pts: old.pts.map((p, i) => (i === 40 ? { ...p, x: toHundredths(p.x + 0.01) } : p)) };
+  expect(parsePage(serializePage(tagPage([mixed]), FIELDS, '')).strokes[0].pts).toEqual(mixed.pts);
+});
+
+test('the repair keeps loops and ends', () => {
+  // Schleifen mit 4, 6,7 und 10 Bildschirmpunkten Radius.
+  for (const rPx of [4, 6.7, 10]) {
+    const written = zoomedCircle(1, rPx);
+    const old = asOld(written);
+    const read = parsePage(serializePage(tagPage([old]), FIELDS, '')).strokes[0];
+    expect(places(read), `${rPx}`).not.toEqual(places(old));
+    // Anfang und Ende bleiben genau dort, wo sie in der Datei stehen.
+    expect(places(read).at(0), `${rPx}`).toEqual(places(old).at(0));
+    expect(places(read).at(-1), `${rPx}`).toEqual(places(old).at(-1));
+    // Die Schleife wird höchstens 3 % kleiner als ungerundet (geeicht: bei 6,7 und 10 Punkten 0,1 und 0,4 % kleiner, bei 4 Punkten
+    // 1,9 % größer, das ist Rauschen des Rasters).
+    expect(loopRadius(read) / loopRadius(written), `${rPx}`).toBeGreaterThanOrEqual(0.97);
+  }
+});
+
+test('a stroke whose repair would lie on the old grid again stays as it is', () => {
+  // Ein kurzer senkrechter Strich, gezoomt geschrieben und alt gespeichert. Repariert läge er wieder ganz auf dem Raster der alten
+  // Datei: Das nächste Lesen hielte ihn für alt und reparierte ihn noch einmal anders. Darum bleibt er, wie er ist, und nach dem ersten
+  // Speichern ändert sich die Datei nicht mehr.
+  const old: Stroke = { id: 'senkrecht', tool: 'fueller', color: 'schwarz', widthMm: 0.2, t: 1793853900000, w: 0.725, pts: UPRIGHT };
+  const read = parsePage(serializePage(tagPage([old]), FIELDS, '')).strokes;
+  expect(read[0].pts).toEqual(UPRIGHT);
+  const saved = serializePage(tagPage(read), FIELDS, '');
+  const again = parsePage(saved).strokes;
+  expect(again).toEqual(read);
+  expect(serializePage(tagPage(again), FIELDS, '')).toBe(saved);
+});
+
+test('the repair happens once', () => {
+  // Eine alte Seite: gezoomt geschriebene Füllfeder und Bleistift, eine locker geschriebene Füllfeder und ein Kugelschreiber, dazu ein
+  // neuer Strich. Lesen, speichern, lesen, speichern.
+  const old = [
+    asOld(zoomedLoops(1, { sigmaPx: OLD_SIGMA_PX })),
+    asOld(zoomedLoops(2, { pen: 'bleistift' })),
+    asOld(zoomedLoops(3, { pxUnit: 1, sigmaPx: OLD_SIGMA_PX })),
+    asOld(penStroke('kugel')),
+    storedForm(zoomedLoops(4)),
+  ];
+  const file = serializePage(tagPage(old), FIELDS, '');
+  const read = parsePage(file).strokes;
+  expect(read.map((s) => s.id)).toEqual(old.map((s) => s.id));
+  // Repariert werden nur die beiden dichten alten Striche.
+  expect(places(read[0])).not.toEqual(places(old[0]));
+  expect(places(read[1])).not.toEqual(places(old[1]));
+  expect(read.slice(2).map(places)).toEqual(old.slice(2).map(places));
+  // Nach dem ersten Speichern bleibt alles, wie es ist: dieselben Striche und dieselbe Datei.
+  const saved = serializePage(tagPage(read), FIELDS, '');
+  const again = parsePage(saved).strokes;
+  expect(again).toEqual(read);
+  expect(serializePage(tagPage(again), FIELDS, '')).toBe(saved);
+  // Mit der alten Fassung zusammengeführt, gleich welche gewinnt: gelesen dieselben Striche.
+  for (const merged of [mergePages(saved, file, file), mergePages(file, saved)]) expect(parsePage(merged).strokes).toEqual(read);
+});
+
+test('old ballpoint and fineliner strokes are never repaired', () => {
+  // So dicht und so alt wie die Füllfeder oben: Ihre Punkte bleiben, wie sie in der Datei stehen, auch die doppelten.
+  const old = [asOld(zoomedLoops(1, { pen: 'kugel' })), asOld(zoomedLoops(2, { pen: 'fineliner' }))];
+  expect(old.every((s) => s.pts.length >= 5 && medianStep(s.pts) < 0.35)).toBe(true);
+  const read = parsePage(serializePage(tagPage(old), FIELDS, '')).strokes;
+  expect(read.map(places)).toEqual(old.map(places));
 });
