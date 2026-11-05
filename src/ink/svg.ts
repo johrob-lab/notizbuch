@@ -1,7 +1,7 @@
 import { isValidDay, weekDays } from '../lib/dates';
 import { outlineD } from './outline';
 import { BLEISTIFT_OPACITY, PENS, isShape, type PenKind } from './pens';
-import { fmtNum, parsePathD, pathD } from './stroke';
+import { fmtCoord, fmtNum, parsePathD, pathD, toHundredths } from './stroke';
 import {
   INK,
   PAGE_H,
@@ -86,11 +86,25 @@ function attrs(list: Attr[]): string {
  * Nachkommastelle gäbe bei dünnen Linien sichtbare Stufen. Was keine endliche Zahl ist, wird `0` wie bei `fmtNum`.
  */
 function fmtWidth(n: number): string {
-  if (!Number.isFinite(n)) return '0';
-  return String(Math.round(n * 100) / 100);
+  return String(toHundredths(n));
 }
 
-/** Ein <path> je Strich, alle Zahlen mit höchstens einer Nachkommastelle, nur die Breiten in `data-linie` mit zwei. */
+/**
+ * Der Strich so, wie die Datei ihn festhält: neue Punkte mit x und y auf zwei Nachkommastellen, bei Füllfeder und Bleistift auch
+ * die Breite je Punkt, sonst bleibt alles gleich. Kugelschreiber und Fineliner behalten die Breite je Punkt, ihre Datei hat eine
+ * Breite für den ganzen Strich (`stroke-width`). Jede Zahl ist genau die, die `parsePage` aus der Datei liest (`fmtCoord` und
+ * `fmtWidth` schreiben `toHundredths`). In dieser Form nimmt die Fläche einen fertigen Strich auf (nach dem Abheben und die Stücke
+ * beim Teil-Radieren): Was dann zu sehen ist, ist genau das, was nach dem Speichern und Neuladen zu sehen ist.
+ */
+export function storedForm(s: Stroke): Stroke {
+  const shape = isShape(s.tool);
+  return { ...s, pts: s.pts.map((p) => ({ x: toHundredths(p.x), y: toHundredths(p.y), w: shape ? toHundredths(p.w) : p.w })) };
+}
+
+/**
+ * Ein <path> je Strich. Orte (x und y in `data-linie`, alle Zahlen in `d`) und die Breiten in `data-linie` mit höchstens zwei
+ * Nachkommastellen, Nennbreite (`data-breite`), Zeit (`data-t`) und `stroke-width` mit höchstens einer.
+ */
 function strokeMarkup(s: Stroke): string {
   if (isShape(s.tool)) {
     const list: Attr[] = [
@@ -99,7 +113,7 @@ function strokeMarkup(s: Stroke): string {
       ['data-farbe', s.color],
       ['data-breite', fmtNum(s.widthMm)],
       ['data-t', fmtNum(s.t)],
-      ['data-linie', s.pts.map((p) => `${fmtNum(p.x)} ${fmtNum(p.y)} ${fmtWidth(p.w)}`).join(' ')],
+      ['data-linie', s.pts.map((p) => `${fmtCoord(p.x)} ${fmtCoord(p.y)} ${fmtWidth(p.w)}`).join(' ')],
       ['d', outlineD(s.pts)],
       ['fill', INK[s.color]],
     ];

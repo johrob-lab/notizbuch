@@ -46,12 +46,30 @@ const dist = (a: { x: number; y: number }, x: number, y: number): number => Math
 
 /**
  * Zahl für die SVG-Datei: auf eine Nachkommastelle gerundet, ohne `.0` am Ende und nie als `-0`.
- * Was keine endliche Zahl ist, wird `0`, damit die Datei lesbar bleibt.
+ * Was keine endliche Zahl ist, wird `0`, damit die Datei lesbar bleibt. Orte schreibt `fmtCoord`.
  */
 export function fmtNum(n: number): string {
   if (!Number.isFinite(n)) return '0';
   // Math.round und String statt toFixed: `(-0.04).toFixed(1)` wäre "-0.0", String(-0) ist "0".
   return String(Math.round(n * 10) / 10);
+}
+
+/**
+ * `n` auf zwei Nachkommastellen gerundet, als Zahl: genau die Zahl, die aus `fmtCoord(n)` wieder gelesen wird. Nie `-0`, was keine
+ * endliche Zahl ist, wird 0.
+ */
+export function toHundredths(n: number): number {
+  // `+ 0` macht aus -0 eine 0, so wie `String(-0)` "0" ist. Jede andere Zahl liest sich aus ihrem `String` genau so zurück.
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 + 0 : 0;
+}
+
+/**
+ * Ort für die SVG-Datei (x und y eines Punkts, jede Zahl eines Pfads): auf zwei Nachkommastellen gerundet, ohne Nullen am Ende
+ * und nie als `-0`. Gezoomt geschriebene Punkte liegen nur etwa 0,1 Einheiten auseinander: Auf eine Nachkommastelle gerundet
+ * sprängen ihre Richtungen in Stufen von 45 Grad, und der Umriss der Füllfeder zerfranste. Was keine endliche Zahl ist, wird `0`.
+ */
+export function fmtCoord(n: number): string {
+  return String(toHundredths(n));
 }
 
 /** Kurzes Zufallsstück für die `id`: vier Zeichen aus 0 bis 9 und a bis z. */
@@ -601,18 +619,19 @@ export class StrokeBuilder {
  * Pfad eines Strichs: `M x0 y0`, dann für jeden Punkt von 1 bis n-2 `Q xi yi mx my` (m ist die Mitte von Punkt i
  * und i+1), zuletzt `L` zum letzten Punkt. So ist der Strich ein glatter Pfad in einer Breite. Ein einzelner Punkt
  * wird `M x y L x y` und bleibt mit runder Linienkappe als Punkt sichtbar. Ohne Punkte kommt ein leerer Text zurück.
+ * Alle Zahlen mit zwei Nachkommastellen (`fmtCoord`).
  */
 export function pathD(pts: { x: number; y: number }[]): string {
   const n = pts.length;
   if (n === 0) return '';
-  const parts = [`M ${fmtNum(pts[0].x)} ${fmtNum(pts[0].y)}`];
+  const parts = [`M ${fmtCoord(pts[0].x)} ${fmtCoord(pts[0].y)}`];
   for (let i = 1; i < n - 1; i++) {
     const a = pts[i];
     const b = pts[i + 1];
-    parts.push(`Q ${fmtNum(a.x)} ${fmtNum(a.y)} ${fmtNum((a.x + b.x) / 2)} ${fmtNum((a.y + b.y) / 2)}`);
+    parts.push(`Q ${fmtCoord(a.x)} ${fmtCoord(a.y)} ${fmtCoord((a.x + b.x) / 2)} ${fmtCoord((a.y + b.y) / 2)}`);
   }
   const last = pts[n - 1];
-  parts.push(`L ${fmtNum(last.x)} ${fmtNum(last.y)}`);
+  parts.push(`L ${fmtCoord(last.x)} ${fmtCoord(last.y)}`);
   return parts.join(' ');
 }
 

@@ -289,6 +289,38 @@ test('old strokes keep their shape when the settings change', async ({ page }) =
   expect(attr(old!, 'data-linie')).toBe(attr(before, 'data-linie'));
 });
 
+/** Drei kleine Schleifen ab `from` (Seiteneinheiten) mit Radius `r`, `n` Punkte je Schleife. */
+const loops = ([x0, y0]: [number, number], r: number, n: number): [number, number][] =>
+  Array.from({ length: 3 * n + 1 }, (_, i): [number, number] => {
+    const a = (2 * Math.PI * i) / n;
+    return [x0 + r * (0.45 * a - Math.sin(a)), y0 + 1.3 * r * (Math.cos(a) - 1)];
+  });
+
+test('zoomed in, the page shows exactly the stroke and the pieces that the file holds', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  await changeStoredSettings(page, { ink: { ...inkWith(DEFAULT_FUELLER), eraserMode: 'stueck' } });
+  await page.reload();
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  // Weit hineingezoomt liegen die Punkte nur etwa 0,1 Einheiten auseinander.
+  await wheel(page, [440, 1010], { dy: -800, ctrl: true });
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+  expect((await viewOf(page)).scale, 'Bildschirmpunkte je Seiteneinheit').toBeGreaterThan(6);
+  const shown = () => page.evaluate(() => window.__notizbuch.currentPage().strokes.map((s) => s.pts));
+  const saved = async () => strokePaths(await savedPage(page)).map(pointsOf);
+
+  // Nach dem Abheben zeigt die Seite genau die Punkte, die in der Datei stehen: Neu geladen sieht der Strich gleich aus.
+  await pen(page, { tiltX: 40, tiltY: 40 }).stroke(loops([420, 1012], 1, 60));
+  await expect.poll(async () => (await saved()).length).toBe(1);
+  expect((await shown())[0].length, 'Punkte').toBeGreaterThan(100);
+  expect(await saved()).toEqual(await shown());
+
+  // Ebenso die Stücke, wenn der Radierer die mittlere Schleife durchschneidet.
+  await toolbarButton(page, 'Radierer').click();
+  await pen(page).stroke(line([424.2, 1007], [424.2, 1013], 7));
+  await expect.poll(async () => (await saved()).length).toBeGreaterThan(1);
+  expect(await saved()).toEqual(await shown());
+});
+
 test('the ends taper only after lifting the pen', async ({ page }) => {
   await openSeeded(page, DAY, { offline: true });
   await choose(page, { schaerfe: 1, druck: 0.25, rundung: 0.33, stabil: 0.14 });

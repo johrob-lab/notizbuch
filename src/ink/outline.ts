@@ -1,5 +1,5 @@
 import type { Pt2 } from './gestures';
-import { fmtNum } from './stroke';
+import { fmtCoord } from './stroke';
 import type { Pt, Stroke } from './types';
 
 // Der Umriss eines Strichs mit Breite je Punkt (Füllfeder und Bleistift): Vielecke, deren Vereinigung den Strich
@@ -203,10 +203,13 @@ export function outlinePolygons(pts: readonly Pt[], minW?: number): Pt2[][] {
   return polys;
 }
 
-/** Der Umriss als Pfad für die Datei: je Vieleck `M x y L x y … Z`, nur absolute Zahlenpaare. Ohne Punkte leer. */
+/**
+ * Der Umriss als Pfad für die Datei: je Vieleck `M x y L x y … Z`, nur absolute Zahlenpaare mit zwei Nachkommastellen
+ * (`fmtCoord`). Ohne Punkte leer.
+ */
 export function outlineD(pts: readonly Pt[]): string {
   return outlinePolygons(pts)
-    .map((poly) => poly.map((c, i) => `${i ? 'L' : 'M'} ${fmtNum(c.x)} ${fmtNum(c.y)}`).join(' ') + ' Z')
+    .map((poly) => poly.map((c, i) => `${i ? 'L' : 'M'} ${fmtCoord(c.x)} ${fmtCoord(c.y)}`).join(' ') + ' Z')
     .join(' ');
 }
 

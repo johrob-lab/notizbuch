@@ -19,7 +19,7 @@ import {
   V_SLOW,
   type FuellerSettings,
 } from '../../src/ink/pens';
-import { fmtNum, hitStroke, parsePathD, pathD, StrokeBuilder } from '../../src/ink/stroke';
+import { fmtCoord, fmtNum, hitStroke, parsePathD, pathD, StrokeBuilder, toHundredths } from '../../src/ink/stroke';
 import { SMOOTHING, type InkColor, type Pt, type Stroke } from '../../src/ink/types';
 
 function builder(sigma = 1.6) {
@@ -280,8 +280,28 @@ test('numbers have one decimal, no trailing zero and never a minus zero', () => 
   expect(fmtNum(-0)).toBe('0');
   expect(fmtNum(Number.NaN)).toBe('0');
   expect(fmtNum(Number.POSITIVE_INFINITY)).toBe('0');
-  expect(pathD([{ x: -0.04, y: 0.04 }, { x: 10.04, y: 10.06 }])).toBe('M 0 0 L 10 10.1');
-  expect(pathD([{ x: -0.01, y: -0.02 }])).toBe('M 0 0 L 0 0');
+});
+
+test('coordinates have two decimals, no trailing zero and never a minus zero', () => {
+  // Gerundet wie Math.round, auch bei einer Zahl, die als Kommazahl knapp unter der Mitte liegt (1.005 ist 1.00499…).
+  expect(fmtCoord(1.005)).toBe(String(Math.round(1.005 * 100) / 100));
+  expect(fmtCoord(2.5)).toBe('2.5');
+  expect(fmtCoord(5)).toBe('5');
+  expect(fmtCoord(1.234)).toBe('1.23');
+  expect(fmtCoord(10.006)).toBe('10.01');
+  expect(fmtCoord(-12.3456)).toBe('-12.35');
+  expect(fmtCoord(-0.001)).toBe('0');
+  expect(fmtCoord(-0)).toBe('0');
+  expect(fmtCoord(Number.NaN)).toBe('0');
+  expect(fmtCoord(Number.NEGATIVE_INFINITY)).toBe('0');
+  // Als Zahl genau die, die aus dem Text wieder gelesen wird, auch die 0 ohne Vorzeichen.
+  for (const n of [1.005, 2.675, 0.1 + 0.2, -12.3456, 1234.5678, -0.001, -0, Number.NaN, Number.POSITIVE_INFINITY]) {
+    expect(toHundredths(n), String(n)).toBe(Number(fmtCoord(n)));
+  }
+  // Der Pfad schreibt alle seine Zahlen so, auch die Mitten zwischen zwei Punkten.
+  expect(pathD([{ x: -0.004, y: 0.004 }, { x: 10.004, y: 10.006 }])).toBe('M 0 0 L 10 10.01');
+  expect(pathD([{ x: -0.001, y: -0.002 }])).toBe('M 0 0 L 0 0');
+  expect(pathD([{ x: 0, y: 0 }, { x: 10.123, y: 5.678 }, { x: 20, y: 0 }])).toBe('M 0 0 Q 10.12 5.68 15.06 2.84 L 20 0');
 });
 
 test('path syntax: M, then Q with the control point and the middle to the next point, then L', () => {

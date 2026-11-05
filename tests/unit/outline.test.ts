@@ -212,11 +212,13 @@ test('every point of the centre line lies inside the outline, also in tight curv
   }
 });
 
-test('outlineD writes only M, L and Z with at most one decimal', () => {
+test('outlineD writes only M, L and Z with at most two decimals', () => {
   const pts = sample(zigzag({ x: -3.14159, y: 2.71828 }, 4, 12.345, 100), (i) => 1.234 + (i % 3));
   const d = outlineD(pts);
-  expect(d).toMatch(/^M( -?\d+(\.\d)?){2}( L( -?\d+(\.\d)?){2})* Z( M( -?\d+(\.\d)?){2}( L( -?\d+(\.\d)?){2})* Z)*$/);
-  expect(outlineD([{ x: 1.25, y: -7.75, w: 3.3 }])).toMatch(/^M( -?\d+(\.\d)?){2}( L( -?\d+(\.\d)?){2}){11} Z$/);
+  expect(d).toMatch(/^M( -?\d+(\.\d{1,2})?){2}( L( -?\d+(\.\d{1,2})?){2})* Z( M( -?\d+(\.\d{1,2})?){2}( L( -?\d+(\.\d{1,2})?){2})* Z)*$/);
+  // Die zweite Nachkommastelle steht auch da: Gezoomt geschrieben liegen die Punkte nur etwa 0,1 Einheiten auseinander.
+  expect(d).toMatch(/\.\d\d\b/);
+  expect(outlineD([{ x: 1.25, y: -7.75, w: 3.3 }])).toMatch(/^M( -?\d+(\.\d{1,2})?){2}( L( -?\d+(\.\d{1,2})?){2}){11} Z$/);
 });
 
 test('the outline of a stroke is worked out once and follows its points', () => {

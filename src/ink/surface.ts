@@ -20,6 +20,7 @@ import {
 import { extrapolate } from './predict';
 import { isScribble, scribbleTargets } from './scribble';
 import { newStrokeId, StrokeBuilder } from './stroke';
+import { storedForm } from './svg';
 import type { EraserMode, EraserSize } from '../lib/settings';
 import { INK, MM, PAGE_H, PAGE_W, PAPER, WIDTH_MM, type FieldBox, type InkColor, type Page, type Pt, type Stroke, type StrokeColor, type WidthName } from './types';
 
@@ -1053,10 +1054,11 @@ export class InkSurface {
   /**
    * Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. Ein Gekritzel über Geschriebenem löscht es
    * stattdessen. Gespeichert wird der fertige Strich, bei der Füllfeder mit beiden spitzen Enden. `tUp` ist die Zeit des
-   * Abhebens, falls bekannt: Bis dahin klingt bei der Füllfeder das Tempo ab.
+   * Abhebens, falls bekannt: Bis dahin klingt bei der Füllfeder das Tempo ab. Der Strich kommt gleich in der Genauigkeit der
+   * Datei auf die Seite (`storedForm`): Was nach dem Abheben zu sehen ist, ist genau das, was nach dem Neuladen zu sehen ist.
    */
   private commitStroke(d: Drawing, tUp?: number): void {
-    const s = d.builder.finish(tUp);
+    const s = storedForm(d.builder.finish(tUp));
     if (!s.pts.length) return;
     if (this.scribble && this.eraseByScribble(s)) return;
     this.strokes.push(s);
@@ -1161,8 +1163,10 @@ export class InkSurface {
       for (const i of hits) {
         const s = this.strokes[i];
         // Mindestens einen Bildpunkt breit gezeichnet, also trifft der Kreis ihn auch so breit (wie beim ganzen Strich).
-        const pieces = cutStroke(s, p, r + Math.max(0, minW - s.w) / 2, () => newStrokeId(s.t));
-        if (!pieces) continue;
+        const cut = cutStroke(s, p, r + Math.max(0, minW - s.w) / 2, () => newStrokeId(s.t));
+        if (!cut) continue;
+        // Wie ein fertiger Strich gleich in der Genauigkeit der Datei: Die neuen Punkte am Schnitt sähen sonst nach dem Neuladen anders aus.
+        const pieces = cut.map(storedForm);
         const orig = er.origin.get(s.id) ?? s.id;
         for (const piece of pieces) er.origin.set(piece.id, orig);
         const kept = (er.cuts.get(orig) ?? [s]).flatMap((x) => (x.id === s.id ? pieces : [x]));
