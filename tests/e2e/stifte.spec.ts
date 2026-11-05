@@ -4,7 +4,7 @@ import { StrokeBuilder } from '../../src/ink/stroke';
 import { serializePage } from '../../src/ink/svg';
 import { INK, PAPER, type WidthName } from '../../src/ink/types';
 import { changeStoredSettings, openSeeded, queued, savedSettings } from './helpers/app';
-import { colorAt, inkNear, onPixelCentre, pen, touch, wheel } from './helpers/pointer';
+import { colorAt, inkNear, onPixelCentre, pen, touch, wheel, type PathPoint } from './helpers/pointer';
 
 // Die neuen Stifte auf der Schreibfläche. Bis die Werkzeugleiste den Stift wählen kann, wählt ihn jeder Test über die
 // gespeicherte Werkzeugwahl und lädt die App neu.
@@ -175,11 +175,10 @@ test.describe('in portrait on the iPad', () => {
       return out;
     };
     expect(await blank((at) => inkNear(page, at, 3)), 'vorher ohne Tinte').toEqual(probes);
-    const firm = pen(page, { pressure: 0.9 });
+    // Der ganze Weg in einem Aufruf, ohne Abheben, jeder Punkt mit seinem Druck: So zieht der Stift ihn gleichmäßig langsam (Zeiten
+    // der Hilfe). Mit einem Aufruf je Punkt hinge das Tempo und damit die Breite davon ab, wie lange jeder Aufruf dauert.
     const light = pen(page, { pressure: 0.05 });
-    await firm.down(...down[0]);
-    for (const q of down.slice(1)) await firm.move(...q);
-    for (const q of up) await light.move(...q);
+    await light.stroke([...down.map(([x, y]): PathPoint => [x, y, 0.9]), ...up.map(([x, y]): PathPoint => [x, y, 0.05])], { lift: false });
     const whileWriting = await blank((at) => liveInkNear(page, at, 3));
     await light.up(...up[up.length - 1]);
     await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(1);

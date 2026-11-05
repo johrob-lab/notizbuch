@@ -51,7 +51,7 @@ export type FuellerSettings = {
   druck: number;
   /** Rundung der Spitze: 0 ganz flache Feder, 1 runde Spitze, die Linie ist überall gleich breit. */
   rundung: number;
-  /** Strich-Stabilisierung: glättet die Orte mit σ = `STABIL_SIGMA` × stabil Punkten. */
+  /** Strich-Stabilisierung: glättet die Orte nach der Strecke mit σ = `stabilSigmaPx(stabil)` Bildschirmpunkten (1,5 bis 12). */
   stabil: number;
 };
 
@@ -64,7 +64,11 @@ export const PRESSURE_SPAN = 0.8;
 /** Die ganz flache Feder (Rundung 0): Faktor quer zur Richtung, in die der Stift zeigt, und entlang dazu. */
 export const FLAT_NIB = { across: 0.3, along: 1.7 };
 
-/** So weit (Seiteneinheiten, 1,5 mm) läuft jedes Ende spitz aus. */
+/**
+ * So weit (Bildschirmpunkte, bei Zoom 1 Seiteneinheiten, also 1,5 mm) läuft jedes Ende spitz aus, wenn das Tempo unbekannt ist.
+ * Mit Tempo das `taperScale`-fache. Gemessen auf dem Glas wie die Glättung und das Tempo: Gezoomt werden die Spitzen mit der Schrift
+ * kürzer, sonst würde ein schneller Strich zum Haarstrich.
+ */
 export const TAPER_LEN = 9;
 
 /** Breite an der Spitze als Teil der vollen Breite, bei Schärfe 100 %. */
@@ -85,17 +89,56 @@ export const DIR_MIN = 3;
  */
 export const DIR_MIN_PX = 4;
 
-/** Weg des Richtungsankers (Seiteneinheiten), über den die Richtung geglättet wird. */
+/**
+ * Weg des Richtungsankers (Seiteneinheiten), über den die Richtung mindestens geglättet wird. Glättet die Strich-Stabilisierung über
+ * eine längere Strecke (σ), dann die Richtung ebenso: So beruhigt sie auch das Flattern der Ränder, nicht nur die Linie.
+ */
 export const DIR_LEN = 2;
 
 /** Weglänge (Seiteneinheiten), über die der Druck geglättet wird. Steht der Stift still, bleibt der Druck. */
 export const PRESS_LEN = 1.5;
 
-/** Die Strich-Stabilisierung glättet die Orte mit σ = `STABIL_SIGMA` × stabil, gemessen in Punkten. */
-export const STABIL_SIGMA = 6;
+/**
+ * Die Strich-Stabilisierung glättet die Orte der Füllfeder nach der Strecke, mit σ in Bildschirmpunkten: so viele bei 0 % ...
+ */
+export const STABIL_MIN_PX = 1.5;
+
+/** ... und so viele bei 100 %. Dazwischen wächst σ gleichmäßig (`stabilSigmaPx`), beim Startwert 14 % sind es knapp 3. */
+export const STABIL_MAX_PX = 12;
+
+/** So viele σ weit (Strecke) reicht die Glättung zu jeder Seite. Weiter weg wäre das Gewicht unter 5 %. */
+export const STABIL_REACH = 2.5;
 
 /** Mindestabstand zweier Stiftpunkte in Bildschirmpunkten: Die Fläche gibt `minDist` = `MIN_DIST_PX` / Zoom mit. */
 export const MIN_DIST_PX = 0.6;
+
+// Tempo wie Tinte: Die Füllfeder misst das Tempo des Stifts in Bildschirmpunkten je ms. Schnelle Striche werden dünner, und ihre
+// Enden laufen länger spitz aus, langsame bleiben satt und enden stumpf.
+
+/** Bis zu diesem Tempo (Bildschirmpunkte je ms, etwa 30 mm/s auf dem Glas) ist ein Strich langsam ... */
+export const V_SLOW = 0.15;
+
+/** ... ab diesem (etwa 190 mm/s) schnell. Dazwischen gehen Breite und Spitzen weich über (`speedBlend`). */
+export const V_FAST = 1.0;
+
+/** Zeitkonstante (ms), mit der das geglättete Tempo dem gemessenen folgt: Nach 20 ms hat es knapp zwei Drittel einer Änderung. */
+export const SPEED_TAU_MS = 20;
+
+/** So viel schmaler ist ein schneller Strich: Tempofaktor 1 − `THIN_FAST`, also halb so breit wie ein langsamer. */
+export const THIN_FAST = 0.5;
+
+/** Länge der Verjüngung an einem langsamen Ende, als Vielfaches von `TAPER_LEN` (3,6 Bildschirmpunkte, bei Zoom 1 0,6 mm) ... */
+export const TAPER_SLOW = 0.4;
+
+/** ... und an einem schnellen (22,5 Bildschirmpunkte, bei Zoom 1 3,75 mm). */
+export const TAPER_FAST = 2.5;
+
+/**
+ * Das Tempo beim Ansetzen braucht einen Zeitschritt, der zählt. So weit (Vielfaches von `TAPER_LEN`, auf dem Glas) wartet der Anfang
+ * höchstens darauf: Kommt bis dahin keiner (alle Zeiten gleich), gilt der Anfang als langsam. So bleibt die Arbeit je Stiftbewegung
+ * begrenzt, denn bis der Anfang feststeht, ist kein Punkt fest.
+ */
+export const START_WAIT = 5;
 
 /** Ein Winkel als doppelter Winkel (cos 2a, sin 2a): Entgegengesetzte Richtungen sind dann gleich. */
 export type Doubled = { c: number; s: number };
@@ -119,6 +162,31 @@ export function doubled(angle: number): Doubled {
 /** Druckfaktor der Füllfeder: 1 bei mittlerem Druck, von 1 − 0,8 × `druck` (leicht) bis 1 + 0,8 × `druck` (fest). */
 export function pressureFactor(druck: number, pressure: number): number {
   return 1 + druck * PRESSURE_SPAN * (2 * pressureRamp(pressure) - 1);
+}
+
+/** σ der Strich-Stabilisierung in Bildschirmpunkten: von `STABIL_MIN_PX` bei `stabil` 0 bis `STABIL_MAX_PX` bei 1. */
+export function stabilSigmaPx(stabil: number): number {
+  return STABIL_MIN_PX + (STABIL_MAX_PX - STABIL_MIN_PX) * stabil;
+}
+
+/**
+ * Wie schnell ein Tempo `v` (Bildschirmpunkte je ms) zählt: 0 bis `V_SLOW`, 1 ab `V_FAST`, dazwischen weich (smoothstep). Was keine
+ * Zahl ist, zählt als langsam.
+ */
+export function speedBlend(v: number): number {
+  const x = (v - V_SLOW) / (V_FAST - V_SLOW);
+  const t = x >= 1 ? 1 : x > 0 ? x : 0;
+  return t * t * (3 - 2 * t);
+}
+
+/** Tempofaktor der Breite für `q` aus `speedBlend`: 1 langsam, 1 − `THIN_FAST` schnell. */
+export function speedFactor(q: number): number {
+  return 1 - THIN_FAST * q;
+}
+
+/** Länge der Verjüngung an einem Ende als Vielfaches von `TAPER_LEN`, für `q` aus `speedBlend`: `TAPER_SLOW` langsam bis `TAPER_FAST` schnell. */
+export function taperScale(q: number): number {
+  return TAPER_SLOW + (TAPER_FAST - TAPER_SLOW) * q;
 }
 
 /**

@@ -11,7 +11,6 @@ import {
   DEFAULT_FUELLER,
   DEFAULT_PEN_ANGLE,
   MIN_DIST_PX,
-  STABIL_SIGMA,
   isShape,
   nibShape,
   penAngle,
@@ -798,7 +797,8 @@ export class InkSurface {
 
   /**
    * Zeichnet den entstehenden Strich weiter: Was fest geworden ist, kommt einmal auf die Live-Ebene, das Endstück (höchstens
-   * K + 3 Punkte) wird auf der Vorhersage-Ebene neu gezeichnet. So kostet jede Bewegung gleich viel, egal wie lang der Strich ist.
+   * K + 3 Punkte, bei der Füllfeder ab der ersten Richtung die Punkte in 2,5 σ vor dem Ende) wird auf der Vorhersage-Ebene neu
+   * gezeichnet. So kostet jede Bewegung gleich viel, egal wie lang der Strich ist.
    */
   private liveUpdate(): number {
     const d = this.drawing;
@@ -1002,8 +1002,8 @@ export class InkSurface {
       pen,
       color: this.color,
       widthMm: this.widthMm,
-      // Die Füllfeder glättet mit ihrer Strich-Stabilisierung statt mit der Glättung aus den Einstellungen.
-      sigma: pen === 'fueller' ? STABIL_SIGMA * this.fueller.stabil : this.opts.sigma,
+      // Die Glättung aus den Einstellungen. Die Füllfeder glättet stattdessen mit ihrer Strich-Stabilisierung (aus `fueller` und `pxUnit`).
+      sigma: this.opts.sigma,
       t: Date.now(),
       minDist: MIN_DIST_PX / this.view.s, // auf dem Bildschirm immer gleich weit, egal wie weit hineingezoomt ist
       // Nur die Füllfeder liest diese beiden: ihre Regler und wie viele Seiteneinheiten ein Bildschirmpunkt gerade ist.
@@ -1029,7 +1029,8 @@ export class InkSurface {
     }
     d.hist.push({ x: pos.x, y: pos.y, t: ev.timeStamp });
     if (d.hist.length > 12) d.hist.shift();
-    if (d.builder.add(pt.x, pt.y, ev.pressure, ev.tiltX ?? 0, ev.tiltY ?? 0)) growBox(d.box, pt);
+    // Jedes Ereignis mit seiner eigenen Zeit, auch die zusammengefassten: Daraus misst die Füllfeder das Tempo.
+    if (d.builder.add(pt.x, pt.y, ev.pressure, ev.tiltX ?? 0, ev.tiltY ?? 0, ev.timeStamp)) growBox(d.box, pt);
   }
 
   /**
@@ -1051,10 +1052,11 @@ export class InkSurface {
 
   /**
    * Der Strich wird Teil der Seite, und die Seite meldet die Änderung sofort. Ein Gekritzel über Geschriebenem löscht es
-   * stattdessen. Gespeichert wird der fertige Strich, bei der Füllfeder mit beiden spitzen Enden.
+   * stattdessen. Gespeichert wird der fertige Strich, bei der Füllfeder mit beiden spitzen Enden. `tUp` ist die Zeit des
+   * Abhebens, falls bekannt: Bis dahin klingt bei der Füllfeder das Tempo ab.
    */
-  private commitStroke(d: Drawing): void {
-    const s = d.builder.finish();
+  private commitStroke(d: Drawing, tUp?: number): void {
+    const s = d.builder.finish(tUp);
     if (!s.pts.length) return;
     if (this.scribble && this.eraseByScribble(s)) return;
     this.strokes.push(s);
@@ -1111,14 +1113,14 @@ export class InkSurface {
     }, 300);
   }
 
-  /** Der Stift hebt ab, oder der Strich wird abgebrochen (`commit` falsch). */
-  private finishDraw(commit: boolean): void {
+  /** Der Stift hebt ab (zur Zeit `tUp`, falls bekannt), oder der Strich wird abgebrochen (`commit` falsch). */
+  private finishDraw(commit: boolean, tUp?: number): void {
     const d = this.drawing;
     this.drawing = null;
     this.stopMeter();
     this.clearLive(true);
     this.clearPredLayer();
-    if (d && commit) this.commitStroke(d);
+    if (d && commit) this.commitStroke(d, tUp);
   }
 
   /** Zählt Bilder, solange der Stift schreibt. */
@@ -1389,7 +1391,8 @@ export class InkSurface {
 
   private onUp = (e: PointerEvent): void => {
     const { drawing: d, erasing: er } = this;
-    if (d && e.pointerId === d.id) this.finishDraw(true);
+    // Mit der Zeit des Abhebens: Ruhte der Stift davor, ohne noch Punkte zu schicken, endet die Füllfeder trotzdem langsam.
+    if (d && e.pointerId === d.id) this.finishDraw(true, e.timeStamp);
     else if (er && e.pointerId === er.id) this.finishErase();
     if (e.pointerType === 'pen') this.filter.penUp(e.timeStamp);
     if (!this.touches.delete(e.pointerId)) return;

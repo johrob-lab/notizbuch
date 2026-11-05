@@ -174,6 +174,7 @@ test('it never reloads while a text field has focus', async () => {
 test('scrolling with the wheel counts as input', async () => {
   const t = setup();
   await tick(0);
+  t.send('keydown'); // erst nach einer Eingabe gilt die Pause von 60 s
   t.changeController();
   await tick(QUIET_MS - QUIET_POLL_MS);
   t.send('wheel');
@@ -209,4 +210,97 @@ test('a stopped instance no longer reacts', async () => {
   expect(t.state.updates).toBe(start);
   await t.update.check();
   expect(t.state.updates).toBe(start);
+});
+
+test('without input since the start a new version loads at once', async () => {
+  const t = setup();
+  await tick(2_000);
+  t.changeController();
+  await tick(0);
+  expect(t.log).toEqual(['before', 'reload']);
+  t.update.stop();
+});
+
+test('without input since coming to the front a new version loads at once', async () => {
+  const t = setup();
+  await tick(0);
+  t.send('pointerdown');
+  t.send('pointerup');
+  t.hide();
+  await tick(1_000);
+  t.show();
+  await tick(3_000);
+  t.changeController();
+  await tick(0);
+  expect(t.log).toEqual(['before', 'reload']);
+  t.update.stop();
+});
+
+test('with input since the start it still waits 60 seconds', async () => {
+  const t = setup();
+  await tick(1_000);
+  t.send('keydown');
+  await tick(1_000);
+  t.changeController();
+  await tick(QUIET_MS - QUIET_POLL_MS);
+  expect(t.log).toEqual([]);
+  await tick(QUIET_POLL_MS * 2);
+  expect(t.log).toEqual(['before', 'reload']);
+  t.update.stop();
+});
+
+test('a quiet start still never reloads while a pointer is down or a text field has focus', async () => {
+  const t = setup();
+  await tick(2_000);
+  t.state.editing = true;
+  t.changeController();
+  await tick(0);
+  expect(t.log).toEqual([]);
+  t.state.editing = false;
+  t.send('pointerdown');
+  // Länger als die 60 s Ruhe: Nur der Zeiger, der noch aufliegt, hält das Neuladen auf.
+  await tick(QUIET_MS * 2);
+  expect(t.log).toEqual([]);
+  // Hebt er ab, zählt das als Eingabe: wieder 60 s Ruhe, dann lädt die App neu.
+  t.send('pointerup');
+  await tick(QUIET_MS - QUIET_POLL_MS);
+  expect(t.log).toEqual([]);
+  await tick(QUIET_POLL_MS * 2);
+  expect(t.log).toEqual(['before', 'reload']);
+  t.update.stop();
+});
+
+test('an input after coming to the front brings back the 60 seconds', async () => {
+  const t = setup();
+  await tick(0);
+  t.hide();
+  await tick(1_000);
+  t.show();
+  await tick(1_000);
+  t.send('keydown');
+  t.changeController();
+  await tick(0);
+  expect(t.log).toEqual([]);
+  await tick(QUIET_MS - QUIET_POLL_MS);
+  expect(t.log).toEqual([]);
+  await tick(QUIET_POLL_MS * 2);
+  expect(t.log).toEqual(['before', 'reload']);
+  t.update.stop();
+});
+
+test('lifting, a cancelled pointer and the wheel each count as input', async () => {
+  // Jede Eingabe allein, gleich nach dem Start: Ohne sie lüde die App die neue Version sofort, mit ihr wartet sie 60 s.
+  for (const type of ['pointerup', 'pointercancel', 'wheel']) {
+    const t = setup();
+    await tick(1_000);
+    t.send(type);
+    t.changeController();
+    await tick(0);
+    expect(t.log, type).toEqual([]);
+    await tick(QUIET_MS - QUIET_POLL_MS);
+    expect(t.log, type).toEqual([]);
+    await tick(QUIET_POLL_MS * 2);
+    expect(t.log, type).toEqual(['before', 'reload']);
+    t.update.stop();
+  }
 });

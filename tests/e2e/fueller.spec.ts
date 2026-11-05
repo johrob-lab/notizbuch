@@ -246,14 +246,31 @@ test('the stored pressure sensitivity reaches the stroke', async ({ page }) => {
 
 test('the stored stabilisation reaches the stroke', async ({ page }) => {
   await openSeeded(page, DAY, { offline: true });
-  // Eine waagrechte Gerade mit Zittern quer dazu: jeder Punkt abwechselnd eine Einheit darüber und darunter.
-  const jagged = (y: number): PathPoint[] => Array.from({ length: 101 }, (_, i): PathPoint => [200 + 2 * i, y + (i % 2 ? 1 : -1)]);
+  // Eine waagrechte Gerade mit Zittern quer dazu: jeder Punkt abwechselnd eine Einheit darüber und darunter, alle 4 Einheiten
+  // einer. Die Füllfeder glättet nach der Strecke: Bei 0 % reicht das (2,5 σ, 3,75 Bildschirmpunkte) nicht bis zum Nachbarpunkt,
+  // bei 100 % (30 Bildschirmpunkte) über mehrere Punkte.
+  const jagged = (y: number): PathPoint[] => Array.from({ length: 101 }, (_, i): PathPoint => [200 + 4 * i, y + (i % 2 ? 1 : -1)]);
   /** Wie weit die gespeicherten Punkte im Mittel von der Geraden bei `y` abweichen (Seiteneinheiten). */
   const offLine = (pts: { y: number }[], y: number): number => pts.reduce((sum, p) => sum + Math.abs(p.y - y), 0) / pts.length;
   const rough = offLine(await writeWith(page, { ...DEFAULT_FUELLER, schaerfe: 0, stabil: 0 }, jagged(900), 1), 900);
   const calm = offLine(await writeWith(page, { ...DEFAULT_FUELLER, schaerfe: 0, stabil: 1 }, jagged(1100), 2), 1100);
-  expect(rough, 'ohne Stabilisierung bleibt das Zittern').toBeGreaterThan(0.8);
-  expect(calm, `Abweichung mit voller Stabilisierung, ohne ${rough}`).toBeLessThanOrEqual(0.7 * rough);
+  expect(rough, 'bei 0 % bleibt das Zittern').toBeGreaterThan(0.8);
+  expect(calm, `Abweichung bei 100 %, bei 0 % ${rough}`).toBeLessThanOrEqual(0.7 * rough);
+});
+
+test('the speed of the pen reaches the stroke', async ({ page }) => {
+  await openSeeded(page, DAY, { offline: true });
+  // Runde Spitze ohne Druckempfindlichkeit: Die Breite hängt nur noch am Tempo. Dieselbe Gerade einmal langsam (0,1 Bildschirmpunkte
+  // je ms, so zieht die Hilfe ohne Angabe) und einmal schnell (1,2). Die Fläche gibt die Zeiten der Ereignisse an die Füllfeder: In
+  // der Mitte ist der schnelle Strich halb so breit.
+  await choose(page, { ...DEFAULT_FUELLER, druck: 0, rundung: 1 });
+  await pen(page).stroke(line([200, 900], [500, 900], 101));
+  await pen(page, { speed: 1.2 }).stroke(line([200, 1100], [500, 1100], 101));
+  await expect.poll(async () => strokePaths(await savedPage(page)).length).toBe(2);
+  const [slow, fast] = strokePaths(await savedPage(page)).map(widthsOf);
+  const middle = (widths: number[]) => widths[Math.floor(widths.length / 2)];
+  expect(middle(slow), `langsam, Breiten ${slow.join(' ')}`).toBeCloseTo(NOM_W, 1);
+  expect(middle(fast) / middle(slow), `schnell, Breiten ${fast.join(' ')}`).toBeCloseTo(0.5, 1);
 });
 
 test('old strokes keep their shape when the settings change', async ({ page }) => {
@@ -280,8 +297,9 @@ test('the ends taper only after lifting the pen', async ({ page }) => {
   await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
   const pts = line([400, 1010], [480, 1010], 41); // zwischen zwei Linien des Notizfelds
   const writer = pen(page);
-  await writer.down(...pts[0]);
-  for (const q of pts.slice(1)) await writer.move(...q);
+  // Aufsetzen und alle Bewegungen in einem Aufruf, ohne Abheben: So zieht der Stift den Weg gleichmäßig langsam (Zeiten der Hilfe).
+  // Mit einem Aufruf je Punkt hinge das Tempo und damit die Breite davon ab, wie lange jeder Aufruf dauert.
+  await writer.stroke(pts, { lift: false });
   // Beim Schreiben ist das Ende so breit wie die Mitte: Die Verjüngung am Ende kommt erst beim Abheben.
   const end = pts[pts.length - 1];
   const whileWriting = { middle: await liveCoverNear(page, pts[20], 3), end: await liveCoverNear(page, end, 3) };

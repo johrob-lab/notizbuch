@@ -2,9 +2,9 @@ import { signal } from '@preact/signals';
 import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { GestureFilter } from '../ink/gestures';
 import { outlineD } from '../ink/outline';
-import { FLAT_NIB, PRESSURE_SPAN, STABIL_SIGMA, type FuellerSettings } from '../ink/pens';
+import { FLAT_NIB, MIN_DIST_PX, PRESSURE_SPAN, type FuellerSettings } from '../ink/pens';
 import { StrokeBuilder, fmtNum } from '../ink/stroke';
-import { INK, MM, WIDTH_MM } from '../ink/types';
+import { INK, MM, WIDTH_MM, type Stroke } from '../ink/types';
 import { inkPrefs, setInkPrefs } from './inkPrefs';
 import { capturePointer, untilLifted } from './pointerBits';
 
@@ -36,29 +36,55 @@ function close(): void {
 const CURVE = { w: 60, h: 20 };
 /** Abstand der Punkte, von links nach rechts gemessen (Seiteneinheiten). */
 const STEP = 0.5;
+/**
+ * Seiteneinheiten je Bildschirmpunkt in der Vorschau: so viele, dass der Punktabstand der Mindestabstand des Stifts ist und kein
+ * Punkt wegfällt. Damit rechnet der Builder das σ der Strich-Stabilisierung und das Tempo.
+ */
+const PX_UNIT = STEP / MIN_DIST_PX;
 /** Druck an beiden Enden der Kurve und in ihrer Mitte. */
 const CURVE_PRESSURE = { ends: 0.2, middle: 0.8 };
+/** Tempo (Bildschirmpunkte je ms) am Anfang, in der Mitte und am Ende der Kurve: langsam angesetzt, schnell abgehoben. */
+const CURVE_SPEED = { start: 0.2, middle: 0.35, end: 1.0 };
+
+/** Tempo an der Stelle `f` (0 bis 1, von links nach rechts) der Kurve: die Parabel durch die drei Werte von `CURVE_SPEED`. */
+function curveSpeed(f: number): number {
+  const { start: a, middle: m, end: e } = CURVE_SPEED;
+  return a + (4 * m - 3 * a - e) * f + 2 * (a + e - 2 * m) * f * f;
+}
 
 /**
- * Die Vorschau: eine S-Kurve, geschrieben mit dem Modell der Füllfeder (`StrokeBuilder` mit den Reglern und der Glättung der
- * Strich-Stabilisierung, ohne Neigung, also in der Stiftrichtung `DEFAULT_PEN_ANGLE`). Der Druck steigt zur Mitte hin und fällt
- * wieder. Zurück kommen der Umriss des fertigen Strichs (`finish()`, beide Enden) als Pfad und eine `viewBox`, in die er bei jeder
- * Einstellung dieser Breite passt: Beim Schieben eines Reglers bleibt die Kurve stehen, nur der Strich ändert sich.
+ * Der Strich der Vorschau: eine S-Kurve, geschrieben mit dem Modell der Füllfeder (`StrokeBuilder` mit den Reglern und der Glättung
+ * der Strich-Stabilisierung, ohne Neigung, also in der Stiftrichtung `DEFAULT_PEN_ANGLE`), fertig mit beiden Enden (`finish()`). Der
+ * Druck steigt zur Mitte hin und fällt wieder. Jeder Punkt hat eine Zeit: Der Stift setzt langsam an und hebt schnell ab
+ * (`CURVE_SPEED`), so zeigt die Vorschau, wie das Tempo die Breite und die Spitzen ändert.
  */
-export function previewD(o: FuellerSettings, widthMm: number): { d: string; viewBox: string } {
-  // Der Mindestabstand ist der Punktabstand, so fällt kein Punkt weg. Seiteneinheiten je Bildschirmpunkt leitet der Builder daraus ab.
-  const builder = new StrokeBuilder({ pen: 'fueller', color: 'schwarz', widthMm, sigma: STABIL_SIGMA * o.stabil, t: 0, minDist: STEP, fueller: o });
+export function previewStroke(o: FuellerSettings, widthMm: number): Stroke {
+  // Der Mindestabstand ist der Punktabstand, so fällt kein Punkt weg. `sigma` gilt nur für die anderen Stifte.
+  const builder = new StrokeBuilder({ pen: 'fueller', color: 'schwarz', widthMm, sigma: 0, t: 0, minDist: STEP, pxUnit: PX_UNIT, fueller: o });
   const n = Math.round(CURVE.w / STEP);
+  let last: { x: number; y: number } | null = null;
+  let t = 0;
   for (let i = 0; i <= n; i++) {
     const f = i / n;
-    const y = (CURVE.h / 2) * (1 - Math.sin(2 * Math.PI * f));
-    builder.add(f * CURVE.w, y, CURVE_PRESSURE.ends + (CURVE_PRESSURE.middle - CURVE_PRESSURE.ends) * Math.sin(Math.PI * f));
+    const p = { x: f * CURVE.w, y: (CURVE.h / 2) * (1 - Math.sin(2 * Math.PI * f)) };
+    if (last) t += Math.hypot(p.x - last.x, p.y - last.y) / PX_UNIT / curveSpeed(f);
+    builder.add(p.x, p.y, CURVE_PRESSURE.ends + (CURVE_PRESSURE.middle - CURVE_PRESSURE.ends) * Math.sin(Math.PI * f), 0, 0, t);
+    last = p;
   }
+  return builder.finish();
+}
+
+/**
+ * Die Vorschau als Pfad: der Umriss von `previewStroke` und eine `viewBox`, in die er bei jeder Einstellung dieser Breite passt:
+ * Beim Schieben eines Reglers bleibt die Kurve stehen, nur der Strich ändert sich.
+ */
+export function previewD(o: FuellerSettings, widthMm: number): { d: string; viewBox: string } {
   // So weit reicht der Strich höchstens über die Kurve hinaus: die halbe Breite an der breitesten Stelle, die es geben kann (ganz
-  // flache Feder längs zur Strichrichtung, voller Druck bei voller Druckempfindlichkeit). Auf eine Stelle aufgerundet wie im Pfad.
+  // flache Feder längs zur Strichrichtung, voller Druck bei voller Druckempfindlichkeit, langsam). Auf eine Stelle aufgerundet wie
+  // im Pfad.
   const reach = Math.ceil(((widthMm * MM * FLAT_NIB.along * (1 + PRESSURE_SPAN)) / 2) * 10) / 10;
   const viewBox = [-reach, -reach, CURVE.w + 2 * reach, CURVE.h + 2 * reach].map(fmtNum).join(' ');
-  return { d: outlineD(builder.finish().pts), viewBox };
+  return { d: outlineD(previewStroke(o, widthMm).pts), viewBox };
 }
 
 // ---------- Regler ----------

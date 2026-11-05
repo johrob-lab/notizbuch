@@ -8,7 +8,18 @@ import {
   penAngle,
   pressureFactor,
   pressureRamp,
+  SPEED_TAU_MS,
+  speedBlend,
+  speedFactor,
+  stabilSigmaPx,
+  START_WAIT,
   taperFactor,
+  taperScale,
+  TAPER_FAST,
+  TAPER_SLOW,
+  THIN_FAST,
+  V_FAST,
+  V_SLOW,
 } from '../../src/ink/pens';
 
 test('pressureRamp is 0 up to 0.1, 1 from 0.8 and linear between', () => {
@@ -65,6 +76,37 @@ test('taperFactor makes sharp or round ends', () => {
     expect(taperFactor(1, s, 0)).toBe(1);
     expect(taperFactor(1, s, -2)).toBe(1);
   }
+});
+
+test('stabilSigmaPx grows evenly from 1.5 to 12 screen points', () => {
+  expect(stabilSigmaPx(0)).toBe(1.5);
+  expect(stabilSigmaPx(1)).toBe(12);
+  // Startwert 14 %: knapp 3 Bildschirmpunkte.
+  expect(stabilSigmaPx(0.14)).toBeCloseTo(2.97, 9);
+  expect(stabilSigmaPx(0.5)).toBeCloseTo(6.75, 9);
+});
+
+test('pens: speed helpers', () => {
+  expect([V_SLOW, V_FAST, SPEED_TAU_MS, THIN_FAST, TAPER_SLOW, TAPER_FAST]).toEqual([0.15, 1.0, 20, 0.5, 0.4, 2.5]);
+  // Der Anfang wartet höchstens 5 × TAPER_LEN Bildschirmpunkte auf einen Zeitschritt, der zählt.
+  expect(START_WAIT).toBe(5);
+  // Übergang von langsam zu schnell: weich (smoothstep) zwischen 0,15 und 1,0 Bildschirmpunkten je ms, außerhalb 0 und 1.
+  expect(speedBlend(0.15)).toBe(0);
+  expect(speedBlend(1.0)).toBe(1);
+  expect(speedBlend(0.575)).toBeCloseTo(0.5, 9);
+  expect(speedBlend(0)).toBe(0);
+  expect(speedBlend(5)).toBe(1);
+  expect(speedBlend(0.3)).toBeLessThan((0.3 - 0.15) / 0.85); // weich: am Anfang langsamer als gerade
+  // Was keine Zahl ist, zählt als langsam, unendlich schnell als schnell.
+  expect(speedBlend(Number.NaN)).toBe(0);
+  expect(speedBlend(Number.POSITIVE_INFINITY)).toBe(1);
+  // Breite: schnell halb so breit, langsam voll.
+  expect(speedFactor(1)).toBe(0.5);
+  expect(speedFactor(0)).toBe(1);
+  // Länge der Verjüngung als Vielfaches von TAPER_LEN: langsam 0,4, schnell 2,5.
+  expect(taperScale(0)).toBe(0.4);
+  expect(taperScale(1)).toBe(2.5);
+  expect(taperScale(0.5)).toBeCloseTo(1.45, 9);
 });
 
 test('nibShape is a circle at 100 % roundness and turns with the pen', () => {

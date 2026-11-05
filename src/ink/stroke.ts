@@ -10,13 +10,21 @@ import {
   MIN_DIST_PX,
   PRESS_LEN,
   SMOOTH_NEW,
+  SPEED_TAU_MS,
+  STABIL_REACH,
+  START_WAIT,
   TAPER_LEN,
+  TAPER_SLOW,
   doubled,
   nibFactorR,
   penAngle,
   pressureFactor,
   pressureRamp,
+  speedBlend,
+  speedFactor,
+  stabilSigmaPx,
   taperFactor,
+  taperScale,
   type Doubled,
   type FuellerSettings,
   type PenKind,
@@ -65,8 +73,14 @@ export function newStrokeId(t: number): string {
  *
  * Die Füllfeder rechnet ihre Breite mit den Reglern (`FuellerSettings`) und glättet Druck und Richtung über den Weg statt
  * je Punkt: Stark gezoomt liegen die Stiftpunkte so dicht, dass sonst das Zittern des Stifts die Breite springen ließe.
- * Beim Schreiben läuft der Anfang spitz zu, `finish()` gibt den fertigen Strich mit beiden spitzen Enden. Steht die erste
- * Richtung fest, rechnet sie die Punkte davor einmal nach, bis dahin ist bei ihr kein Punkt fest (`settled`).
+ * Ebenso glättet sie die Orte nach der Strecke statt nach der Zahl der Punkte (`smoothArc`), mit σ aus der
+ * Strich-Stabilisierung in Bildschirmpunkten: Wie dicht die Punkte kommen, hängt am Tempo und am Zoom.
+ * Beim Schreiben läuft der Anfang spitz zu, `finish()` gibt den fertigen Strich mit beiden spitzen Enden. Steht der Anfang fest
+ * (erste Richtung und Tempo beim Ansetzen), rechnet sie die Punkte davor einmal nach, bis dahin ist bei ihr kein Punkt fest
+ * (`settled`).
+ * Mit den Zeiten der Stiftpunkte misst die Füllfeder das Tempo wie Tinte: Schnelle Striche werden schmaler, und jedes Ende läuft
+ * so lang spitz aus, wie es das Tempo dort verlangt (schnell lang, langsam kurz). Ohne Zeiten wirkt das Tempo nicht. Die Längen
+ * der Spitzen zählen wie σ und das Tempo auf dem Glas (in Bildschirmpunkten).
  */
 export class StrokeBuilder {
   private readonly opts: {
@@ -81,7 +95,7 @@ export class StrokeBuilder {
   };
   private readonly id: string;
   private readonly nomW: number;
-  /** Halbe Fensterbreite der Glättung in Punkten, 0 heißt: nicht glätten. */
+  /** Halbe Fensterbreite der Glättung in Punkten, 0 heißt: nicht glätten. Die Füllfeder glättet nach der Strecke (`smoothArc`). */
   private readonly K: number;
   /** Gewichte des Fensters: `wts[j]` gehört zu einem Punkt im Abstand j. */
   private readonly wts: number[];
@@ -111,14 +125,49 @@ export class StrokeBuilder {
   /** Je Rohpunkt die Grundbreite (ohne Verjüngung) und der Weg ab dem Anfang. */
   private readonly base: number[] = [];
   private readonly ways: number[] = [];
-  /** Geglätteter Druck und Stiftrichtung der Punkte, solange die erste Richtung fehlt: Mit ihr werden sie nachgerechnet. */
-  private early: { ps: number; nib: Doubled }[] = [];
+  /**
+   * Geglätteter Druck, Stiftrichtung, Tempofaktor und Strichrichtung (`null` vor der ersten) der Punkte, solange der Anfang nicht
+   * feststeht: Mit ihm werden sie nachgerechnet.
+   */
+  private early: { ps: number; nib: Doubled; sf: number; dir: Doubled | null }[] = [];
+  /** Die erste Richtung des Strichs: Die Punkte davor bekommen ihren Federfaktor. */
+  private firstDir: Doubled | null = null;
+  /** Alle Stiftpunkte bisher kamen mit einer Zeit. Ohne Zeiten, oder ab einem Punkt ohne Zeit, wirkt das Tempo nicht. */
+  private timed = true;
+  /** Ab dieser Zeit (ms) wird das Tempo beim Ansetzen gemessen: die des ersten Stiftpunkts, oder die, zu der die Zeit zurücksprang. */
+  private t0 = 0;
+  /** Zeit des letzten Stiftpunkts, dessen Zeit gezählt hat, und die Strecke ab `t0` bis zu ihm (Seiteneinheiten). */
+  private tick = { t: 0, s: 0 };
+  /** Strecke seit `tick`, die auf eine spätere Zeit wartet: Schritte mit derselben Zeit wie `tick`. */
+  private pending = 0;
+  /** Geglättetes Tempo in Bildschirmpunkten je ms: am Anfang 0, ab dem Festlegen des Anfangs zuerst das Tempo beim Ansetzen. */
+  private vs = 0;
+  /** Der letzte Stiftpunkt, behalten oder verworfen: Von ihm aus misst der nächste seinen Schritt für das Tempo. */
+  private seen: { x: number; y: number } | null = null;
+  /** Zeit des letzten Stiftpunkts mit Zeit (ms): Von ihr an klingt das Tempo bis zum Abheben ab (`finish`). */
+  private lastT = Number.NaN;
+  /**
+   * Länge der Verjüngung am Anfang (Seiteneinheiten), fest, sobald der Anfang feststeht: die erste Richtung und ein Zeitschritt,
+   * der zählt (ohne Zeiten nur die erste Richtung). Davor `null`: Es gilt eine vorläufige Länge.
+   */
+  private startLen: number | null = null;
+  /** Länge einer Verjüngung ohne Tempo in Seiteneinheiten: `TAPER_LEN` Bildschirmpunkte. */
+  private readonly taperLen: number;
+  /** Weg des Richtungsankers (Seiteneinheiten), über den die Richtung geglättet wird: `DIR_LEN`, bei stärkerer Stabilisierung σ. */
+  private readonly dirLen: number;
+  /** σ der Glättung nach Strecke in Seiteneinheiten, 0 heißt: nicht glätten. */
+  private readonly arcSigma: number;
+  /** Je Rohpunkt die Strecke ab dem Anfang: die Summe der Abstände der Rohpunkte, in Seiteneinheiten. */
+  private readonly arc: number[] = [];
+  /** So viele Punkte am Anfang liegen mehr als 2,5 σ (Strecke) vor dem letzten: Ihr geglätteter Ort ändert sich nicht mehr. */
+  private fixed = 0;
 
   /**
    * `minDist` ist der Mindestabstand zwischen zwei Rohpunkten in Seiteneinheiten (die App rechnet
    * 0.6 / Zoom, damit er auf dem Bildschirm gleich bleibt). `t` ist der Beginn des Strichs in Millisekunden.
-   * Nur für die Füllfeder: `fueller` sind die Regler (ohne Angabe die Startwerte), `pxUnit` sind Seiteneinheiten je
-   * Bildschirmpunkt (ohne Angabe aus `minDist`).
+   * `sigma` ist die Glättung in Punkten (`SMOOTHING`) und gilt nicht für die Füllfeder: Sie glättet nach der Strecke mit ihrer
+   * Strich-Stabilisierung. Nur für die Füllfeder: `fueller` sind die Regler (ohne Angabe die Startwerte), `pxUnit` sind
+   * Seiteneinheiten je Bildschirmpunkt (ohne Angabe aus `minDist`).
    */
   constructor(o: {
     pen?: PenKind;
@@ -138,30 +187,47 @@ export class StrokeBuilder {
     };
     this.id = newStrokeId(o.t);
     this.nomW = o.widthMm * MM;
-    const sig = o.sigma;
+    const isFueller = this.opts.pen === 'fueller';
+    const sig = isFueller ? 0 : o.sigma;
     this.K = sig > 0 ? Math.ceil(2.5 * sig) : 0;
     this.wts = sig > 0 ? Array.from({ length: this.K + 1 }, (_, j) => Math.exp(-(j * j) / (2 * sig * sig))) : [];
+    // σ in Bildschirmpunkten, in Seiteneinheiten umgerechnet: So glättet sie auf dem Bildschirm gleich stark, wie weit auch gezoomt ist.
+    const arcSigma = isFueller ? stabilSigmaPx(this.opts.fueller.stabil) * this.opts.pxUnit : 0;
+    this.arcSigma = arcSigma > 0 && Number.isFinite(arcSigma) ? arcSigma : 0;
+    this.dirLen = Math.max(DIR_LEN, this.arcSigma);
+    // Das Tempo und die Längen der Spitzen zählen in Bildschirmpunkten: Ohne brauchbare Umrechnung wirkt das Tempo nicht, und
+    // die Spitzen sind `TAPER_LEN` Seiteneinheiten lang.
+    const { pxUnit } = this.opts;
+    const usable = pxUnit > 0 && Number.isFinite(pxUnit);
+    if (!usable) this.timed = false;
+    this.taperLen = TAPER_LEN * (usable ? pxUnit : 1);
   }
 
   /**
    * Nimmt einen Stiftpunkt auf (Seiteneinheiten, Druck 0 bis 1). `false`, wenn der Punkt dem letzten behaltenen
    * Punkt zu nah ist und deshalb verworfen wurde. Ohne Druckwert (0 oder keine Zahl) gilt 0.5. `tiltX` und `tiltY`
-   * (Neigung des Stifts) braucht nur die Füllfeder; ohne Neigung gilt die Haltung eines Rechtshänders.
+   * (Neigung des Stifts) braucht nur die Füllfeder; ohne Neigung gilt die Haltung eines Rechtshänders. Ebenso `t`, die Zeit
+   * des Stiftpunkts in ms (`timeStamp` des Ereignisses): Daraus misst die Füllfeder das Tempo, auch mit einem verworfenen Punkt
+   * (er fügt keinen Punkt hinzu). Ohne Zeit wirkt das Tempo nicht.
    */
-  add(x: number, y: number, pressure: number, tiltX = 0, tiltY = 0): boolean {
+  add(x: number, y: number, pressure: number, tiltX = 0, tiltY = 0, t?: number): boolean {
     const raw = this.raw;
     const last = raw[raw.length - 1];
     if (last) {
       const dx = x - last.x;
       const dy = y - last.y;
       const min = this.opts.minDist;
-      if (dx * dx + dy * dy < min * min) return false;
+      if (dx * dx + dy * dy < min * min) {
+        if (this.opts.pen === 'fueller') this.trackDropped(x, y, t);
+        return false;
+      }
     }
     const pv = pressure > 0 ? pressure : 0.5;
-    const pt: Pt = { x, y, w: this.opts.pen === 'fueller' ? this.fuellerAt(x, y, last, pv, tiltX, tiltY) : this.widthAt(pv) };
+    const pt: Pt = { x, y, w: this.opts.pen === 'fueller' ? this.fuellerAt(x, y, last, pv, tiltX, tiltY, t) : this.widthAt(pv) };
     raw.push(pt);
     this.sumW += pt.w;
-    this.smoothTail();
+    if (this.opts.pen === 'fueller') this.smoothArc();
+    else this.smoothTail();
     return true;
   }
 
@@ -185,11 +251,14 @@ export class StrokeBuilder {
 
   /**
    * Der fertige Strich nach dem Abheben, eine Momentaufnahme wie `stroke()`. Bei der Füllfeder laufen beide Enden spitz
-   * zu, bei einem Strich kürzer als zwei Verjüngungen je auf seiner halben Länge. Ein Tipp (der Stift kam nie weiter als
-   * das Seil vom Aufsetzpunkt weg) bleibt ein runder Punkt, jeder Punkt in seiner Grundbreite. Die Orte sind dieselben wie
-   * bei `stroke()`. Bei den anderen Stiften gleich `stroke()`.
+   * zu, jedes so lang, wie es das Tempo dort verlangt (am Anfang beim Ansetzen, am Ende beim Abheben). Ist der Strich kürzer
+   * als beide Spitzen zusammen, wirken sie beide zugleich (ihr Produkt), nie unter dem Boden: So wird kein Punkt breiter als
+   * beim Schreiben, und ein kurzer schneller Schwung bleibt fein. `tUp` ist die Zeit des Abhebens (ms, `timeStamp` des
+   * `pointerup`): Seit dem letzten Stiftpunkt klingt das Tempo bis dahin ab, ein Stift, der vor dem Abheben ruhte, endet
+   * also kurz. Ein Tipp (der Stift kam nie weiter als das Seil vom Aufsetzpunkt weg) bleibt ein runder Punkt, jeder Punkt
+   * in seiner Grundbreite. Die Orte sind dieselben wie bei `stroke()`. Bei den anderen Stiften gleich `stroke()`.
    */
-  finish(): Stroke {
+  finish(tUp?: number): Stroke {
     const s = this.stroke();
     const n = this.raw.length;
     if (this.opts.pen !== 'fueller' || !n) return s;
@@ -197,11 +266,13 @@ export class StrokeBuilder {
     const { schaerfe } = this.opts.fueller;
     const floor = this.nomW * FUELLER_FLOOR;
     const total = this.ways[n - 1];
-    const len = Math.min(TAPER_LEN, total / 2);
+    const startLen = this.startTaper();
+    const endLen = this.endTaper(tUp);
     let sum = 0;
     const pts = s.pts.map((p, i) => {
       const way = this.ways[i];
-      const w = tap ? this.base[i] : atLeast(this.base[i] * taperFactor(schaerfe, way, len) * taperFactor(schaerfe, total - way, len), floor);
+      const tapered = this.base[i] * taperFactor(schaerfe, way, startLen) * taperFactor(schaerfe, total - way, endLen);
+      const w = tap ? this.base[i] : atLeast(tapered, floor);
       sum += w;
       return { x: p.x, y: p.y, w };
     });
@@ -223,14 +294,18 @@ export class StrokeBuilder {
   }
 
   /**
-   * Breite der Füllfeder am neuen Rohpunkt, mit der Verjüngung am Anfang. `last` ist der vorige Rohpunkt, `pv` der Druck.
-   * Druck und Richtung werden über den Weg geglättet, nicht je Punkt: Steht der Stift und zittert, ändert sich die Breite
-   * nicht, auch wenn er viele Punkte schickt. Merkt sich je Punkt Grundbreite und Weg für `finish()`.
+   * Breite der Füllfeder am neuen Rohpunkt, mit der Verjüngung am Anfang. `last` ist der vorige Rohpunkt, `pv` der Druck,
+   * `t` die Zeit. Druck und Richtung werden über den Weg geglättet, nicht je Punkt: Steht der Stift und zittert, ändert sich
+   * die Breite nicht, auch wenn er viele Punkte schickt. Das Tempo wird über die Zeit geglättet (`trackSpeed`). Merkt sich je
+   * Punkt Grundbreite und Weg für `finish()`.
    */
-  private fuellerAt(x: number, y: number, last: Pt | undefined, pv: number, tiltX: number, tiltY: number): number {
+  private fuellerAt(x: number, y: number, last: Pt | undefined, pv: number, tiltX: number, tiltY: number, t: number | undefined): number {
     const { pxUnit } = this.opts;
+    const step = last ? dist(last, x, y) : 0;
     // Druck: der erste direkt, danach über den Weg zum vorigen Rohpunkt geglättet.
-    const ps = (this.ps = this.ps === null || !last ? pv : this.ps + (pv - this.ps) * (1 - Math.exp(-dist(last, x, y) / PRESS_LEN)));
+    const ps = (this.ps = this.ps === null || !last ? pv : this.ps + (pv - this.ps) * (1 - Math.exp(-step / PRESS_LEN)));
+    // Tempo vor der Richtung: Steht mit diesem Punkt der Anfang fest, zählt er zum Tempo beim Ansetzen.
+    this.trackSpeed(x, y, t);
     // Richtung, in die der Stift zeigt: je Punkt gemischt und auf Länge 1 gebracht.
     const now = doubled(penAngle(tiltX, tiltY) ?? DEFAULT_PEN_ANGLE);
     this.nib = this.nib ? mix(this.nib, now) : now;
@@ -238,10 +313,12 @@ export class StrokeBuilder {
     const nib = nibLen > 0 ? { c: this.nib.c / nibLen, s: this.nib.s / nibLen } : now; // Länge 0: zwei Neigungen genau gegenüber
     // Richtung des Strichs am Seil: Der Anker folgt dem Stift im Abstand `dirRope` (0,5 mm und einige Bildschirmpunkte). Ist
     // das Seil straff, zeigt die Richtung vom Anker zum Punkt, und der Anker wird auf dieser Linie nachgezogen, bis er genau
-    // `dirRope` vom Punkt weg ist. Geglättet wird über den Weg des Ankers: So dreht die Richtung mit jedem Punkt ein wenig,
-    // nicht in Stufen. Ist das Seil locker, bleibt alles. Zittern im Stand zieht den Anker höchstens um die Breite des
-    // Zitterns nach, danach ist das Seil locker. Mit der ersten Richtung bekommen auch die Punkte davor ihren Federfaktor.
+    // `dirRope` vom Punkt weg ist. Geglättet wird über den Weg des Ankers (`dirLen`, bei starker Stabilisierung länger): So dreht
+    // die Richtung mit jedem Punkt ein wenig, nicht in Stufen. Ist das Seil locker, bleibt alles. Zittern im Stand zieht den
+    // Anker höchstens um die Breite des Zitterns nach, danach ist das Seil locker. Mit der ersten Richtung bekommen die Punkte
+    // davor deren Federfaktor, sonst wüchse die Breite bis hierher wie bei einer runden Feder und spränge dann.
     const dirRope = Math.max(DIR_MIN, DIR_MIN_PX * pxUnit);
+    let firstNow = false;
     if (!this.anchor) this.anchor = { x, y };
     else {
       const d = dist(this.anchor, x, y);
@@ -249,11 +326,11 @@ export class StrokeBuilder {
         const u = doubled(Math.atan2(y - this.anchor.y, x - this.anchor.x));
         const moved = d - dirRope; // so weit wird der Anker nachgezogen
         if (this.dir) {
-          const k = 1 - Math.exp(-moved / DIR_LEN);
+          const k = 1 - Math.exp(-moved / this.dirLen);
           this.dir = { c: this.dir.c + (u.c - this.dir.c) * k, s: this.dir.s + (u.s - this.dir.s) * k };
         } else {
-          this.dir = u;
-          this.backfill(u);
+          this.dir = this.firstDir = u;
+          firstNow = true;
         }
         const f = moved / d;
         this.anchor = { x: this.anchor.x + (x - this.anchor.x) * f, y: this.anchor.y + (y - this.anchor.y) * f };
@@ -273,32 +350,148 @@ export class StrokeBuilder {
       }
     }
     this.travel = Math.max(this.travel, this.countedSum + dist(this.counted, x, y));
-    const base = this.baseWidth(this.dir, nib, ps);
-    if (!this.dir) this.early.push({ ps, nib });
+    // Steht jetzt der Anfang fest, beginnt das Tempo mit dem beim Ansetzen, und die Punkte davor werden nachgerechnet. Sonst
+    // bekommen sie mit der ersten Richtung wenigstens deren Federfaktor.
+    if (this.startLen === null && this.startReady()) this.startNow();
+    else if (firstNow) this.redoEarly();
+    const sf = this.speedNow();
+    const base = this.baseWidth(this.dir, nib, ps, sf);
+    if (this.startLen === null) this.early.push({ ps, nib, sf, dir: this.dir });
     this.base.push(base);
     this.ways.push(this.travel);
     return this.startWidth(base, this.travel);
   }
 
-  /** Grundbreite der Füllfeder: Nennbreite × Federfaktor × Druckfaktor, nie unter dem Boden. */
-  private baseWidth(dir: Doubled | null, nib: Doubled, ps: number): number {
-    const { rundung, druck } = this.opts.fueller;
-    return atLeast(this.nomW * nibFactorR(rundung, dir, nib) * pressureFactor(druck, ps), this.nomW * FUELLER_FLOOR);
+  /**
+   * Misst das Tempo mit einem Stiftpunkt an der Stelle (`x`, `y`) zur Zeit `t`, ob er behalten oder verworfen wird. Sein Schritt
+   * ist der Abstand zum vorigen Stiftpunkt, auch wenn der verworfen wurde: So zählt die Strecke, die der Stift zurücklegt, und
+   * ruht er, sinkt das Tempo. Ein Schritt zählt, wenn seine Zeit nach der des letzten gezählten liegt (`tick`): Das Tempo ist dann
+   * die Strecke seitdem in Bildschirmpunkten durch die Zeit seitdem, und das geglättete Tempo folgt ihm mit
+   * 1 − exp(−Δt / `SPEED_TAU_MS`). Ein Schritt mit derselben Zeit (zusammengefasste Ereignisse, die sich eine Zeit teilen) ändert
+   * das Tempo nicht, seine Strecke zählt beim nächsten Schritt mit. Springt die Zeit zurück, zählt der Schritt ebenso wenig, und
+   * ab ihm wird neu gemessen, auch das Tempo beim Ansetzen. So gibt es weder NaN noch ein unendliches Tempo. Ein Punkt ohne Zeit
+   * beendet den Einfluss des Tempos für den Rest des Strichs.
+   */
+  private trackSpeed(x: number, y: number, t: number | undefined): void {
+    const prev = this.seen;
+    this.seen = { x, y };
+    if (t === undefined || !Number.isFinite(t)) {
+      this.timed = false;
+      return;
+    }
+    if (!this.timed) return;
+    this.lastT = t;
+    if (!prev) {
+      this.t0 = t;
+      this.tick = { t, s: 0 };
+      return;
+    }
+    this.pending += dist(prev, x, y);
+    const dt = t - this.tick.t;
+    const v = this.pending / this.opts.pxUnit / dt;
+    // Ein Schritt mit späterer Zeit zählt. Bei derselben Zeit (oder einem Tempo, das keine endliche Zahl ist) wartet die Strecke
+    // auf eine spätere Zeit.
+    if (dt > 0 && Number.isFinite(v)) {
+      this.vs += (v - this.vs) * (1 - Math.exp(-dt / SPEED_TAU_MS));
+      this.tick = { t, s: this.tick.s + this.pending };
+      this.pending = 0;
+    } else if (dt < 0) {
+      // Die Zeit springt zurück: Ab hier wird neu gemessen, auch das Tempo beim Ansetzen (Zeit und Strecke ab hier).
+      this.t0 = t;
+      this.tick = { t, s: 0 };
+      this.pending = 0;
+    }
   }
 
-  /** Breite der Füllfeder beim Schreiben: Grundbreite mit der Verjüngung am Anfang, nie unter dem Boden. */
-  private startWidth(base: number, way: number): number {
-    return atLeast(base * taperFactor(this.opts.fueller.schaerfe, way, TAPER_LEN), this.nomW * FUELLER_FLOOR);
+  /** Ein verworfener Stiftpunkt der Füllfeder: Er fügt keinen Punkt hinzu, zählt aber zum Tempo, und mit ihm kann der Anfang feststehen. */
+  private trackDropped(x: number, y: number, t: number | undefined): void {
+    this.trackSpeed(x, y, t);
+    if (this.startLen === null && this.startReady()) this.startNow();
+  }
+
+  /** Tempofaktor der Breite für den nächsten Punkt aus dem geglätteten Tempo. Ohne Zeiten 1. */
+  private speedNow(): number {
+    return this.timed ? speedFactor(speedBlend(this.vs)) : 1;
   }
 
   /**
-   * Die erste Richtung steht fest: Die Punkte davor, bisher mit Federfaktor 1, bekommen den Federfaktor dieser Richtung, jeder
-   * mit seinem eigenen Druck und seiner eigenen Stiftrichtung. Sonst wüchse die Breite bis hierher wie bei einer runden
-   * Feder und spränge dann. Neue Punkte statt geänderter: Ein Strich, den `stroke()` vorher gab, bleibt, wie er war.
+   * Kann der Anfang festgelegt werden? Dazu braucht es die erste Richtung und, mit Zeiten, einen Zeitschritt, der zählt (eine Zeit
+   * nach `t0`). Kommt keiner, bis der gezählte Weg oder die Strecke der Rohpunkte `START_WAIT` × `TAPER_LEN` Bildschirmpunkte lang
+   * ist, sind wohl alle Zeiten gleich: Dann wird nicht länger gewartet, der Anfang gilt als langsam. Die Strecke zählt mit, damit auch
+   * ein Stift, der nach der ersten Richtung ruht und zittert, nicht endlos offene Punkte sammelt.
    */
-  private backfill(first: Doubled): void {
-    this.early.forEach(({ ps, nib }, i) => {
-      const base = this.baseWidth(first, nib, ps);
+  private startReady(): boolean {
+    if (!this.dir) return false;
+    const way = Math.max(this.travel, this.arc[this.arc.length - 1] ?? 0);
+    return !this.timed || this.tick.t > this.t0 || way >= START_WAIT * this.taperLen;
+  }
+
+  /** Tempo beim Ansetzen (Bildschirmpunkte je ms): die gezählte Strecke ab `t0` durch die Zeit seitdem. Ohne gezählte Zeit 0, langsam. */
+  private startSpeed(): number {
+    const dt = this.tick.t - this.t0;
+    return dt > 0 ? this.tick.s / this.opts.pxUnit / dt : 0;
+  }
+
+  /**
+   * Der Anfang steht fest: Die Länge der Verjüngung am Anfang kommt aus dem Tempo beim Ansetzen, und das geglättete Tempo beginnt
+   * mit ihm statt mit 0. Die Punkte davor bekommen seinen Tempofaktor: So beginnt ein schneller Strich gleich schmal und läuft lang
+   * spitz an, statt nach einer kurzen Spitze satt wie eine Keule zu werden. Ohne Zeiten `TAPER_LEN` Bildschirmpunkte und der
+   * Tempofaktor 1.
+   */
+  private startNow(): void {
+    let sf = 1;
+    if (this.timed) {
+      const v = this.startSpeed();
+      if (Number.isFinite(v)) this.vs = v;
+      const q = speedBlend(v);
+      sf = speedFactor(q);
+      this.startLen = this.taperLen * taperScale(q);
+    } else this.startLen = this.taperLen;
+    this.redoEarly(sf);
+    this.early = [];
+  }
+
+  /**
+   * Länge der Verjüngung am Anfang (Seiteneinheiten): sobald der Anfang feststeht die aus dem Tempo beim Ansetzen, davor vorläufig
+   * die für langsam. Ohne Zeiten `TAPER_LEN` Bildschirmpunkte.
+   */
+  private startTaper(): number {
+    return this.startLen ?? this.taperLen * (this.timed ? TAPER_SLOW : 1);
+  }
+
+  /**
+   * Länge der Verjüngung am Ende (Seiteneinheiten) aus dem geglätteten Tempo am letzten Stiftpunkt. Mit der Zeit des Abhebens `tUp`
+   * klingt es bis dahin ab (× exp(−Δt / `SPEED_TAU_MS`)): Ein Stift, der vor dem Abheben stehen blieb, endet kurz, auch wenn er
+   * dabei keine Punkte mehr schickte. Ohne Zeiten `TAPER_LEN` Bildschirmpunkte.
+   */
+  private endTaper(tUp: number | undefined): number {
+    if (!this.timed) return this.taperLen;
+    const rest = tUp === undefined ? 0 : tUp - this.lastT;
+    const vs = rest > 0 ? this.vs * Math.exp(-rest / SPEED_TAU_MS) : this.vs;
+    return this.taperLen * taperScale(speedBlend(vs));
+  }
+
+  /** Grundbreite der Füllfeder: Nennbreite × Federfaktor × Druckfaktor × Tempofaktor `sf`, nie unter dem Boden. */
+  private baseWidth(dir: Doubled | null, nib: Doubled, ps: number, sf: number): number {
+    const { rundung, druck } = this.opts.fueller;
+    return atLeast(this.nomW * nibFactorR(rundung, dir, nib) * pressureFactor(druck, ps) * sf, this.nomW * FUELLER_FLOOR);
+  }
+
+  /** Breite der Füllfeder beim Schreiben: Grundbreite mit der Verjüngung am Anfang (`startTaper`), nie unter dem Boden. */
+  private startWidth(base: number, way: number): number {
+    return atLeast(base * taperFactor(this.opts.fueller.schaerfe, way, this.startTaper()), this.nomW * FUELLER_FLOOR);
+  }
+
+  /**
+   * Rechnet die Punkte nach, solange der Anfang nicht feststeht (`early`): jeder mit dem Federfaktor seiner Richtung (vor der
+   * ersten Richtung mit deren Faktor statt 1), seinem eigenen Druck und seiner eigenen Stiftrichtung, mit dem Tempofaktor `sf`
+   * (ohne Angabe seinem eigenen) und der Verjüngung am Anfang (`startTaper`). Neue Punkte statt geänderter: Ein Strich, den
+   * `stroke()` vorher gab, bleibt, wie er war. Roh- und geglättete Liste ändern sich gemeinsam: `smoothArc` übernimmt die Breite
+   * des Rohpunkts.
+   */
+  private redoEarly(sf?: number): void {
+    this.early.forEach((e, i) => {
+      const base = this.baseWidth(e.dir ?? this.firstDir, e.nib, e.ps, sf ?? e.sf);
       const w = this.startWidth(base, this.ways[i]);
       const r = this.raw[i];
       const o = this.out[i];
@@ -307,17 +500,17 @@ export class StrokeBuilder {
       this.raw[i] = { x: r.x, y: r.y, w };
       this.out[i] = { x: o.x, y: o.y, w };
     });
-    this.early = [];
   }
 
   /**
    * Wie viele Punkte am Anfang fest sind: Weitere Stiftpunkte ändern sie nicht mehr (die Glättung reicht nur K Punkte
-   * zurück). Ohne Glättung sind alle Punkte fest. Bei der Füllfeder ist keiner fest, bis die erste Richtung feststeht: Mit
-   * ihr ändert sich noch die Breite der Punkte davor.
+   * zurück). Ohne Glättung sind alle Punkte fest. Bei der Füllfeder sind es die Punkte mehr als 2,5 σ (Strecke) vor dem
+   * letzten, aber keiner, bis der Anfang feststeht (die erste Richtung und, mit Zeiten, das Tempo beim Ansetzen): Bis dahin
+   * ändert sich die Breite der Punkte noch (Federfaktor, Tempofaktor und Länge der Verjüngung am Anfang).
    */
   settled(): number {
+    if (this.opts.pen === 'fueller') return this.startLen !== null ? this.fixed : 0;
     const n = this.raw.length;
-    if (this.opts.pen === 'fueller' && !this.dir) return 0;
     return this.K ? Math.max(0, n - 1 - this.K) : n;
   }
 
@@ -333,8 +526,53 @@ export class StrokeBuilder {
   }
 
   /**
-   * Das Fenster wird zu den Enden hin kleiner: Anfang, Ende und Stiftspitze bleiben genau dort, wo der Stift war.
-   * Ein neuer Punkt ändert nur die letzten K + 1 Punkte, weiter vorn reicht das Fenster nicht bis zu ihm.
+   * Glättung der Orte der Füllfeder nach der Strecke: Jeder Punkt ist das Mittel der Punkte, deren Strecke höchstens `r` von
+   * seiner abliegt, gewichtet mit exp(−d² / 2σ²), `d` der Unterschied der Strecke. `r` ist 2,5 σ und wird zu den Enden hin
+   * kleiner, zu beiden Seiten gleich weit: Anfang, Ende und Stiftspitze bleiben genau dort, wo der Stift war. So glättet sie
+   * gleich stark, ob der Stift seine Punkte dicht (langsam) oder weit auseinander (schnell) schickt. Die Breite bleibt die des
+   * Rohpunkts. Ein neuer Punkt ändert nur Punkte, die noch nicht fest sind (`fixed`): Die Punkte davor liegen mehr als 2,5 σ
+   * vor dem vorigen letzten Punkt, ihr Fenster hängt nicht mehr am Ende und reicht nicht bis zum neuen Punkt.
+   */
+  private smoothArc(): void {
+    const { raw, out, arc } = this;
+    const n = raw.length;
+    const p = raw[n - 1];
+    const end = n > 1 ? arc[n - 2] + dist(raw[n - 2], p.x, p.y) : 0;
+    arc.push(end);
+    const sigma = this.arcSigma;
+    if (!sigma) {
+      out[n - 1] = p;
+      this.fixed = n;
+      return;
+    }
+    const reach = STABIL_REACH * sigma;
+    const k = 1 / (2 * sigma * sigma);
+    for (let i = this.fixed; i < n; i++) {
+      const s = arc[i];
+      const r = Math.min(reach, s, end - s);
+      let lo = i;
+      while (lo > 0 && s - arc[lo - 1] <= r) lo--;
+      let hi = i;
+      while (hi < n - 1 && arc[hi + 1] - s <= r) hi++;
+      let sx = 0;
+      let sy = 0;
+      let sw = 0;
+      for (let j = lo; j <= hi; j++) {
+        const d = arc[j] - s;
+        const w = Math.exp(-d * d * k);
+        sx += w * raw[j].x;
+        sy += w * raw[j].y;
+        sw += w;
+      }
+      out[i] = { x: sx / sw, y: sy / sw, w: raw[i].w };
+    }
+    while (this.fixed < n && end - arc[this.fixed] > reach) this.fixed++;
+  }
+
+  /**
+   * Glättung von Kugelschreiber, Fineliner und Bleistift nach der Zahl der Punkte. Das Fenster wird zu den Enden hin kleiner:
+   * Anfang, Ende und Stiftspitze bleiben genau dort, wo der Stift war. Ein neuer Punkt ändert nur die letzten K + 1 Punkte,
+   * weiter vorn reicht das Fenster nicht bis zu ihm.
    */
   private smoothTail(): void {
     const { raw, out, K, wts } = this;
