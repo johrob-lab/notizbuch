@@ -35,6 +35,9 @@ test('the page that covers the middle of the screen is the one that settles', ()
   expect(settledSide({ s: 0.5, x: 0, y: 800 - 0.5 * 1601 }, size, both)).toBeNull(); // Mitte bei 1601, vor der Hälfte des Spalts
   expect(settledSide({ s: 0.5, x: 0, y: 800 + 0.5 * 13 }, size, both)).toBe('above'); // Mitte bei -13
   expect(settledSide({ s: 0.5, x: 0, y: 800 - 0.5 * 1603 }, size, { above: true, below: false })).toBeNull();
+  // genau auf der Grenze wird noch nicht gewechselt (strenge Vergleiche)
+  expect(settledSide({ s: 0.5, x: 0, y: 800 + 0.5 * 12 }, size, both)).toBeNull(); // Mitte genau bei -12
+  expect(settledSide({ s: 0.5, x: 0, y: 800 - 0.5 * 1602 }, size, both)).toBeNull(); // Mitte genau bei 1602
 });
 
 test('the next page starts where it was on the screen', () => {

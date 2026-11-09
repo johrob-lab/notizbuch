@@ -26,7 +26,7 @@ export function chainSpan(n: Present): { top: number; bottom: number } {
   };
 }
 
-/** Zu welchem Nachbarn ein Punkt gehört, der auf der Seite `y` Einheiten unter dem Oberrand liegt. Der Spalt zählt zum Nachbarn. */
+/** Zu welchem Nachbarn ein Punkt gehört, der auf der Seite `y` Einheiten unter dem Oberrand liegt. Der Spalt zählt zum Nachbarn (so gilt es für eine Berührung mit Stift oder Finger), `settledSide` wechselt dagegen erst jenseits der halben Lücke. */
 export function sideAt(y: number, n: Present): Side | null {
   if (y < 0 && n.above) return 'above';
   if (y > PAGE_H && n.below) return 'below';
