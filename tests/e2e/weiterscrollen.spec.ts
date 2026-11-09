@@ -3,7 +3,7 @@ import { PAGE_GAP } from '../../src/ink/chain';
 import { serializePage } from '../../src/ink/svg';
 import { PAGE_H, type Stroke } from '../../src/ink/types';
 import { dailyNotePath, GEBURTSTAGE_PATH, TERMINE_PATH, wochePagePath } from '../../src/lib/filenames';
-import { bringToForeground, lastHead, openSeeded, queued, sendToBackground, type RepoMock } from './helpers/app';
+import { addRepo, bringToForeground, changeStoredSettings, lastHead, openSeeded, queued, sendToBackground, type RepoMock } from './helpers/app';
 import { centerOf, inkNear, mouse, pen, pinch, touch, twoFingerTap, viewOf } from './helpers/pointer';
 
 /**
@@ -543,6 +543,77 @@ test('the page left behind becomes the neighbour with its newest stroke', async 
   expect(strokesIn(repo.puts[0].text)).toBe(1);
 });
 
+/**
+ * Alles in einem Zug, so dass die App dazwischen nichts anderes tut: Ein Finger schiebt die Seite, bis die Mitte der Fläche `target`
+ * Seiteneinheiten unter dem Oberrand der offenen Seite liegt, und hebt ab. Gleich danach setzt der Stift am ersten Punkt von `path`
+ * (Seiteneinheiten derselben Seite) auf und zieht zu den weiteren, ohne abzuheben. Der Weg des Fingers bleibt in der Fläche. Gibt
+ * zurück, wie es in diesem Moment ist: die Adresse, welche Seite die Fläche zeigt und wie viele Bewegungen des Stifts sie als Strich
+ * gezeichnet hat.
+ */
+const swipeThenPen = (page: Page, target: number, path: [number, number][]) =>
+  page.evaluate(
+    ({ goal, points, margin }) => {
+      const surface = document.querySelector('[data-testid="surface"]')!;
+      const live = surface.querySelector('canvas[data-layer="live"]')!;
+      const send = (type: 'pointerdown' | 'pointermove' | 'pointerup', pointerType: 'touch' | 'pen', at: { x: number; y: number }) =>
+        live.dispatchEvent(
+          new PointerEvent(type, {
+            pointerId: pointerType === 'pen' ? 11 : 21,
+            pointerType,
+            isPrimary: true,
+            pressure: 0.5,
+            width: 1,
+            height: 1,
+            clientX: at.x,
+            clientY: at.y,
+            button: type === 'pointermove' ? -1 : 0,
+            buttons: type === 'pointerup' ? 0 : 1,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+          }),
+        );
+      const box = surface.getBoundingClientRect();
+      const origin = window.__notizbuch.toClient(0, 0);
+      const scale = (window.__notizbuch.toClient(1000, 0).x - origin.x) / 1000;
+      const dy = ((box.top + box.height / 2 - origin.y) / scale - goal) * scale; // so weit muss der Finger, nach unten positiv
+      if (Math.abs(dy) > box.height - 2 * margin) throw new Error(`Die Mitte ist zu weit von ${goal} entfernt.`);
+      const x = box.left + box.width / 2;
+      const from = dy < 0 ? box.bottom - margin : box.top + margin;
+      send('pointerdown', 'touch', { x, y: from });
+      for (const f of [0.25, 0.5, 0.75, 1]) send('pointermove', 'touch', { x, y: from + dy * f });
+      send('pointerup', 'touch', { x, y: from + dy });
+      points.forEach(([px, py], i) => send(i === 0 ? 'pointerdown' : 'pointermove', 'pen', window.__notizbuch.toClient(px, py)));
+      return { hash: location.hash, key: window.__notizbuch.currentPage().key, penMoves: window.__notizbuch.liveStats().events };
+    },
+    { goal: target, points: path, margin: MARGIN },
+  );
+
+test('a stroke begun on the day just left, before the next one is open, is in its preview and in its file', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  await scrollUntil(page, NEXT_IN_VIEW);
+
+  // Der Finger schiebt den 30.10. über die Hälfte des Spalts und hebt ab, gleich danach schreibt der Stift auf dem 29.10., der oben
+  // noch im Bild ist. Die Adresse ist da schon die neue, aufgebaut ist aber noch der 29.10.: Er nimmt den Strich an.
+  const now = await swipeThenPen(page, PAST_BELOW, [
+    [300, PAGE_H - 200],
+    [360, PAGE_H - 180],
+    [420, PAGE_H - 200],
+  ]);
+  expect(now).toEqual({ hash: '#/tag/2026-10-30', key: '2026-10-29', penMoves: 2 });
+
+  // Beim Abbau wird der Strich fertig. Der 29.10. hängt über dem 30.10., und seine Vorschau zeigt ihn.
+  await waitForPageOf(page, 'tag', '2026-10-30');
+  await expect.poll(() => neighbors(page)).toEqual({ above: 1, below: 0 });
+  expect(await strokeCount(page)).toBe(0);
+
+  // Gespeichert ist er in der Datei des 29.10., und nur dort.
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.map((put) => put.path)).toEqual([tagFile('2026-10-29')]);
+  expect(strokesIn(repo.puts[0].text)).toBe(1);
+});
+
 test('scrolling on at once does not mix up pages', async ({ page }) => {
   // Nur der 30.10. hat einen Strich: Zeigt die Vorschau über dem 31.10. einen, stammt sie vom 30.10.
   await openSeeded(page, DAY, { files: { [tagFile('2026-10-30')]: dayWith('2026-10-30', strokeThrough('a', CLEAN)) } });
@@ -596,6 +667,46 @@ test('the page left behind is not read again until another device changes it', a
   await bringToForeground(page);
   await expect.poll(() => neighbors(page)).toEqual({ above: 2, below: 0 });
   expect(repo.puts).toEqual([]);
+});
+
+/** Das Repo, in das ein anderes Fenster wechselt, und sein Token. Erfunden. */
+const OTHER_REPO = 'muster/vault-anders';
+const OTHER_TOKEN = 'test-zugang-anders-0123456789';
+
+test('when the app goes on with a new engine, the day left behind is read again', async ({ page }) => {
+  // Der 29.10. hat einen Strich. Im Repo, in das gleich ein anderes Fenster wechselt, hat er zwei.
+  const file = tagFile('2026-10-29');
+  const repo = await openSeeded(page, DAY, { files: { [file]: dayWith('2026-10-29', strokeThrough('a', CLEAN)) } });
+  const other = await addRepo(page, OTHER_REPO, { files: { [file]: dayWith('2026-10-29', strokeThrough('a', CLEAN), strokeThrough('b', [600, 1000])) } });
+  await expect.poll(() => strokeCount(page)).toBe(1);
+
+  // Ein neuer Token für dieses Repo. GitHub antwortet auf seine Prüfung erst, wenn der Test es erlaubt. Die App bleibt dabei
+  // bedienbar: zurück zum 29.10.
+  let answer!: () => void;
+  repo.checkGate = new Promise<void>((resolve) => (answer = resolve));
+  await page.getByRole('link', { name: 'Einstellungen', exact: true }).click();
+  await page.getByRole('button', { name: 'Zugang ändern' }).click();
+  await page.getByLabel('Token', { exact: true }).fill('test-zugang-erneuert-0123456789');
+  await page.getByRole('button', { name: 'Prüfen und speichern' }).click();
+  await expect.poll(() => repo.requests.filter((request) => request === `GET /repos/${repo.name}`)).toHaveLength(1);
+  await goTo(page, DAY);
+  await waitForPageOf(page, 'tag', '2026-10-29');
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+
+  // Weiter zum 30.10.: Der 29.10. hängt darüber, mit seinem Strich aus der Übergabe.
+  await scrollUntil(page, PAST_BELOW);
+  await waitForPageOf(page, 'tag', '2026-10-30');
+  await expect.poll(() => neighbors(page)).toEqual({ above: 1, below: 0 });
+
+  // Ein anderes Fenster wechselt das Repository. Die Prüfung des Tokens merkt es, und die App arbeitet mit einer neuen Engine auf
+  // dem gespeicherten Repository weiter. Der 30.10. bleibt offen, und seine Vorschau liest beide Nachbarn jetzt dort, den 31.10.
+  // und auch den 29.10.
+  await changeStoredSettings(page, { repo: OTHER_REPO, token: OTHER_TOKEN }, ['files', 'outbox', 'meta']);
+  answer();
+  await expect.poll(() => readsOf(other, tagFile('2026-10-31'))).toBeGreaterThan(0);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 2, below: 0 });
+  expect(await hash(page)).toBe('#/tag/2026-10-30');
 });
 
 test('the screen shows the same in every frame while the next day opens', async ({ page }) => {

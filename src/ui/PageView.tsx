@@ -16,7 +16,7 @@ import { tapTargetAt, tapTargets, todayMarks, type Layout } from '../pages/layou
 import type { SyncEngine } from '../sync/engine';
 import { normalizePath } from '../sync/paths';
 import { watchCards } from './cardGestures';
-import { offerHandoff, takeHandoff } from './handoff';
+import { offerHandoff, takeHandoff, updateHandoff, type Handoff } from './handoff';
 import type { Neighbors, NeighborSpec } from './neighbors';
 import { PageSession, type Phase } from './pageSession';
 import { QuickSwitch } from './QuickSwitch';
@@ -187,8 +187,8 @@ export function PageView(p: Props) {
   const neighborsRef = useRef(p.neighbors);
   neighborsRef.current = p.neighbors;
   // Öffnete die Seite durch Weiterscrollen (Übergabe, siehe `handoff.ts`) und hatte die verlassene Seite ihre Datei gelesen, liegt
-  // hier, auf welcher Seite sie als Nachbarin hängt. Ihre Datei liest dann erst eine fremde Änderung: Ihre Sitzung speichert
-  // vielleicht noch.
+  // hier bis zum ersten Lesen der Nachbarn, auf welcher Seite sie als Nachbarin hängt. Dieses Lesen lässt ihre Datei aus: Ihre
+  // Sitzung speichert vielleicht noch.
   const keptFrom = useRef<Side | null>(null);
   const [phase, setPhase] = useState<Phase>('laden');
   // Der Hinweis „Seite wird geladen“ kommt erst, wenn feststeht, dass die Seite nicht schon zu sehen ist (im Effekt der Fläche):
@@ -226,6 +226,12 @@ export function PageView(p: Props) {
     // Ob die Sitzung dieser Fläche die Datei gelesen hat (`bereit`): Erst dann zeigt die Fläche ihre Striche, und erst dann kann sie
     // geschrieben haben. Eine Übergabe sagt das der nächsten Seite weiter.
     let read = false;
+    // Diese Seite als Nachbarin der nächsten, von dort aus auf der Seite `side`: mit allen Strichen, die sie jetzt hat, dem
+    // Hintergrund, den sie gerade zeigt, und ob ihre Sitzung die Datei gelesen hat.
+    const leaving = (side: Side): Handoff['from'] => ({ side, page: { strokes: view.getPage().strokes, background: view.shownBackground }, read });
+    // Die Übergabe, die diese Seite zuletzt angeboten hat. Bis die nächste Seite aufgebaut ist, nimmt diese noch Eingaben an: Beim
+    // Abbau (unten) kommt in die Übergabe, was sie dann ist.
+    let offered: Handoff | null = null;
 
     const view: InkSurface = new InkSurface(el, {
       readOnly: true, // bis die Seite gelesen ist
@@ -248,19 +254,20 @@ export function PageView(p: Props) {
       // Losgelassen, während ein Nachbar die Mitte bedeckt: Er wird die offene Seite. Die Adresse wechselt ohne neuen Eintrag
       // im Verlauf, die App baut dann die Seite neu auf wie bei jeder anderen Adresse. Damit dabei nichts springt, legt diese
       // Seite vorher eine Übergabe bereit: Die neue steht, wo sie als Nachbarin stand, zeigt zuerst ihre Vorschau, und diese
-      // Seite hängt dort als Nachbarin, mit allen Strichen, die sie jetzt hat, und dem Hintergrund, den sie gerade zeigt. Ob
-      // die Vorschau und diese Seite ihre Dateien schon gelesen hatten, sagt sie dazu.
+      // Seite hängt dort als Nachbarin, mit allen Strichen, die sie beim Abbau hat (auch einem, der erst dann fertig wird), und
+      // dem Hintergrund, den sie zeigt. Ob die Vorschau und diese Seite ihre Dateien schon gelesen hatten, sagt sie dazu.
       onNeighbor: (side, now) => {
         const next = shownNeighbors.current[side];
         if (!next) return;
-        offerHandoff({
+        offered = {
           path: next.path,
           view: viewFor(now, side),
           page: next.page,
           read: next.read,
-          from: { side: ACROSS[side], page: { strokes: view.getPage().strokes, background: view.shownBackground }, read },
+          from: leaving(ACROSS[side]),
           at: Date.now(),
-        });
+        };
+        offerHandoff(offered);
         window.location.replace(routeHash(next.spec.route));
       },
       initialView: handoff?.view,
@@ -344,6 +351,8 @@ export function PageView(p: Props) {
       surface.current = null;
       sessionRef.current = null;
       view.finishInput(); // ein Strich, der gerade entsteht, gehört noch zur Seite
+      // Und zu ihr als Nachbarin der nächsten Seite: Deren Aufbau kommt erst nach diesem Abbau und nimmt dann die Übergabe.
+      if (offered) updateHandoff(offered, leaving(offered.from.side));
       session.close();
       view.destroy();
     };
@@ -383,8 +392,9 @@ export function PageView(p: Props) {
 
   // Die Dateien der Nachbarn: gelesen, sobald sie Nachbarn sind, und neu, wenn ein anderes Gerät eine davon ändert. Er liest nur, er
   // schreibt nie, und er hängt nur an ihren Pfaden. Eine Antwort gilt, solange der Nachbar diesen Pfad hat, und je Nachbar zählt die
-  // neueste Anfrage. Die Seite, von der man durch Weiterscrollen kam, liest er nur nach einer fremden Änderung, wenn sie ihre Datei
-  // gelesen hatte (`keptFrom`): Bis dahin zeigt sie, was die Übergabe brachte.
+  // neueste Anfrage. Die Seite, von der man durch Weiterscrollen kam, liest er beim ersten Lauf nicht, wenn sie ihre Datei gelesen
+  // hatte (`keptFrom`): Sie zeigt, was die Übergabe brachte, bis eine fremde Änderung kommt oder er wieder läuft. Das tut er nur mit
+  // einer neuen Engine (die Pfade stehen mit der Seite fest), und deren Stand gilt dann auch für sie.
   const abovePath = neighbors?.above ? normalizePath(neighbors.above.path) : null;
   const belowPath = neighbors?.below ? normalizePath(neighbors.below.path) : null;
   useEffect(() => {
@@ -412,8 +422,9 @@ export function PageView(p: Props) {
         });
     };
     // Ein Lesen der verlassenen Seite setzte in der Engine den Stand, auf dem ihre Sitzung schreibt, und die speichert vielleicht
-    // noch. Ihre Striche hat die Vorschau schon aus der Übergabe.
+    // noch. Ihre Striche hat die Vorschau schon aus der Übergabe. Das gilt nur für dieses erste Lesen nach dem Wechsel.
     for (const side of SIDES) if (side !== keptFrom.current) load(side);
+    keptFrom.current = null;
     const stop = engine.addRemoteChangeListener((changed) => {
       const touched = new Set(changed.map(normalizePath));
       for (const side of SIDES) {

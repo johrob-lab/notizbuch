@@ -37,6 +37,16 @@ export function offerHandoff(h: Handoff): void {
 }
 
 /**
+ * Die bisherige Seite wird abgebaut, nachdem sie `h` angeboten hat: `from` ist sie jetzt, mit dem, was sich seit dem Anbieten an
+ * ihr geändert hat (etwa ein Strich, der erst beim Abbau fertig wurde, oder ihre Sitzung hat die Datei inzwischen gelesen). Liegt
+ * `h` noch bereit, gilt ab jetzt dieses `from`, alles andere bleibt. Ist `h` schon genommen oder durch eine neuere ersetzt, ändert
+ * sich nichts.
+ */
+export function updateHandoff(h: Handoff, from: Handoff['from']): void {
+  if (offered === h) offered = { ...h, from };
+}
+
+/**
  * Die Übergabe für die Seite `path`, wenn sie für diese Seite bestimmt ist (Pfade in NFC verglichen) und höchstens
  * `FRESH_MS` alt ist, sonst `null`. Danach ist sie verbraucht, auch wenn sie nicht passte: Eine alte Übergabe landet nie
  * auf einer Seite, die später öffnet.
