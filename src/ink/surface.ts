@@ -307,6 +307,10 @@ export class InkSurface {
   private fingerLog: FingerEvent[] = [];
   /** Dasselbe für Finger und Maus, für den Tipp mit einem Zeiger. */
   private tapLog: FingerEvent[] = [];
+  /** Der Stift, von dem das Tor gegen Handballen weiß, dass er aufliegt (`pointerId`), bis er abhebt. */
+  private penKnown: number | null = null;
+  /** Hört nicht mehr auf das Ende eines Stifts, den die Fläche erst unterwegs bemerkt hat (siehe `noticePen`). */
+  private stopPenEnd: (() => void) | null = null;
   private gesture: Gesture | null = null;
   private liveArea: Box | null = null;
   private predArea: Box | null = null;
@@ -566,6 +570,7 @@ export class InkSurface {
     this.stopMeter();
     clearTimeout(this.predTimer);
     clearTimeout(this.wheelTimer);
+    this.forgetPenEnd();
     clearTimeout(this.flashTimer);
     this.flashEl?.remove();
     this.hideTip();
@@ -1461,9 +1466,16 @@ export class InkSurface {
   /**
    * Der Stift schwebt über der Seite, ohne sie zu berühren. Mit der Füllfeder auf einer Seite, die man beschreiben kann, zeigt
    * die Spitze, wo er aufsetzen würde: die Form der Feder bei mittlerem Druck (`nibShape`), gedreht wie beim letzten Strich.
+   * Über einem Nachbarn und dem Spalt davor schreibt er nicht (er öffnet ihn), dort steht keine Spitze.
    */
   private hover(e: PointerEvent): void {
     if (this.readOnly || this.tool !== 'pen' || this.pen !== 'fueller' || this.drawing) {
+      this.hideTip();
+      return;
+    }
+    // Ob er über einem Nachbarn schwebt, sagt die Lage der Fläche, wie sie zuletzt gemessen war: Auch dafür wird nicht bei jeder
+    // Meldung neu gemessen.
+    if (this.neighborAt(this.local(e))) {
       this.hideTip();
       return;
     }
@@ -1539,6 +1551,7 @@ export class InkSurface {
     this.refreshRect();
     if (e.pointerType === 'pen') {
       this.filter.penDown(e.timeStamp);
+      this.penKnown = e.pointerId;
       this.endGesture(true); // die Hand lag schon auf dem Bildschirm: was die Finger eben verschoben haben, war sie
       this.touches.clear();
       this.forgetTaps();
@@ -1590,15 +1603,51 @@ export class InkSurface {
       this.touches.set(e.pointerId, this.local(e));
       this.logFinger(e, 'move');
       this.moveGesture();
-    } else if (e.pointerType === 'pen' && e.buttons === 0) this.hover(e);
+    } else if (e.pointerType === 'pen') {
+      if (e.buttons === 0) this.hover(e);
+      else if (this.penKnown !== e.pointerId) this.noticePen(e);
+    }
   };
+
+  /**
+   * Ein Stift liegt auf, aber sein Aufsetzen kam bei der Seite davor an, die dann zu dieser wechselte (er setzte auf ihrem Nachbarn
+   * auf). Das Tor gegen Handballen erfährt es einmal: Sonst nähme es die Hand, die noch aufliegt, als Finger. Sein Ende hört das
+   * Fenster, denn er kann auch über der Leiste oder einer Karte abheben, wo es nie bei der Fläche ankäme (wie bei den Karten): So
+   * geht das Tor auf jeden Fall wieder auf.
+   */
+  private noticePen(e: PointerEvent): void {
+    const id = e.pointerId;
+    this.penKnown = id;
+    this.filter.penDown(e.timeStamp);
+    this.forgetPenEnd();
+    const end = (ev: PointerEvent): void => {
+      if (ev.pointerId !== id) return;
+      this.forgetPenEnd();
+      if (this.penKnown === id) this.penKnown = null;
+      this.filter.penUp(ev.timeStamp);
+    };
+    window.addEventListener('pointerup', end, true);
+    window.addEventListener('pointercancel', end, true);
+    this.stopPenEnd = () => {
+      window.removeEventListener('pointerup', end, true);
+      window.removeEventListener('pointercancel', end, true);
+    };
+  }
+
+  private forgetPenEnd(): void {
+    this.stopPenEnd?.();
+    this.stopPenEnd = null;
+  }
 
   private onUp = (e: PointerEvent): void => {
     const { drawing: d, erasing: er } = this;
     // Mit der Zeit des Abhebens: Ruhte der Stift davor, ohne noch Punkte zu schicken, endet die Füllfeder trotzdem langsam.
     if (d && e.pointerId === d.id) this.finishDraw(true, e.timeStamp);
     else if (er && e.pointerId === er.id) this.finishErase();
-    if (e.pointerType === 'pen') this.filter.penUp(e.timeStamp);
+    if (e.pointerType === 'pen') {
+      this.filter.penUp(e.timeStamp);
+      this.penKnown = null;
+    }
     if (!this.touches.delete(e.pointerId)) return;
     if (e.type === 'pointercancel') this.forgetTaps(); // eine abgebrochene Berührung ist kein Tipp
     else this.logFinger(e, 'up');

@@ -4,7 +4,7 @@ import { serializePage } from '../../src/ink/svg';
 import { PAGE_H, type Stroke } from '../../src/ink/types';
 import { dailyNotePath, GEBURTSTAGE_PATH, TERMINE_PATH, wochePagePath } from '../../src/lib/filenames';
 import { bringToForeground, lastHead, openSeeded, queued, sendToBackground, type RepoMock } from './helpers/app';
-import { inkNear, mouse, pen, pinch, touch, twoFingerTap, viewOf, wheel } from './helpers/pointer';
+import { centerOf, inkNear, mouse, pen, pinch, touch, twoFingerTap, viewOf } from './helpers/pointer';
 
 /**
  * Weiterscrollen: Über und unter der offenen Tages-, Wochen- und Monatsseite hängen ihre Nachbarn. Wer mit dem Finger
@@ -293,19 +293,53 @@ const NEXT_IN_VIEW = PAGE_H - 400;
 /** Ein Ort auf dem 30.10. in Einheiten des 29.10. (150 unter dem Oberrand des 30.10.), bei `NEXT_IN_VIEW` gut zu sehen. */
 const ON_NEXT: [number, number] = [600, PAGE_H + PAGE_GAP + 150];
 
-/**
- * Dreht das Mausrad in Schritten von höchstens 100 Punkten, bis die Mitte der Fläche `target` Seiteneinheiten unter dem
- * Oberrand der offenen Seite liegt. Jeder Schritt ist ein eigenes Ereignis, wie beim Drehen.
- */
-async function wheelUntil(page: Page, target: number) {
+/** Ein Dreh am Mausrad: `dy` Bildschirmpunkte (nach unten positiv), mit `ctrl` gezoomt, an einem Ort der offenen Seite. */
+type Spin = { dy: number; ctrl?: boolean; at?: [number, number] };
+/** Was im selben Zug gleich nach dem Rad geschieht: Die Maus drückt auf `press` (Seiteneinheiten), oder `open` wird die Adresse. */
+type AfterSpin = { press?: [number, number]; open?: string };
+
+/** Die Drehungen am Mausrad, je höchstens 100 Punkte, bis die Mitte der Fläche `target` Seiteneinheiten unter dem Oberrand liegt. */
+async function spinsTo(page: Page, target: number): Promise<Spin[]> {
   const { view, y } = await middleOf(page);
+  const spins: Spin[] = [];
   let rest = (target - y) * view.scale; // so weit muss das Rad die Seite nach oben schieben, in Bildschirmpunkten
   while (Math.abs(rest) > 0.01) {
     const dy = Math.max(-100, Math.min(100, rest));
-    await wheel(page, [600, 800], { dy });
+    spins.push({ dy });
     rest -= dy;
   }
+  return spins;
 }
+
+/**
+ * Dreht das Mausrad: jede Drehung ein eigenes Ereignis wie beim Drehen, alle in einem Zug ohne Pause dazwischen. Gleich danach, im
+ * selben Zug und damit sicher vor dem Ende von `WHEEL_SETTLE_MS`, geschieht `after`. Gibt die Adresse, die Lage der Mitte (wie
+ * `middleOf`) und den Maßstab zurück, wie sie in diesem Moment sind: So hängt kein Test davon ab, wie schnell der Rechner ist.
+ */
+const spin = (page: Page, spins: Spin[], after: AfterSpin = {}) =>
+  page.evaluate(
+    ({ list, then }) => {
+      const surface = document.querySelector('[data-testid="surface"]')!;
+      const live = surface.querySelector('canvas[data-layer="live"]')!;
+      for (const s of list) {
+        const c = window.__notizbuch.toClient(...(s.at ?? [600, 800]));
+        const init = { clientX: c.x, clientY: c.y, deltaY: s.dy, ctrlKey: !!s.ctrl };
+        live.dispatchEvent(new WheelEvent('wheel', { ...init, bubbles: true, cancelable: true }));
+      }
+      const box = surface.getBoundingClientRect();
+      const origin = window.__notizbuch.toClient(0, 0);
+      const scale = (window.__notizbuch.toClient(1000, 0).x - origin.x) / 1000;
+      const now = { hash: location.hash, middle: (box.top + box.height / 2 - origin.y) / scale, scale };
+      if (then.press) {
+        const c = window.__notizbuch.toClient(...then.press);
+        const init = { pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX: c.x, clientY: c.y, button: 0, buttons: 1 };
+        live.dispatchEvent(new PointerEvent('pointerdown', { ...init, bubbles: true, cancelable: true, composed: true }));
+      }
+      if (then.open) location.hash = then.open;
+      return now;
+    },
+    { list: spins, then: after },
+  );
 
 /** Ein Finger wischt einmal fast über die ganze Höhe der Fläche, mit `up` nach oben (die Seite wandert mit), sonst nach unten. */
 async function swipe(page: Page, up: boolean) {
@@ -725,11 +759,10 @@ test('the mouse wheel scrolls on and opens the page after a pause', async ({ pag
   await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
   const entries = await historyLength(page);
 
-  await wheelUntil(page, PAST_BELOW);
-  expect((await middleOf(page)).y).toBeCloseTo(PAST_BELOW, 1);
-  expect(await hash(page)).toBe(DAY); // das Rad steht erst einen Augenblick still
-  await page.waitForTimeout(400);
-  expect(await hash(page)).toBe('#/tag/2026-10-30');
+  const now = await spin(page, await spinsTo(page, PAST_BELOW));
+  expect(now.middle).toBeCloseTo(PAST_BELOW, 1);
+  expect(now.hash).toBe(DAY); // gleich nach dem letzten Dreh: Das Rad steht erst einen Augenblick still
+  await expect.poll(() => hash(page)).toBe('#/tag/2026-10-30');
   await waitForPageOf(page, 'tag', '2026-10-30');
   expect(await historyLength(page)).toBe(entries);
 });
@@ -737,17 +770,17 @@ test('the mouse wheel scrolls on and opens the page after a pause', async ({ pag
 test('a pause of the wheel before the middle keeps the page, zooming with the wheel past it opens the next', async ({ page }) => {
   await openSeeded(page, DAY);
   await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
-  await wheelUntil(page, SHORT_OF_BELOW);
+  const short = await spin(page, await spinsTo(page, SHORT_OF_BELOW));
+  expect(short.middle).toBeCloseTo(SHORT_OF_BELOW, 1);
   await page.waitForTimeout(400);
   expect(await hash(page)).toBe(DAY);
 
   // Strg und Rad zoomen um einen Ort weit unten auf dem 30.10. hinein: Die Mitte rückt zu ihm hin, über die Hälfte des Spalts.
-  await wheel(page, [600, PAGE_H + PAGE_GAP + 300], { dy: -100, ctrl: true });
-  const zoomed = await viewOf(page);
-  expect((await middleOf(page)).y).toBeGreaterThan(PAGE_H + PAGE_GAP / 2);
-  expect(await hash(page)).toBe(DAY);
-  await page.waitForTimeout(400);
-  expect(await hash(page)).toBe('#/tag/2026-10-30');
+  const zoomed = await spin(page, [{ dy: -100, ctrl: true, at: [600, PAGE_H + PAGE_GAP + 300] }]);
+  expect(zoomed.scale).toBeGreaterThan(short.scale);
+  expect(zoomed.middle).toBeGreaterThan(PAGE_H + PAGE_GAP / 2);
+  expect(zoomed.hash).toBe(DAY);
+  await expect.poll(() => hash(page)).toBe('#/tag/2026-10-30');
   await waitForPageOf(page, 'tag', '2026-10-30');
   expect((await viewOf(page)).scale).toBeCloseTo(zoomed.scale, 6);
 });
@@ -861,24 +894,225 @@ test('a new appointment shows in the preview, which keeps its strokes and does n
 test('after the wheel, a pressed mouse button keeps the page until it is let go', async ({ page }) => {
   await openSeeded(page, DAY);
   await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
-  await wheelUntil(page, PAST_BELOW);
-  // Gleich danach drückt die Maus auf den 29.10. und hält: Erst nach dem Loslassen wird der 30.10. die offene Seite.
-  const hand = mouse(page);
-  await hand.down(600, 1000);
+  // Gleich nach dem Rad drückt die Maus auf den 29.10. und hält: Erst nach dem Loslassen wird der 30.10. die offene Seite.
+  const now = await spin(page, await spinsTo(page, PAST_BELOW), { press: [600, 1000] });
+  expect(now.hash).toBe(DAY);
   await page.waitForTimeout(600);
   expect(await hash(page)).toBe(DAY);
-  await hand.up(600, 1000);
-  await page.waitForTimeout(400);
-  expect(await hash(page)).toBe('#/tag/2026-10-30');
+  await mouse(page).up(600, 1000);
+  await expect.poll(() => hash(page)).toBe('#/tag/2026-10-30');
   await waitForPageOf(page, 'tag', '2026-10-30');
 });
 
 test('a page left before the wheel comes to rest does not open its neighbour afterwards', async ({ page }) => {
   await openSeeded(page, DAY);
   await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
-  await wheelUntil(page, PAST_BELOW);
-  await goTo(page, '#/tag/2026-11-05');
+  // Gleich nach dem Rad, bevor es zur Ruhe kommt, geht eine andere Seite auf, wie mit einem Link.
+  const now = await spin(page, await spinsTo(page, PAST_BELOW), { open: '#/tag/2026-11-05' });
+  expect(now.hash).toBe(DAY);
   await waitForPageOf(page, 'tag', '2026-11-05');
   await page.waitForTimeout(400);
   expect(await hash(page)).toBe('#/tag/2026-11-05');
+});
+
+/** Ein Knopf der Werkzeugleiste, nach seinem Namen. */
+const toolButton = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
+
+/**
+ * Der Stift schwebt über `at` (Seiteneinheiten der offenen Seite), ohne aufzusetzen. Gleich danach, im selben Zug und damit vor
+ * dem Ablauf der Zeit, nach der die Spitze von selbst geht: wie viele Spitzen auf der Fläche stehen.
+ */
+const tipsWhileHovering = (page: Page, at: [number, number]) =>
+  page.evaluate(([x, y]) => {
+    const live = document.querySelector('[data-testid="surface"] canvas[data-layer="live"]')!;
+    const c = window.__notizbuch.toClient(x, y);
+    const init = { pointerId: 11, pointerType: 'pen', isPrimary: true, pressure: 0, clientX: c.x, clientY: c.y, button: -1, buttons: 0 };
+    live.dispatchEvent(new PointerEvent('pointermove', { ...init, bubbles: true, cancelable: true, composed: true }));
+    return document.querySelectorAll('[data-testid="surface"] .spitze').length;
+  }, at);
+
+test('the fountain pen hovering over the neighbour or the gap in front of it shows no tip', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  await toolButton(page, 'Füllfeder').click();
+  await scrollUntil(page, NEXT_IN_VIEW);
+
+  // Über dem 29.10. zeigt die Spitze, wo der Stift schriebe. Über dem Spalt und dem 30.10. schreibt er nicht: keine Spitze.
+  expect(await tipsWhileHovering(page, [600, 1000])).toBe(1);
+  expect(await tipsWhileHovering(page, [600, PAGE_H + PAGE_GAP / 2])).toBe(0);
+  expect(await tipsWhileHovering(page, [600, 1000])).toBe(1);
+  expect(await tipsWhileHovering(page, ON_NEXT)).toBe(0);
+});
+
+test('after the pen opened the neighbour, a small touch counts as the hand until the pen lifts', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  await scrollUntil(page, NEXT_IN_VIEW);
+  const tip = pen(page);
+  await tip.down(...ON_NEXT);
+  await waitForPageOf(page, 'tag', '2026-10-30');
+
+  // Der Stift liegt noch auf und gleitet jetzt über die neue Seite. Eine kleine Berührung daneben ist die Hand: Sie schiebt nichts.
+  // (Schöbe sie, wechselte es beim Loslassen zurück zum 29.10., denn der bedeckt noch die Mitte.)
+  await tip.move(600, 220);
+  const before = await viewOf(page);
+  await touch(page).stroke([
+    [300, 300],
+    [300, 200],
+  ]);
+  expect(await hash(page)).toBe('#/tag/2026-10-30');
+  expect(await viewOf(page)).toEqual(before);
+  await tip.up(600, 220);
+  expect(await strokeCount(page)).toBe(0);
+
+  // Nach dem Abheben gilt die Pause wie immer, danach schiebt ein Finger die Seite wieder (ganz im Bild, die Mitte auf dem 30.10.).
+  await toolButton(page, 'Ganze Seite').click();
+  await afterPalmWindow(page);
+  const fitted = await viewOf(page);
+  await touch(page).stroke([
+    [300, 800],
+    [300, 700],
+  ]);
+  expect((await viewOf(page)).y).toBeLessThan(fitted.y - 50);
+  expect(await hash(page)).toBe('#/tag/2026-10-30');
+});
+
+test('a pen that opened the neighbour and lifts over the top bar leaves the fingers working', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  await scrollUntil(page, NEXT_IN_VIEW);
+  const tip = pen(page);
+  await tip.down(...ON_NEXT);
+  await waitForPageOf(page, 'tag', '2026-10-30');
+  await tip.move(600, 220);
+
+  // Er hebt über der Leiste oben ab: Sein Ende kommt nicht bei der Fläche an, das Tor geht trotzdem wieder auf.
+  const bar = await centerOf(page, '.topbar');
+  await tip.upOn('.topbar', bar.x, bar.y);
+  await toolButton(page, 'Ganze Seite').click();
+  await afterPalmWindow(page);
+  const fitted = await viewOf(page);
+  await touch(page).stroke([
+    [300, 800],
+    [300, 700],
+  ]);
+  expect((await viewOf(page)).y).toBeLessThan(fitted.y - 50);
+});
+
+test('the eraser on the neighbour erases nothing and opens it', async ({ page }) => {
+  // Ein Strich des 29.10. ragt über seinen Unterrand hinaus bis auf den 30.10. Der Radierer setzt dort auf, wo er über dem 30.10. liegt.
+  const below = PAGE_H + PAGE_GAP;
+  const long: Stroke = { ...strokeThrough('lang', [600, 1500]), pts: [{ x: 600, y: 1450, w: 1.2 }, { x: 600, y: below + 160, w: 1.2 }] };
+  const repo = await openSeeded(page, DAY, { files: { [tagFile('2026-10-29')]: dayWith('2026-10-29', long) } });
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  expect(await strokeCount(page)).toBe(1);
+  await toolButton(page, 'Radierer').click();
+  await scrollUntil(page, NEXT_IN_VIEW);
+
+  await pen(page).stroke([
+    [560, below + 100],
+    [600, below + 100],
+    [640, below + 100],
+  ]);
+  expect(await hash(page)).toBe('#/tag/2026-10-30');
+  await waitForPageOf(page, 'tag', '2026-10-30');
+  await expect.poll(() => neighbors(page)).toEqual({ above: 1, below: 0 }); // der lange Strich ist noch da
+  expect(await queued(page)).toEqual({});
+  expect(repo.puts).toEqual([]);
+});
+
+test('the pen in the gap opens the neighbour and writes nothing', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  await scrollUntil(page, NEXT_IN_VIEW);
+
+  const gap = PAGE_H + PAGE_GAP / 2;
+  await pen(page).stroke([
+    [500, gap],
+    [560, gap],
+    [620, gap],
+  ]);
+  expect(await hash(page)).toBe('#/tag/2026-10-30');
+  await waitForPageOf(page, 'tag', '2026-10-30');
+  expect(await strokeCount(page)).toBe(0);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  expect(await queued(page)).toEqual({});
+});
+
+test('a stroke that starts on the page and runs into the next day stays one stroke of the open page', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  await scrollUntil(page, NEXT_IN_VIEW);
+
+  await pen(page).stroke([
+    [600, PAGE_H - 60],
+    [600, PAGE_H + PAGE_GAP / 2],
+    [600, PAGE_H + PAGE_GAP + 60],
+  ]);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  expect(await hash(page)).toBe(DAY);
+  expect(await neighbors(page)).toEqual({ above: 0, below: 0 });
+  // Er ist am Rand nicht abgeschnitten: Er reicht wie bisher über die Seite hinaus, bis dorthin, wo der 30.10. beginnt.
+  const lowest = await page.evaluate(() => Math.max(...window.__notizbuch.currentPage().strokes[0].pts.map((pt) => pt.y)));
+  expect(lowest).toBeGreaterThan(PAGE_H + PAGE_GAP);
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.map((put) => put.path)).toEqual([tagFile('2026-10-29')]);
+  expect(strokesIn(repo.puts[0].text)).toBe(1);
+});
+
+test('a mouse click on the neighbour opens it', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  await scrollUntil(page, NEXT_IN_VIEW);
+  await mouse(page).tap(...ON_NEXT);
+  expect(await hash(page)).toBe('#/tag/2026-10-30');
+  await waitForPageOf(page, 'tag', '2026-10-30');
+});
+
+/** Der Zähler im Browser, wie oft der Link eines Tages in „Tage dieser Seite“ ohne „Priorität“ auf der Seite stand. */
+type LinkLog = { linksWithoutPrio?: number };
+/**
+ * Zählt von jetzt an im Browser, wie oft nach einer Änderung der Seite der Link des Tages `day` in der Liste „Tage dieser Seite“
+ * dasteht, ohne eine Priorität zu nennen. Sein Text kommt aus denselben Daten wie die Zeilen auf der Fläche, auch im ersten Bild
+ * einer neuen Seite.
+ */
+const watchDayLink = (page: Page, day: string) =>
+  page.evaluate((d) => {
+    const log = window as unknown as LinkLog;
+    log.linksWithoutPrio = 0;
+    new MutationObserver(() => {
+      const link = document.querySelector(`nav.tage a[href="#/tag/${d}"]`);
+      if (link && !link.textContent?.includes('Priorität')) log.linksWithoutPrio = (log.linksWithoutPrio ?? 0) + 1;
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  }, day);
+const linksWithoutPrio = (page: Page) => page.evaluate(() => (window as unknown as LinkLog).linksWithoutPrio);
+
+test('back in the week just left, its priorities are there from the first frame', async ({ page }) => {
+  // Woche 44 hat am Samstag, 31.10., eine Priorität. Ihr Tag liegt unten auf der Seite, beim Zurückscrollen also im Bild.
+  const prio = { [dailyNotePath('2026-10-31')]: noteWith('2026-10-31', 'Sperren abstimmen') };
+  await openSeeded(page, '#/woche/2026-W44', { files: prio });
+  await expect.poll(() => screenBackground(page)).toContain('Sperren abstimmen');
+  await scrollUntil(page, PAST_BELOW);
+  await waitForPageOf(page, 'woche', '2026-W45');
+  await expect.poll(() => neighborBackground(page, 'above')).toContain('Sperren abstimmen');
+
+  // Zurück in die Woche 44: Sie hat ihre Priorität schon beim Aufgehen, nicht erst, wenn ihre Tagesnotizen wieder gelesen sind.
+  await watchDayLink(page, '2026-10-31');
+  const lift = await scrollUntil(page, PAST_ABOVE, { lift: false });
+  await watchFrames(page);
+  await expect.poll(() => framesSoFar(page)).toBeGreaterThan(2);
+  await lift();
+  await waitForPageOf(page, 'woche', '2026-W44');
+  const opened = await framesSoFar(page);
+  await expect.poll(() => framesSoFar(page)).toBeGreaterThan(opened + 5);
+  const frames = await stopWatching(page);
+  expect(await linksWithoutPrio(page)).toBe(0);
+
+  // Jedes Bild nach dem Wechsel zeigt dasselbe wie das letzte davor, mit der Priorität.
+  const before = frames.filter((f) => f.hash === '#/woche/2026-W45');
+  const last = before[before.length - 1];
+  expect(last.marked).toBeGreaterThan(0);
+  const after = frames.filter((f) => f.hash !== '#/woche/2026-W45');
+  expect(after.length).toBeGreaterThan(5);
+  expect(after.map(picture)).toEqual(after.map(() => picture(last)));
 });
