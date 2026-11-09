@@ -25,7 +25,7 @@ export function TagPage({ day, listDir, ...rest }: PageProps & { day: Day; listD
   const [today] = useState(() => todayVienna());
   const termine = useTermine(rest.engine);
   const geburtstage = useGeburtstage(rest.engine);
-  // Im Kopf nur die Geburtstage und Jahrestage: Termine und Prioritäten stehen auf der Tagesseite schon in den Karten.
+  // Im Kopf nur die Geburtstage und Jahrestage: Termine stehen schon in der Karte Besprechungen, Prioritäten im eigenen Feld.
   const marks = useMemo(
     () => agendaMarks(layout, (d) => ({ geburtstage: geburtstageAm(geburtstage, d), termine: [], prioritaeten: [] })),
     [layout, geburtstage],

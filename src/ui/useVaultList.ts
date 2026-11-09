@@ -7,12 +7,14 @@ import type { SyncEngine } from '../sync/engine';
  * Liste. Fehlt die Datei, lässt sie sich nicht lesen oder ist sie kaputt, ist die Liste leer: Die Seite lädt trotzdem. Ändert
  * ein anderes Gerät die Datei, kommt die neue Liste von selbst. `parse` muss eine Funktion eines Moduls sein (wie
  * `parseTermine`), dann bleibt sie dieselbe. Eine Funktion, die bei jedem Zeichnen neu entsteht, ließe den Effekt bei jedem
- * Zeichnen neu laufen und die Datei neu lesen.
+ * Zeichnen neu laufen und die Datei neu lesen. `path` darf in jeder Unicode-Form kommen (auch mit zerlegten Umlauten): Verglichen
+ * wird mit der NFC-Form.
  */
 export function useVaultList<T>(engine: SyncEngine, path: string, parse: (text: string) => T[]): T[] {
   const [list, setList] = useState<T[]>([]);
 
   useEffect(() => {
+    const nfc = normalizePath(path);
     let current = true;
     // Zählt die Anfragen: Antwortet eine frühere erst nach einer späteren, gilt die spätere.
     let latest = 0;
@@ -25,7 +27,7 @@ export function useVaultList<T>(engine: SyncEngine, path: string, parse: (text: 
     };
     load();
     const stop = engine.addRemoteChangeListener((paths) => {
-      if (paths.some((changed) => normalizePath(changed) === path)) load();
+      if (paths.some((changed) => normalizePath(changed) === nfc)) load();
     });
     return () => {
       current = false;
