@@ -46,6 +46,17 @@ export function settledSide(view: View, size: { w: number; h: number }, n: Prese
   return null;
 }
 
+/**
+ * Welcher Nachbar nach einem Zug (oder dem Drehen am Rad) zur offenen Seite wird: der, der jetzt die Mitte bedeckt
+ * (`settledSide`), aber nur, wenn die Mitte erst dabei in ihn hineingekommen ist. `from` ist, was `settledSide` zu Beginn sagte.
+ * Lag die Mitte da schon auf ihm (nach einem Wechsel durch Stift oder Tipp liegt sie noch auf der Seite davor), bleibt die
+ * offene Seite offen, sonst spränge sie beim nächsten kleinen Schieben zurück.
+ */
+export function enteredSide(from: Side | null, view: View, size: { w: number; h: number }, n: Present): Side | null {
+  const now = settledSide(view, size, n);
+  return now !== null && now !== from ? now : null;
+}
+
 /** Die Ansicht, wenn der Nachbar zur offenen Seite wird: Er bleibt auf dem Bildschirm genau dort, wo er schon war. */
 export function viewFor(view: View, side: Side): View {
   return { s: view.s, x: view.x, y: view.y + (side === 'below' ? 1 : -1) * (PAGE_H + PAGE_GAP) * view.s };

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { chainSpan, neighborOffset, PAGE_GAP, settledSide, sideAt, viewFor } from '../../src/ink/chain';
+import { chainSpan, enteredSide, neighborOffset, PAGE_GAP, settledSide, sideAt, viewFor } from '../../src/ink/chain';
 import { PAGE_H } from '../../src/ink/types';
 
 const both = { above: true, below: true };
@@ -43,4 +43,18 @@ test('the page that covers the middle of the screen is the one that settles', ()
 test('the next page starts where it was on the screen', () => {
   expect(viewFor({ s: 0.5, x: 7, y: -500 }, 'below')).toEqual({ s: 0.5, x: 7, y: -500 + 0.5 * 1614 });
   expect(viewFor({ s: 2, x: -30, y: 900 }, 'above')).toEqual({ s: 2, x: -30, y: 900 - 2 * 1614 });
+});
+
+test('a release opens a neighbour only when the middle moved into it during that move', () => {
+  // s = 0.5, Fläche 1600 hoch: Die Mitte (800 px) liegt bei Seiteneinheit (800 - y) / 0.5.
+  const at = (unit: number) => ({ s: 0.5, x: 0, y: 800 - 0.5 * unit });
+  expect(enteredSide(null, at(1603), size, both)).toBe('below'); // von der Seite in den Nachbarn darunter
+  expect(enteredSide(null, at(-13), size, both)).toBe('above');
+  expect(enteredSide(null, at(800), size, both)).toBeNull(); // auf der Seite geblieben
+  // Lag die Mitte schon zu Beginn auf dem Nachbarn (nach einem Wechsel durch Stift oder Tipp), bleibt die offene Seite offen.
+  expect(enteredSide('above', at(-300), size, both)).toBeNull();
+  expect(enteredSide('above', at(800), size, both)).toBeNull();
+  // Von einem Nachbarn ganz hinüber in den anderen: Das ist ein Hineinschieben.
+  expect(enteredSide('above', at(1603), size, both)).toBe('below');
+  expect(enteredSide(null, at(1603), size, { above: true, below: false })).toBeNull();
 });

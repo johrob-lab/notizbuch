@@ -1116,3 +1116,69 @@ test('back in the week just left, its priorities are there from the first frame'
   expect(after.length).toBeGreaterThan(5);
   expect(after.map(picture)).toEqual(after.map(() => picture(last)));
 });
+
+/**
+ * Ein Finger zieht in einem Zug so, dass die Mitte der Fläche nacheinander bei `targets` liegt (Seiteneinheiten der offenen Seite),
+ * und hebt ab. Er setzt in der Mitte der Fläche auf; die Wege bleiben kürzer als die halbe Höhe der Fläche.
+ */
+async function dragMiddleThrough(page: Page, targets: number[]) {
+  const { box, view, y } = await middleOf(page);
+  const x = box.x + box.width / 2;
+  const start = box.y + box.height / 2;
+  const onPage = (screenY: number): [number, number] => [(x - view.x) / view.scale, (screenY - view.y) / view.scale];
+  await touch(page).stroke([onPage(start), ...targets.map((target) => onPage(start - (target - y) * view.scale))]);
+}
+
+/** Ein kurzer Strich oben im Kopf der Tagesseite, über dem Datum: Dort ist Papier, und der Kopf ist nach dem Wechsel zu sehen. */
+const IN_HEAD: [number, number][] = [
+  [700, 40],
+  [760, 50],
+  [820, 40],
+];
+
+for (const how of ['pen', 'finger tap'] as const) {
+  test(`after a ${how} opened the next day, moving the day before around does not go back to it`, async ({ page }) => {
+    const repo = await openSeeded(page, DAY);
+    await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+    await scrollUntil(page, NEXT_IN_VIEW);
+    if (how === 'pen') await pen(page).stroke([ON_NEXT, [ON_NEXT[0] + 60, ON_NEXT[1]]]);
+    else await touch(page).tap(...ON_NEXT);
+    expect(await hash(page)).toBe('#/tag/2026-10-30');
+    await waitForPageOf(page, 'tag', '2026-10-30');
+    const entries = await historyLength(page);
+
+    // Gleich auf den 30.10. schreiben, dann die Seite ein Stück schieben. Die Mitte liegt noch auf dem 29.10.: Bleibt sie dort,
+    // wechselt nichts zurück, auch nicht, wenn sie unterwegs auf den 30.10. und wieder zurück kam.
+    await pen(page).stroke(IN_HEAD);
+    await expect.poll(() => strokeCount(page)).toBe(1);
+    await afterPalmWindow(page);
+    const { y } = await middleOf(page);
+    expect(y).toBeLessThan(-PAGE_GAP / 2);
+    await dragMiddleThrough(page, [y + 100]);
+    expect(await hash(page)).toBe('#/tag/2026-10-30');
+    await dragMiddleThrough(page, [300, y]);
+    expect(await hash(page)).toBe('#/tag/2026-10-30');
+    expect(await historyLength(page)).toBe(entries);
+
+    // Der nächste Strich schreibt also auf den 30.10., und nur dorthin.
+    await pen(page).stroke(IN_HEAD.map(([px, py]): [number, number] => [px, py + 30]));
+    await expect.poll(() => strokeCount(page)).toBe(2);
+    await sendToBackground(page);
+    await expect.poll(() => repo.puts.map((put) => put.path)).toEqual([tagFile('2026-10-30')]);
+    expect(strokesIn(repo.puts[0].text)).toBe(2);
+  });
+}
+
+test('after a click opened the next day, turning the wheel a little does not go back to the day before', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  await scrollUntil(page, NEXT_IN_VIEW);
+  await mouse(page).tap(...ON_NEXT);
+  await waitForPageOf(page, 'tag', '2026-10-30');
+
+  // Die Mitte liegt noch auf dem 29.10. und bleibt dort, während das Rad die Seite ein Stück schiebt: kein Wechsel zurück.
+  const now = await spin(page, [{ dy: 50 }, { dy: 50 }]);
+  expect(now.middle).toBeLessThan(-PAGE_GAP / 2);
+  await page.waitForTimeout(400);
+  expect(await hash(page)).toBe('#/tag/2026-10-30');
+});

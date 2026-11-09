@@ -1,5 +1,5 @@
 import { boundsOf, emptyBox, growBox, lineWidth, type Box } from './bounds';
-import { chainSpan, neighborOffset, settledSide, sideAt, SIDES, type Present, type Side } from './chain';
+import { chainSpan, enteredSide, neighborOffset, settledSide, sideAt, SIDES, type Present, type Side } from './chain';
 import { cutStroke, ERASER_PX, ERASER_STEP_PX, hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
 import { clampView, GestureFilter, gestureView, isFingerTap, isTwoFingerTap, SIDE_MARGIN_PX, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
 import { GRAIN, GRAIN_MIN_PX, grainMask } from './grain';
@@ -61,9 +61,9 @@ export type SurfaceOptions = {
    */
   noInk?: readonly (readonly [x: number, y: number, w: number, h: number])[];
   /**
-   * Weiterscrollen: Die Nachbarseite `side` (siehe `setNeighbors`) soll die offene Seite werden. Das kommt, wenn sie die Mitte
-   * des Bildschirms bedeckt (`settledSide`), sobald ein Zug mit Fingern oder der Maus zu Ende ist oder das Mausrad
-   * `WHEEL_SETTLE_MS` lang stillsteht. Es kommt auch, wenn der Stift auf ihr oder im Spalt davor aufsetzt oder ein Finger oder
+   * Weiterscrollen: Die Nachbarseite `side` (siehe `setNeighbors`) soll die offene Seite werden. Das kommt, wenn ein Zug mit
+   * Fingern oder der Maus zu Ende ist oder das Mausrad `WHEEL_SETTLE_MS` lang stillsteht und die Mitte des Bildschirms dabei in
+   * sie hineingekommen ist (`enteredSide`). Es kommt auch, wenn der Stift auf ihr oder im Spalt davor aufsetzt oder ein Finger oder
    * die Maus dort tippt (`sideAt`): Dann schreibt der Stift nichts, und der Tipp gilt nicht der Seite (`onTap`). `view` ist die
    * Ansicht in diesem Moment, gerechnet in Einheiten dieser Seite. Ohne Nachbarn kommt es nie.
    */
@@ -109,7 +109,8 @@ type Erasing = {
   origin: Map<string, string>;
   last: Pt2;
 };
-type Gesture = { revert: View; ref: View; from: Pt2[]; moved: boolean; snapView: View | null };
+/** Eine Geste der Finger oder der Maus. `middleFrom`: welcher Nachbar bei ihrem Beginn die Mitte bedeckte (`settledSide`). */
+type Gesture = { revert: View; ref: View; from: Pt2[]; moved: boolean; snapView: View | null; middleFrom: Side | null };
 
 /** Ab so vielen Punkten auf der Seite zoomt eine Geste nur das Bild und zeichnet erst am Ende neu. */
 const HEAVY_POINTS = 8000;
@@ -317,6 +318,8 @@ export class InkSurface {
   private predTimer = 0;
   /** Läuft ab, wenn das Mausrad `WHEEL_SETTLE_MS` lang stillsteht (siehe `onWheel`). */
   private wheelTimer = 0;
+  /** Welcher Nachbar die Mitte bedeckte, als das Rad zu drehen begann (`settledSide`), siehe `wheelSettled`. */
+  private wheelFrom: Side | null = null;
   /** Messung der Schreibverzögerung, siehe `meter.ts`. */
   readonly meter = new InkMeter();
   private liveEvents = 0;
@@ -1397,6 +1400,11 @@ export class InkSurface {
     return { above: this.neighbors.above !== null, below: this.neighbors.below !== null };
   }
 
+  /** Welcher Nachbar die Mitte des Bildschirms bedeckt (`settledSide`), `null` auf der Seite selbst und ohne Nachbarn. */
+  private middleSide(): Side | null {
+    return settledSide(this.view, { w: this.vw, h: this.vh }, this.present());
+  }
+
   /** Der Nachbar an einem Ort der Fläche (Bildschirmpunkte), auch im Spalt vor ihm (`sideAt`). Auf der Seite selbst `null`. */
   private neighborAt(at: Pt2): Side | null {
     return sideAt(this.toPage(at.x, at.y).y, this.present());
@@ -1409,7 +1417,14 @@ export class InkSurface {
 
   /** Eine Geste beginnt oder die Zahl der Finger ändert sich: Ab jetzt zählt, was die Finger von hier aus tun. */
   private rebaseGesture(): void {
-    const g = (this.gesture ??= { revert: { ...this.view }, ref: this.view, from: [], moved: false, snapView: null });
+    const g = (this.gesture ??= {
+      revert: { ...this.view },
+      ref: this.view,
+      from: [],
+      moved: false,
+      snapView: null,
+      middleFrom: this.middleSide(),
+    });
     g.ref = { ...this.view };
     g.from = [...this.touches.values()].map((p) => ({ ...p }));
   }
@@ -1444,7 +1459,8 @@ export class InkSurface {
 
   /**
    * Alle Finger sind weg. Mit `revert` gilt die Ansicht von vor der Geste: Der Stift kam, das war die Hand. Sonst wird nach einem
-   * Zug die Nachbarseite gemeldet, die jetzt die Mitte des Bildschirms bedeckt (`onNeighbor`). Gibt zurück, ob das geschah.
+   * Zug die Nachbarseite gemeldet, die jetzt die Mitte des Bildschirms bedeckt (`onNeighbor`), wenn die Mitte erst in diesem Zug
+   * in sie hineinkam (`enteredSide`). Gibt zurück, ob das geschah.
    */
   private endGesture(revert: boolean): boolean {
     const g = this.gesture;
@@ -1455,7 +1471,7 @@ export class InkSurface {
     this.snap.height = 0;
     if (!g.moved) return false;
     this.render();
-    const side = revert ? null : settledSide(this.view, { w: this.vw, h: this.vh }, this.present());
+    const side = revert ? null : enteredSide(g.middleFrom, this.view, { w: this.vw, h: this.vh }, this.present());
     if (!side || !this.opts.onNeighbor) return false;
     this.openNeighbor(side);
     return true;
@@ -1687,6 +1703,7 @@ export class InkSurface {
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
     this.refreshRect();
+    if (!this.wheelTimer) this.wheelFrom = this.middleSide(); // das Rad beginnt zu drehen
     const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.vh : 1;
     if (e.ctrlKey || e.metaKey) {
       this.view = zoomAround(this.view, this.local(e), Math.exp(-e.deltaY * unit * 0.0025), this.zoomLimits());
@@ -1705,8 +1722,9 @@ export class InkSurface {
   }
 
   /**
-   * Das Rad steht still: Bedeckt ein Nachbar die Mitte, wird er die offene Seite. Liegt noch ein Finger, die Maus oder der Stift
-   * auf, wartet das, bis alles losgelassen ist: Ein Zug, der gerade läuft, soll nicht mitten drin auf einer anderen Seite landen.
+   * Das Rad steht still: Ist die Mitte beim Drehen in einen Nachbarn gekommen (`enteredSide`), wird er die offene Seite. Liegt noch
+   * ein Finger, die Maus oder der Stift auf, wartet das, bis alles losgelassen ist: Ein Zug, der gerade läuft, soll nicht mitten
+   * drin auf einer anderen Seite landen.
    */
   private wheelSettled = (): void => {
     this.wheelTimer = 0;
@@ -1715,7 +1733,7 @@ export class InkSurface {
       this.awaitWheelRest();
       return;
     }
-    const side = settledSide(this.view, { w: this.vw, h: this.vh }, this.present());
+    const side = enteredSide(this.wheelFrom, this.view, { w: this.vw, h: this.vh }, this.present());
     if (side) this.openNeighbor(side);
   };
 }
