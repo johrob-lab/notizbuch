@@ -5,6 +5,7 @@ import { geburtstageAm } from '../lib/geburtstage';
 import { termineAm } from '../lib/termine';
 import { agendaInfo, type AgendaDay } from '../pages/agenda';
 import { agendaMarks, wocheLayout } from '../pages/layouts';
+import { neighborsOf } from './neighbors';
 import { PageView, type PageProps } from './PageView';
 import { useGeburtstage } from './useGeburtstage';
 import { usePrioritaeten } from './usePrioritaeten';
@@ -32,5 +33,7 @@ export function WochePage({ week, ...rest }: PageProps & { week: string }) {
   );
   const marks = useMemo(() => agendaMarks(layout, dayData), [layout, dayData]);
   const dayInfo = (day: Day) => agendaInfo(dayData(day));
-  return <PageView layout={layout} path={wochePagePath(week)} {...rest} marks={marks} dayInfo={dayInfo} />;
+  // Darüber die Woche davor, darunter die Woche danach.
+  const neighbors = useMemo(() => neighborsOf({ view: 'woche', key: week }), [week]);
+  return <PageView layout={layout} path={wochePagePath(week)} {...rest} marks={marks} dayInfo={dayInfo} neighbors={neighbors} />;
 }

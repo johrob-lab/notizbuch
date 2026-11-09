@@ -7,6 +7,7 @@ import type { ListDir } from '../sync/github';
 import { BriefingCard } from './BriefingCard';
 import { MeetingsCard } from './MeetingsCard';
 import { MiniCalendar } from './MiniCalendar';
+import { neighborsOf } from './neighbors';
 import { PageView, type PageProps } from './PageView';
 import { useGeburtstage } from './useGeburtstage';
 import { useTermine } from './useTermine';
@@ -33,6 +34,8 @@ export function TagPage({ day, listDir, ...rest }: PageProps & { day: Day; listD
   const briefing = rectOf(layout, 'briefing');
   const calendar = rectOf(layout, 'kalender');
   const meetings = rectOf(layout, 'besprechungen');
+  // Darüber der Tag davor, darunter der Tag danach.
+  const neighbors = useMemo(() => neighborsOf({ view: 'tag', key: day }), [day]);
 
   return (
     <PageView
@@ -40,6 +43,7 @@ export function TagPage({ day, listDir, ...rest }: PageProps & { day: Day; listD
       path={tagPagePath(day)}
       {...rest}
       marks={marks}
+      neighbors={neighbors}
       overlay={
         <>
           {briefing && <BriefingCard engine={rest.engine} day={day} rect={briefing} />}

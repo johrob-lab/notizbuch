@@ -1,18 +1,22 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
+import type { Side } from '../ink/chain';
 import { GestureFilter, type View } from '../ink/gestures';
 import { meterLabel } from '../ink/meter';
 import { effect } from '@preact/signals';
 import { FuellerPanel, fuellerPanel } from './FuellerPanel';
 import { inkPrefs } from './inkPrefs';
 import { inkTools } from './inkTools';
-import { InkSurface } from '../ink/surface';
-import type { FieldBox, Page } from '../ink/types';
+import { InkSurface, type NeighborPage } from '../ink/surface';
+import { parsePage } from '../ink/svg';
+import type { FieldBox, Page, Stroke } from '../ink/types';
 import { todayVienna, type Day } from '../lib/dates';
 import type { VollbildWerkzeuge } from '../lib/settings';
 import { tapTargetAt, tapTargets, todayMarks, type Layout } from '../pages/layouts';
 import type { SyncEngine } from '../sync/engine';
+import { normalizePath } from '../sync/paths';
 import { watchCards } from './cardGestures';
+import type { NeighborSpec } from './neighbors';
 import { PageSession, type Phase } from './pageSession';
 import { QuickSwitch } from './QuickSwitch';
 import { retryCues } from './retryCues';
@@ -101,7 +105,20 @@ type Props = PageProps & {
   marks?: string;
   /** Zusatz zum Namen eines Tages in der Liste „Tage dieser Seite“, zum Beispiel `2 Termine, 1 Priorität`. Leer heißt: keiner. */
   dayInfo?: (day: Day) => string;
+  /**
+   * Die Seiten über und unter dieser (Tag, Woche, Monat, siehe `neighborsOf`): Die Fläche zeigt sie als Vorschau, man scrollt in
+   * sie hinein, und wer loslässt, während eine die Mitte bedeckt, hat sie offen. Ihre Dateien werden nur gelesen. Ein neues
+   * Objekt liest sie neu: Die Seite gibt es darum nur bei einer anderen Route neu.
+   */
+  neighbors?: { above: NeighborSpec | null; below: NeighborSpec | null };
 };
+
+/** Ein Nachbar, wie ihn die Fläche zeigt: wer er ist, der Pfad seiner Datei in NFC und was die Vorschau zeigt. */
+type ShownNeighbor = { spec: NeighborSpec; path: string; page: NeighborPage };
+type ShownNeighbors = Record<Side, ShownNeighbor | null>;
+
+const SIDES: readonly Side[] = ['above', 'below'];
+const pagesOf = (n: ShownNeighbors) => ({ above: n.above?.page ?? null, below: n.below?.page ?? null });
 
 const UNREADABLE = 'Diese Seite lässt sich nicht lesen und wird nicht verändert.';
 const TOO_NEW = 'Diese Seite stammt aus einer neueren Version der App. Bitte neu laden.';
@@ -110,13 +127,15 @@ const NOT_LOADED = 'Diese Seite konnte nicht geladen werden. Neuer Versuch, soba
 
 /**
  * Testzugang: nur lesen, enthält keine Geheimnisse. Er steht da, sobald die Seite gelesen ist. `screenBackground` ist der
- * Hintergrund, den die Fläche gerade zeigt, mit allem, was nur auf dem Bildschirm steht.
+ * Hintergrund, den die Fläche gerade zeigt, mit allem, was nur auf dem Bildschirm steht. `neighbors` sagt, wie viele Striche
+ * die Vorschau der Nachbarn zeigt (`null` ohne Nachbarn).
  */
 type TestAccess = {
   currentPage(): Page;
   toClient(x: number, y: number): { x: number; y: number };
   liveStats(): { events: number; ptsMax: number };
   screenBackground(): string;
+  neighbors(): { above: number | null; below: number | null };
 };
 const testAccessHolder = (): { __notizbuch?: TestAccess } => window as unknown as { __notizbuch?: TestAccess };
 
@@ -154,6 +173,9 @@ export function PageView(p: Props) {
   // Das `marks`, das die Fläche zeigt. Zeigt die Sitzung die Seite neu (`setPage`), nimmt sie es mit. Neu wird es erst in dem
   // Effekt, der es auch zeigt (unten): Bis dahin bleibt die Sitzung bei dem, was zu sehen ist.
   const marksRef = useRef(marks);
+  // Die Nachbarn, die die Fläche zeigt. Neu werden sie im Effekt, der sie liest (unten). Eine neue Fläche bekommt sie gleich, und
+  // wohin ein Wechsel führt, steht auch hier: zu dem Nachbarn, der zu sehen war.
+  const shownNeighbors = useRef<ShownNeighbors>({ above: null, below: null });
   const [phase, setPhase] = useState<Phase>('laden');
   // Eine Seite aus einer neueren Version: Vielleicht liegt diese schon bereit, dann lädt die App sie im ruhigen Moment.
   useEffect(() => {
@@ -197,9 +219,18 @@ export function PageView(p: Props) {
       // Die Karten über der Fläche liegen im Maßstab der Seite und wandern mit ihr. Der Stift schreibt nicht unter sie.
       onView: (now) => placeCards(cards.current, now),
       noInk: layout.cards.map((card) => card.rect),
+      // Losgelassen, während ein Nachbar die Mitte bedeckt: Er wird die offene Seite. Die Adresse wechselt ohne neuen Eintrag
+      // im Verlauf, die App baut dann die Seite neu auf wie bei jeder anderen Adresse.
+      onNeighbor: (side) => {
+        const next = shownNeighbors.current[side];
+        if (next) window.location.replace(routeHash(next.spec.route));
+      },
     });
     const first = emptyPage();
     view.setPage(first, layout.fields, shownFor(first.meta));
+    // Entsteht die Fläche für dieselbe Seite neu (andere Einstellungen), zeigt sie gleich die Nachbarn, die schon da waren.
+    const known = shownNeighbors.current;
+    if (known.above || known.below) view.setNeighbors(pagesOf(known));
     // Was gewählt ist, gilt sofort auch für die Fläche, gleich wo es gewählt wurde (Leiste, Schnellwechsel). Ein Signal-Effekt
     // läuft gleich bei der Änderung, nicht erst nach dem nächsten Bild: Der Stift, der danach aufsetzt, hat schon das neue Werkzeug.
     const stopPrefs = effect(() => {
@@ -219,6 +250,7 @@ export function PageView(p: Props) {
       toClient: (x, y) => view.toClient(x, y),
       liveStats: () => view.liveStats(),
       screenBackground: () => view.shownBackground,
+      neighbors: () => view.neighborStrokes,
     };
     const session = new PageSession({
       engine,
@@ -267,6 +299,60 @@ export function PageView(p: Props) {
     marksRef.current = marks;
     if (!kopfRef.current) surface.current?.showBackground(shown + marks);
   }, [shown, marks]);
+
+  // Die Nachbarn über und unter der Seite: Die Fläche zeigt sie sofort mit Papier und Hintergrund (dazu die Markierung für heute
+  // und ihr `marks`), ihre Striche, sobald ihre Datei gelesen ist. Ändert ein anderes Gerät eine der Dateien, liest der Effekt
+  // sie neu. Er liest nur, er schreibt nie. Er läuft nach dem Effekt der Fläche, sie ist also da.
+  const neighbors = p.neighbors;
+  useEffect(() => {
+    let current = true;
+    const shownNow: ShownNeighbors = { above: null, below: null };
+    // Je Nachbar zählt die neueste Anfrage: Antwortet eine frühere erst nach einer späteren, gilt die spätere.
+    const latest: Record<Side, number> = { above: 0, below: 0 };
+    const show = () => {
+      shownNeighbors.current = { ...shownNow };
+      surface.current?.setNeighbors(pagesOf(shownNow));
+    };
+    const load = (side: Side) => {
+      const target = shownNow[side];
+      if (!target) return;
+      const mine = ++latest[side];
+      // Fehlt die Datei, lässt sie sich nicht lesen oder ist sie kaputt, zeigt die Vorschau nur das Papier.
+      engine
+        .read(target.path)
+        .then((text) => (text === null ? [] : parsePage(text).strokes))
+        .catch((): Stroke[] => [])
+        .then((strokes) => {
+          const now = shownNow[side];
+          if (!current || mine !== latest[side] || !now) return;
+          shownNow[side] = { ...now, page: { ...now.page, strokes } };
+          show();
+        });
+    };
+    for (const side of SIDES) {
+      const spec = neighbors?.[side];
+      if (!spec) continue;
+      const path = normalizePath(spec.path);
+      const background = spec.layout.background() + todayMarks(spec.layout, today) + (spec.marks ?? '');
+      // Bis die Datei gelesen ist, bleiben die Striche, die die Vorschau von ihr schon zeigte (ein neues `marks`).
+      const before = shownNeighbors.current[side];
+      shownNow[side] = { spec, path, page: { strokes: before?.path === path ? before.page.strokes : [], background } };
+    }
+    show();
+    if (!shownNow.above && !shownNow.below) return; // ohne Nachbarn (Besprechung) gibt es nichts zu lesen
+    for (const side of SIDES) load(side);
+    const stop = engine.addRemoteChangeListener((paths) => {
+      const changed = new Set(paths.map(normalizePath));
+      for (const side of SIDES) {
+        const target = shownNow[side];
+        if (target && changed.has(target.path)) load(side);
+      }
+    });
+    return () => {
+      current = false;
+      stop();
+    };
+  }, [engine, neighbors, today]);
 
   // Die Karten liegen über der Fläche und fangen Berührungen und Rad ab, die auf ihnen beginnen. `watchCards` gibt der Seite, was
   // die Karte nicht selbst braucht: Finger, die ziehen oder zoomen, und das Rad. Auch das Tor gegen Handballen gilt auf den Karten.
