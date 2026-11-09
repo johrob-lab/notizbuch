@@ -1,11 +1,16 @@
+import type { Geburtstag } from '../lib/geburtstage';
 import type { Prioritaet } from '../lib/prioritaeten';
 import type { Termin } from '../lib/termine';
 
-// Termine und Prioritäten eines Tages als kurze Textzeilen für Woche und Monat. Reine Rechnung ohne DOM:
+// Geburtstage, Jahrestage, Termine und Prioritäten eines Tages als kurze Textzeilen für Woche und Monat (auf der Tagesseite
+// nur die Geburtstage und Jahrestage). Reine Rechnung ohne DOM:
 // Die Breite wird geschätzt (`textWidth`), gezeichnet wird in `agendaMarks` (layouts.ts).
 
-/** Ein Eintrag einer Zeile. `tone` bestimmt die Farbe: Termin, Priorität oder erledigte Priorität. */
-export type AgendaItem = { text: string; tone: 'termin' | 'prio' | 'erledigt' };
+/** Ein Eintrag einer Zeile. `tone` bestimmt die Farbe: Geburtstag oder Jahrestag, Termin, Priorität oder erledigte Priorität. */
+export type AgendaItem = { text: string; tone: 'geburtstag' | 'termin' | 'prio' | 'erledigt' };
+
+/** Alles, was ein Tag auf dem Bildschirm zeigt, so wie `agendaMarks` es braucht (Termine schon auf den Tag gefiltert und sortiert). Fehlt `geburtstage`, gibt es keine. */
+export type AgendaDay = { geburtstage?: Geburtstag[]; termine: Termin[]; prioritaeten: Prioritaet[] };
 
 /** Eine Zeile: die gezeigten Einträge und die Zahl der Einträge, die nicht mehr hineinpassten (nur in der letzten Zeile). */
 export type AgendaLine = { items: AgendaItem[]; more: number };
@@ -33,9 +38,20 @@ export function prioItems(list: Prioritaet[]): AgendaItem[] {
   return list.map((p) => (p.done ? { text: `✓ ${p.text}`, tone: 'erledigt' } : { text: `▸ ${p.text}`, tone: 'prio' }));
 }
 
-/** Zusatz für die Liste „Tage dieser Seite“: zum Beispiel `2 Termine, 1 Priorität`. Was 0 ist, fehlt; ohne beides ist er leer. */
-export function agendaInfo(termine: number, prioritaeten: number): string {
+/** Geburtstage mit Kuchen, Jahrestage mit Herz, in der Reihenfolge der Eingabe. */
+export function geburtstagItems(list: Geburtstag[]): AgendaItem[] {
+  return list.map((g) => ({ text: `${g.art === 'Jahrestag' ? '♥' : '🎂'} ${g.name}`, tone: 'geburtstag' }));
+}
+
+/** Zusatz für die Liste „Tage dieser Seite“: zum Beispiel `1 Geburtstag, 2 Termine, 1 Priorität`. Was 0 ist, fehlt; ohne alles ist er leer. */
+export function agendaInfo(day: AgendaDay): string {
+  const geburtstage = (day.geburtstage ?? []).filter((g) => g.art === 'Geburtstag').length;
+  const jahrestage = (day.geburtstage ?? []).length - geburtstage;
+  const termine = day.termine.length;
+  const prioritaeten = day.prioritaeten.length;
   const parts: string[] = [];
+  if (geburtstage > 0) parts.push(`${geburtstage} ${geburtstage === 1 ? 'Geburtstag' : 'Geburtstage'}`);
+  if (jahrestage > 0) parts.push(`${jahrestage} ${jahrestage === 1 ? 'Jahrestag' : 'Jahrestage'}`);
   if (termine > 0) parts.push(`${termine} ${termine === 1 ? 'Termin' : 'Termine'}`);
   if (prioritaeten > 0) parts.push(`${prioritaeten} ${prioritaeten === 1 ? 'Priorität' : 'Prioritäten'}`);
   return parts.join(', ');

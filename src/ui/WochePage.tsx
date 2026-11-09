@@ -21,8 +21,7 @@ export function WochePage({ week, ...rest }: PageProps & { week: string }) {
   const dayData = useCallback((day: Day): AgendaDay => ({ termine: termineAm(termine, day), prioritaeten: prioritaeten.get(day) ?? [] }), [termine, prioritaeten]);
   const marks = useMemo(() => agendaMarks(layout, dayData), [layout, dayData]);
   const dayInfo = (day: Day) => {
-    const data = dayData(day);
-    return agendaInfo(data.termine.length, data.prioritaeten.length);
+    return agendaInfo(dayData(day));
   };
   return <PageView layout={layout} path={wochePagePath(week)} {...rest} marks={marks} dayInfo={dayInfo} />;
 }

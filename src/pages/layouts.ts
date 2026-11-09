@@ -3,9 +3,9 @@ import { MM, PAGE_H, PAGE_W, PAPER, type FieldBox, type PageKind } from '../ink/
 import { formatDayLong, isValidDay, isoWeekKey, monthGrid, MONTHS, weekDays, type Day } from '../lib/dates';
 import { besprechungBase } from '../lib/filenames';
 import { holidaysAT } from '../lib/holidays';
-import type { Prioritaet } from '../lib/prioritaeten';
-import type { Termin } from '../lib/termine';
-import { fitLines, moreLabel, prioItems, SEPARATOR, terminItems, textWidth, type AgendaItem } from './agenda';
+import { fitLines, geburtstagItems, moreLabel, prioItems, SEPARATOR, terminItems, textWidth, type AgendaDay, type AgendaItem } from './agenda';
+
+export type { AgendaDay } from './agenda';
 
 // Aufbau der Seiten. Ein Layout sagt, wo auf der Seite geschrieben wird (Felder), wo später Karten liegen und wie
 // das Papier aussieht (Hintergrund als SVG-Text für Papier, Rahmen, Linien und Feldnamen). Alles hier ist reine
@@ -397,35 +397,53 @@ export function todayMarks(l: Layout, today: Day): string {
   );
 }
 
-/** Die Termine und Prioritäten eines Tages, so wie `agendaMarks` sie braucht (Termine schon auf den Tag gefiltert und sortiert). */
-export type AgendaDay = { termine: Termin[]; prioritaeten: Prioritaet[] };
+const AGENDA_COLOR = { geburtstag: COLOR.holiday, termin: '#55657a', prio: '#3d434d', erledigt: '#9aa1a9' };
 
-const AGENDA_COLOR = { termin: '#55657a', prio: '#3d434d', erledigt: '#9aa1a9' };
+// Tagesseite: Die Geburtstage stehen rechts in der Zeile des Untertitels (Grundlinie 106), also unter dem Namen eines
+// Feiertags (Grundlinie 80). Die Fläche beginnt rechts vom Untertitel und endet am rechten Rand des Kopfes.
+const DAY_BIRTHDAY_AREA: Rect = [340, 88, 732, 26];
+const DAY_BIRTHDAY_BASELINE = 106;
 
-/** Eine Zeile als `<text>` mit einem `<tspan>` je Eintrag. Der Trenner hat die Farbe der Termine, der Rest " +N" die der Zeile. */
-function agendaLine(x: number, y: number, size: number, items: AgendaItem[], more: number): string {
+/**
+ * Eine Zeile als `<text>` mit einem `<tspan>` je Eintrag. Der Trenner hat die Farbe der Termine, der Rest " +N" die der
+ * Prioritäten, wenn die Zeile mit einer Priorität beginnt, sonst die der Termine. Mit `anchor` ist `x` das rechte Ende.
+ */
+function agendaLine(x: number, y: number, size: number, items: AgendaItem[], more: number, anchor?: 'end'): string {
   const span = (s: string, color: string) => `<tspan fill="${color}">${escText(s)}</tspan>`;
   const body = items.map((i) => span(i.text, AGENDA_COLOR[i.tone])).join(span(SEPARATOR, AGENDA_COLOR.termin));
-  const rest = more > 0 ? span(moreLabel(more), items[0].tone === 'termin' ? AGENDA_COLOR.termin : AGENDA_COLOR.prio) : '';
-  return `<text x="${num(x)}" y="${num(y)}"${attrs({ 'font-family': FONT, 'font-size': size })}>${body}${rest}</text>`;
+  const prioFirst = items[0].tone === 'prio' || items[0].tone === 'erledigt';
+  const rest = more > 0 ? span(moreLabel(more), prioFirst ? AGENDA_COLOR.prio : AGENDA_COLOR.termin) : '';
+  return `<text x="${num(x)}" y="${num(y)}"${attrs({ 'font-family': FONT, 'font-size': size, ...(anchor ? { 'text-anchor': anchor } : {}) })}>${body}${rest}</text>`;
 }
 
 /**
- * Termine und Prioritäten eines Tages als SVG-Text über dem Hintergrund, nur auf dem Bildschirm und nie in der Datei
- * (wie `todayMarks`). Woche: in der Kopfzeile des Tages rechts von Tageszahl und Wochentag, links vom Feiertagsnamen,
- * Zeile 1 Termine, Zeile 2 Prioritäten; gibt es nur eine Art, bekommt sie beide Zeilen. Monat: nur Termine, oben links
- * in der Zelle, links von Tageszahl und Kreis für heute. Jede Fläche hat ein Clip-Rechteck, damit nie etwas darüber hinausläuft.
- * Leer für Tag und Besprechung und für Tage ohne Daten.
+ * Geburtstage, Termine und Prioritäten eines Tages als SVG-Text über dem Hintergrund, nur auf dem Bildschirm und nie
+ * in der Datei (wie `todayMarks`). Woche: in der Kopfzeile des Tages rechts von Tageszahl und Wochentag, links vom
+ * Feiertagsnamen, Zeile 1 Geburtstage und Termine (Geburtstage zuerst), Zeile 2 Prioritäten; gibt es nur eine Art,
+ * bekommt sie beide Zeilen. Monat: nur Geburtstage und Termine, oben links in der Zelle, links von Tageszahl und Kreis
+ * für heute. Tag: nur die Geburtstage, rechtsbündig in der Zeile des Untertitels. Jede Fläche hat ein Clip-Rechteck,
+ * damit nie etwas darüber hinausläuft. Leer für die Besprechung und für Tage ohne Daten.
  */
 export function agendaMarks(l: Layout, dayData: (day: Day) => AgendaDay): string {
-  if (l.kind !== 'woche' && l.kind !== 'monat') return '';
+  if (l.kind !== 'woche' && l.kind !== 'monat' && l.kind !== 'tag') return '';
+  if (l.kind === 'tag') {
+    const items = geburtstagItems(dayData(l.key).geburtstage ?? []);
+    const lines = fitLines(items, 1, DAY_BIRTHDAY_AREA[2], 16);
+    if (lines.length === 0) return '';
+    const id = `agenda-${l.key}`;
+    const [ax, , aw] = DAY_BIRTHDAY_AREA;
+    return (
+      `<clipPath id="${id}">${rect(DAY_BIRTHDAY_AREA)}</clipPath>` +
+      `<g clip-path="url(#${id})">${agendaLine(ax + aw, DAY_BIRTHDAY_BASELINE, 16, lines[0].items, lines[0].more, 'end')}</g>`
+    );
+  }
   const holiday = holidayLookup();
   let out = '';
   for (const f of l.fields) {
     if (!f.id.startsWith('tag-')) continue;
     const day = f.id.slice(4);
-    const { termine, prioritaeten } = dayData(day);
-    const termineItems = terminItems(termine);
+    const { geburtstage, termine, prioritaeten } = dayData(day);
+    const termineItems = [...geburtstagItems(geburtstage ?? []), ...terminItems(termine)];
     const prios = l.kind === 'woche' ? prioItems(prioritaeten) : [];
     if (termineItems.length === 0 && prios.length === 0) continue;
     const [x, y, w] = f.rect;

@@ -16,6 +16,6 @@ export function MonatPage({ month, ...rest }: PageProps & { month: string }) {
   const layout = useMemo(() => monatLayout(month), [month]);
   const termine = useTermine(rest.engine);
   const marks = useMemo(() => agendaMarks(layout, (day) => ({ termine: termineAm(termine, day), prioritaeten: [] })), [layout, termine]);
-  const dayInfo = (day: Day) => agendaInfo(termineAm(termine, day).length, 0);
+  const dayInfo = (day: Day) => agendaInfo({ termine: termineAm(termine, day), prioritaeten: [] });
   return <PageView layout={layout} path={monatPagePath(month)} {...rest} marks={marks} dayInfo={dayInfo} />;
 }

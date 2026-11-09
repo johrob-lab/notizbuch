@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
-import { agendaInfo, fitLines, moreLabel, SEPARATOR, prioItems, terminItems, textWidth, type AgendaItem } from '../../src/pages/agenda';
+import { agendaInfo, fitLines, geburtstagItems, moreLabel, SEPARATOR, prioItems, terminItems, textWidth, type AgendaItem } from '../../src/pages/agenda';
+import type { Geburtstag } from '../../src/lib/geburtstage';
 import type { Termin } from '../../src/lib/termine';
 import { wocheLayout } from '../../src/pages/layouts';
 
@@ -133,10 +134,22 @@ test('an item that does not fit even as an ellipse is not drawn, so no line gets
   for (const l of fitLines(items(4), 2, 5, 13)) expect(textWidth(l.items.map((i) => i.text).join(SEPARATOR), 13)).toBeLessThanOrEqual(5);
 });
 
-test('the day list names how many appointments and priorities a day has, leaving out what is 0', () => {
-  expect(agendaInfo(2, 1)).toBe('2 Termine, 1 Priorität');
-  expect(agendaInfo(1, 3)).toBe('1 Termin, 3 Prioritäten');
-  expect(agendaInfo(1, 0)).toBe('1 Termin');
-  expect(agendaInfo(0, 2)).toBe('2 Prioritäten');
-  expect(agendaInfo(0, 0)).toBe('');
+const geb = (name: string, art: 'Geburtstag' | 'Jahrestag' = 'Geburtstag'): Geburtstag => ({ date: '2026-10-28', name, art });
+const t = (title: string): Termin => ({ date: '2026-10-28', allDay: true, title });
+const p = (text: string) => ({ text, done: false });
+
+test('birthdays get a cake, anniversaries a heart, in their own tone', () => {
+  expect(geburtstagItems([geb('Max Beispiel'), geb('Anna und Ben Beispiel', 'Jahrestag')])).toEqual([
+    { text: '🎂 Max Beispiel', tone: 'geburtstag' },
+    { text: '♥ Anna und Ben Beispiel', tone: 'geburtstag' },
+  ]);
+});
+
+test('the day list names birthdays, anniversaries, appointments and priorities, leaving out what is 0', () => {
+  expect(agendaInfo({ geburtstage: [geb('A'), geb('B', 'Jahrestag')], termine: [t('x'), t('y')], prioritaeten: [p('z')] })).toBe('1 Geburtstag, 1 Jahrestag, 2 Termine, 1 Priorität');
+  expect(agendaInfo({ geburtstage: [geb('A'), geb('B'), geb('C', 'Jahrestag'), geb('D', 'Jahrestag')], termine: [], prioritaeten: [] })).toBe('2 Geburtstage, 2 Jahrestage');
+  expect(agendaInfo({ termine: [t('x')], prioritaeten: [p('y'), p('z'), p('w')] })).toBe('1 Termin, 3 Prioritäten');
+  expect(agendaInfo({ termine: [t('x')], prioritaeten: [] })).toBe('1 Termin');
+  expect(agendaInfo({ termine: [], prioritaeten: [p('y'), p('z')] })).toBe('2 Prioritäten');
+  expect(agendaInfo({ geburtstage: [], termine: [], prioritaeten: [] })).toBe('');
 });
