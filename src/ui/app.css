@@ -1800,6 +1800,19 @@ body {
   background: currentColor;
 }
 
+/* Geburtstage und Jahrestage: ein Punkt oben rechts in der Farbe der Feiertage, mit hellem Rand für den gezeigten Tag. */
+.karte .tag.geburtstag::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #a8674f;
+  box-shadow: 0 0 0 1.5px #fff;
+}
+
 .karte .tag.heute {
   box-shadow: inset 0 0 0 2px var(--gruen);
   font-weight: 700;

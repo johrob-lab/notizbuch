@@ -32,7 +32,7 @@ export function TagPage({ day, listDir, ...rest }: PageProps & { day: Day; listD
       overlay={
         <>
           {briefing && <BriefingCard engine={rest.engine} day={day} rect={briefing} />}
-          {calendar && <MiniCalendar rect={calendar} day={day} today={today} termine={termine} />}
+          {calendar && <MiniCalendar rect={calendar} day={day} today={today} termine={termine} geburtstage={[]} />}
           {meetings && <MeetingsCard engine={rest.engine} day={day} rect={meetings} termine={termine} listDir={listDir} />}
         </>
       }

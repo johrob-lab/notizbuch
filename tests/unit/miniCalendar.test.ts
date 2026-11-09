@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import { calendarWeeks, monthTitle, type CalendarCell } from '../../src/lib/miniCalendar';
+import type { Geburtstag } from '../../src/lib/geburtstage';
 import { parseTermine } from '../../src/lib/termine';
 import { fixture } from './helpers';
 
@@ -106,4 +107,30 @@ test('the month title is the German month name and the year', () => {
   expect(monthTitle('2026-10')).toBe('Oktober 2026');
   expect(monthTitle('2027-03')).toBe('März 2027');
   expect(monthTitle('2026-01')).toBe('Januar 2026');
+});
+
+const geb = (date: string, name: string, art: 'Geburtstag' | 'Jahrestag' = 'Geburtstag'): Geburtstag => ({ date, name, art });
+
+test('days with birthdays carry them, also days outside the month', () => {
+  const weeks = calendarWeeks('2026-10', {
+    today: '2026-10-29',
+    shown: '2026-10-29',
+    termine: [],
+    geburtstage: [geb('2026-10-29', 'Max Beispiel'), geb('2026-10-29', 'Anna und Ben Beispiel', 'Jahrestag'), geb('2026-11-01', 'Paul Beispiel'), geb('2026-11-02', 'Nicht im Raster')],
+  });
+  expect(cell(weeks, '2026-10-29').geburtstage.map((g) => g.name)).toEqual(['Max Beispiel', 'Anna und Ben Beispiel']);
+  expect(cell(weeks, '2026-11-01').geburtstage.map((g) => g.name)).toEqual(['Paul Beispiel']);
+  expect(cell(weeks, '2026-11-01').label).toBe('So 01.11.2026, Geburtstag von Paul Beispiel');
+  expect(cell(weeks, '2026-10-28').geburtstage).toEqual([]);
+});
+
+test('the label names birthdays and anniversaries after the holiday and before the appointments', () => {
+  const list = parseTermine('- 2026-10-26 08:00 bis 09:00 | A\n');
+  const weeks = calendarWeeks('2026-10', { today: '2026-10-26', shown: '2026-10-26', termine: list, geburtstage: [geb('2026-10-26', 'Max Beispiel'), geb('2026-10-26', 'Anna und Ben Beispiel', 'Jahrestag')] });
+  expect(cell(weeks, '2026-10-26').label).toBe('Mo 26.10.2026, heute, Nationalfeiertag, Geburtstag von Max Beispiel, Jahrestag von Anna und Ben Beispiel, 1 Termin');
+});
+
+test('without birthdays the cells have none and the labels stay as before', () => {
+  expect(cell(october(), '2026-10-29').geburtstage).toEqual([]);
+  expect(cell(october(), '2026-10-29').label).toBe('Do 29.10.2026, heute, 1 Termin');
 });
