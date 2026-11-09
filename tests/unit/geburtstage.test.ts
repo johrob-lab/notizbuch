@@ -37,7 +37,7 @@ test('skips everything that is not a birthday line', () => {
 });
 
 test('a byte order mark, CRLF and decomposed umlauts do not matter', () => {
-  const md = '﻿- 2026-11-15 | Jörg Beispiel | Geburtstag | Google\r\n- 2026-11-16 | Erika Muster | Jahrestag | Outlook\r\n';
+  const md = '\uFEFF- 2026-11-15 | Jo\u0308rg Beispiel | Geburtstag | Google\r\n- 2026-11-16 | Erika Muster | Jahrestag | Outlook\r\n';
   expect(parseGeburtstage(md)).toEqual([
     { date: '2026-11-15', name: 'Jörg Beispiel', art: 'Geburtstag', source: 'Google' },
     { date: '2026-11-16', name: 'Erika Muster', art: 'Jahrestag', source: 'Outlook' },
@@ -50,11 +50,14 @@ test('the same person on the same day counts once, the first line wins', () => {
     '- 2026-11-15 | max  beispiel | Geburtstag | Outlook',
     '- 2026-11-15 | Erika Muster | Geburtstag | Outlook',
     '- 2026-11-16 | Max Beispiel | Geburtstag | Outlook',
+    '- 2026-11-17 | Jörg Beispiel | Geburtstag | Google',
+    '- 2026-11-17 | JÖRG BEISPIEL | Geburtstag | Outlook',
   ].join('\n');
   expect(parseGeburtstage(md).map((g) => `${g.date} ${g.name} ${g.source}`)).toEqual([
     '2026-11-15 Max Beispiel Google',
     '2026-11-15 Erika Muster Outlook',
     '2026-11-16 Max Beispiel Outlook',
+    '2026-11-17 Jörg Beispiel Google',
   ]);
 });
 
