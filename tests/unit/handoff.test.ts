@@ -5,7 +5,8 @@ const h = (path: string, at: number): Handoff => ({
   path,
   view: { s: 1, x: 0, y: 0 },
   page: { strokes: [], background: '' },
-  from: { side: 'above', page: { strokes: [], background: '' } },
+  read: true,
+  from: { side: 'above', page: { strokes: [], background: '' }, read: true },
   at,
 });
 
@@ -27,4 +28,12 @@ test('the newest handoff wins and paths are compared in NFC', () => {
   offerHandoff(h('a.svg', 1000));
   offerHandoff(h('Jänner.svg', 1100)); // a plus Trema (NFD), so liefern manche Eingaben es
   expect(takeHandoff('Jänner.svg', 1200)?.at).toBe(1100);
+});
+
+test('a handoff says whether each of its pages was read', () => {
+  // Die Vorschau der neuen Seite war gelesen, die verlassene Seite hatte ihre Datei noch nicht.
+  offerHandoff({ ...h('a.svg', 1000), from: { side: 'below', page: { strokes: [], background: '' }, read: false } });
+  const taken = takeHandoff('a.svg', 1000);
+  expect(taken?.read).toBe(true);
+  expect(taken?.from).toEqual({ side: 'below', page: { strokes: [], background: '' }, read: false });
 });

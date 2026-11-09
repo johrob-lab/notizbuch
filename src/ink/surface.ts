@@ -767,6 +767,7 @@ export class InkSurface {
     if (!svg) return;
     const img = new Image();
     img.onload = () => {
+      img.onload = null; // das Bild bleibt vielleicht in `loadedBackgrounds`: Es soll die Fläche dann nicht festhalten
       keepBackground(svg, img);
       if (this.destroyed || svg !== this.backgroundSvg) return;
       this.background = img;
@@ -794,6 +795,7 @@ export class InkSurface {
   private loadNeighborImage(side: Side, svg: string): void {
     const img = new Image();
     img.onload = () => {
+      img.onload = null; // wie bei `setBackground`: Das Bild im Speicher hält die Fläche nicht fest
       keepBackground(svg, img);
       const n = this.neighbors[side];
       if (this.destroyed || !n || n.svg !== svg) return;

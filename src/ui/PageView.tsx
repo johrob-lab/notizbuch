@@ -114,8 +114,11 @@ type Props = PageProps & {
   neighbors?: { above: NeighborSpec | null; below: NeighborSpec | null };
 };
 
-/** Ein Nachbar, wie ihn die Fläche zeigt: wer er ist, der Pfad seiner Datei in NFC und was die Vorschau zeigt. */
-type ShownNeighbor = { spec: NeighborSpec; path: string; page: NeighborPage };
+/**
+ * Ein Nachbar, wie ihn die Fläche zeigt: wer er ist, der Pfad seiner Datei in NFC, was die Vorschau zeigt und ob ihre Striche
+ * aus seiner Datei stammen (`read`: die Datei war gelesen, auch als „gibt es nicht“).
+ */
+type ShownNeighbor = { spec: NeighborSpec; path: string; page: NeighborPage; read: boolean };
 type ShownNeighbors = Record<Side, ShownNeighbor | null>;
 
 const pagesOf = (n: ShownNeighbors) => ({ above: n.above?.page ?? null, below: n.below?.page ?? null });
@@ -181,12 +184,13 @@ export function PageView(p: Props) {
   // Die Nachbarn, wie die Seite sie gerade bekommt, für den Effekt der Fläche: Er entsteht nicht neu, wenn sie sich ändern.
   const neighborsRef = useRef(p.neighbors);
   neighborsRef.current = p.neighbors;
-  // Öffnete die Seite durch Weiterscrollen (Übergabe, siehe `handoff.ts`), liegt hier, auf welcher Seite die verlassene Seite als
-  // Nachbarin hängt. Ihre Datei liest erst eine fremde Änderung: Ihre Sitzung speichert vielleicht noch.
-  const cameFrom = useRef<Side | null>(null);
+  // Öffnete die Seite durch Weiterscrollen (Übergabe, siehe `handoff.ts`) und hatte die verlassene Seite ihre Datei gelesen, liegt
+  // hier, auf welcher Seite sie als Nachbarin hängt. Ihre Datei liest dann erst eine fremde Änderung: Ihre Sitzung speichert
+  // vielleicht noch.
+  const keptFrom = useRef<Side | null>(null);
   const [phase, setPhase] = useState<Phase>('laden');
-  // Der Hinweis „Seite wird geladen“ kommt erst, wenn feststeht, dass die Seite ohne Übergabe öffnet (im Effekt der Fläche). Mit
-  // einer Übergabe ist sie schon zu sehen, bis ihre Datei gelesen ist.
+  // Der Hinweis „Seite wird geladen“ kommt erst, wenn feststeht, dass die Seite nicht schon zu sehen ist (im Effekt der Fläche):
+  // Mit einer Übergabe, deren Vorschau gelesen war, zeigt sie bis zum Lesen ihrer Datei diese Vorschau.
   const [loadingHint, setLoadingHint] = useState(false);
   // Eine Seite aus einer neueren Version: Vielleicht liegt diese schon bereit, dann lädt die App sie im ruhigen Moment.
   useEffect(() => {
@@ -217,6 +221,9 @@ export function PageView(p: Props) {
     // Weiterscrollen: Hat die Seite, von der man kam, eine Übergabe bereitgelegt, gilt sie nur beim ersten Aufbau dieser Seite.
     // Entsteht die Fläche später für dieselbe Seite neu (andere Einstellungen), ist sie verbraucht.
     const handoff = takeHandoff(path);
+    // Ob die Sitzung dieser Fläche die Datei gelesen hat (`bereit`): Erst dann zeigt die Fläche ihre Striche, und erst dann kann sie
+    // geschrieben haben. Eine Übergabe sagt das der nächsten Seite weiter.
+    let read = false;
 
     const view: InkSurface = new InkSurface(el, {
       readOnly: true, // bis die Seite gelesen ist
@@ -239,7 +246,8 @@ export function PageView(p: Props) {
       // Losgelassen, während ein Nachbar die Mitte bedeckt: Er wird die offene Seite. Die Adresse wechselt ohne neuen Eintrag
       // im Verlauf, die App baut dann die Seite neu auf wie bei jeder anderen Adresse. Damit dabei nichts springt, legt diese
       // Seite vorher eine Übergabe bereit: Die neue steht, wo sie als Nachbarin stand, zeigt zuerst ihre Vorschau, und diese
-      // Seite hängt dort als Nachbarin, mit allen Strichen, die sie jetzt hat, und dem Hintergrund, den sie gerade zeigt.
+      // Seite hängt dort als Nachbarin, mit allen Strichen, die sie jetzt hat, und dem Hintergrund, den sie gerade zeigt. Ob
+      // die Vorschau und diese Seite ihre Dateien schon gelesen hatten, sagt sie dazu.
       onNeighbor: (side, now) => {
         const next = shownNeighbors.current[side];
         if (!next) return;
@@ -247,7 +255,8 @@ export function PageView(p: Props) {
           path: next.path,
           view: viewFor(now, side),
           page: next.page,
-          from: { side: ACROSS[side], page: { strokes: view.getPage().strokes, background: view.shownBackground } },
+          read: next.read,
+          from: { side: ACROSS[side], page: { strokes: view.getPage().strokes, background: view.shownBackground }, read },
           at: Date.now(),
         });
         window.location.replace(routeHash(next.spec.route));
@@ -259,11 +268,14 @@ export function PageView(p: Props) {
       // Bis ihre Datei gelesen ist, zeigt die Seite, was die Vorschau von ihr zeigte. Für die Sitzung ist das keine Änderung (die
       // Fläche meldet nichts), geschrieben wird deswegen nichts. Danach zeigt die Sitzung die Datei, wenn sie anders ist.
       view.setPage({ ...first, strokes: handoff.page.strokes }, layout.fields, handoff.page.background);
-      const spec = neighborsRef.current?.[handoff.from.side];
+      const from = handoff.from;
+      const spec = neighborsRef.current?.[from.side];
       if (spec) {
-        cameFrom.current = handoff.from.side;
+        // Hatte die verlassene Seite ihre Datei gelesen, bleibt es bei ihren Strichen aus der Übergabe. Sonst hat sie nie
+        // geschrieben, und der Nachbar-Effekt liest sie wie jeden Nachbarn; bis dahin zeigt sie, was sie zeigte.
+        if (from.read) keptFrom.current = from.side;
         const withFrom = { ...shownNeighbors.current };
-        withFrom[handoff.from.side] = { spec, path: normalizePath(spec.path), page: handoff.from.page };
+        withFrom[from.side] = { spec, path: normalizePath(spec.path), page: from.page, read: from.read };
         shownNeighbors.current = withFrom;
       }
     } else view.setPage(first, layout.fields, shownFor(first.meta));
@@ -310,6 +322,7 @@ export function PageView(p: Props) {
       },
       retryCues,
       onPhase: (next) => {
+        if (next === 'bereit') read = true;
         setHistory({ canUndo: view.canUndo, canRedo: view.canRedo });
         setPhase(next);
         setKopfMeta(view.getPage().meta);
@@ -319,7 +332,7 @@ export function PageView(p: Props) {
     });
     sessionRef.current = session;
     setPhase('laden');
-    setLoadingHint(handoff === null);
+    setLoadingHint(!handoff?.read);
     void session.reload();
 
     return () => {
@@ -344,7 +357,8 @@ export function PageView(p: Props) {
   // Die Nachbarn über und unter der Seite: Die Fläche zeigt sie sofort mit Papier und Hintergrund (dazu die Markierung für heute
   // und ihr `marks`), ihre Striche, sobald ihre Datei gelesen ist. Ändert ein anderes Gerät eine der Dateien, liest der Effekt
   // sie neu. Er liest nur, er schreibt nie. Er läuft nach dem Effekt der Fläche, sie ist also da. Die Seite, von der man durch
-  // Weiterscrollen kam (`cameFrom`), liest er nur nach einer fremden Änderung: Bis dahin zeigt sie, was die Übergabe brachte.
+  // Weiterscrollen kam, liest er nur nach einer fremden Änderung, wenn sie ihre Datei gelesen hatte (`keptFrom`): Bis dahin zeigt
+  // sie, was die Übergabe brachte.
   const neighbors = p.neighbors;
   useEffect(() => {
     let current = true;
@@ -359,15 +373,16 @@ export function PageView(p: Props) {
       const target = shownNow[side];
       if (!target) return;
       const mine = ++latest[side];
-      // Fehlt die Datei, lässt sie sich nicht lesen oder ist sie kaputt, zeigt die Vorschau nur das Papier.
+      // Fehlt die Datei, lässt sie sich nicht lesen oder ist sie kaputt, zeigt die Vorschau nur das Papier. Gelesen ist sie, sobald
+      // die Engine geantwortet hat, auch mit „gibt es nicht“; ein Fehler lässt sie ungelesen.
       engine
         .read(target.path)
-        .then((text) => (text === null ? [] : parsePage(text).strokes))
-        .catch((): Stroke[] => [])
-        .then((strokes) => {
+        .then((text) => ({ strokes: text === null ? [] : parsePage(text).strokes, read: true }))
+        .catch(() => ({ strokes: [] as Stroke[], read: false }))
+        .then(({ strokes, read }) => {
           const now = shownNow[side];
           if (!current || mine !== latest[side] || !now) return;
-          shownNow[side] = { ...now, page: { ...now.page, strokes } };
+          shownNow[side] = { ...now, page: { ...now.page, strokes }, read };
           show();
         });
     };
@@ -375,17 +390,19 @@ export function PageView(p: Props) {
       const spec = neighbors?.[side];
       if (!spec) continue;
       const path = normalizePath(spec.path);
-      // Bis die Datei gelesen ist, bleiben die Striche, die die Vorschau von ihr schon zeigte (ein neues `marks`). Derselbe
-      // Nachbar behält auch seinen Hintergrund: Nach einer Übergabe ist das der, den die verlassene Seite zeigte.
+      // Bis die Datei gelesen ist, bleiben die Striche, die die Vorschau von ihr schon zeigte (ein neues `marks`), und mit ihnen,
+      // ob sie gelesen waren. Derselbe Nachbar behält auch seinen Hintergrund: Nach einer Übergabe ist das der, den die verlassene
+      // Seite zeigte.
       const before = shownNeighbors.current[side];
       const background = before?.spec === spec ? before.page.background : spec.layout.background() + todayMarks(spec.layout, today) + (spec.marks ?? '');
-      shownNow[side] = { spec, path, page: { strokes: before?.path === path ? before.page.strokes : [], background } };
+      const same = before?.path === path ? before : null;
+      shownNow[side] = { spec, path, page: { strokes: same?.page.strokes ?? [], background }, read: same?.read ?? false };
     }
     show();
     if (!shownNow.above && !shownNow.below) return; // ohne Nachbarn (Besprechung) gibt es nichts zu lesen
     // Ein Lesen der verlassenen Seite setzte in der Engine den Stand, auf dem ihre Sitzung schreibt, und die speichert vielleicht
     // noch. Ihre Striche hat die Vorschau schon aus der Übergabe.
-    for (const side of SIDES) if (side !== cameFrom.current) load(side);
+    for (const side of SIDES) if (side !== keptFrom.current) load(side);
     const stop = engine.addRemoteChangeListener((paths) => {
       const changed = new Set(paths.map(normalizePath));
       for (const side of SIDES) {

@@ -133,6 +133,93 @@ const stopWatching = (page: Page) =>
 /** Was ein Bild zeigt, ohne die Adresse. */
 const picture = ({ layers, paper, marked }: Frame) => ({ layers, paper, marked });
 
+/** Öffnet eine Adresse wie ein Link (neuer Eintrag im Verlauf). */
+const goTo = (page: Page, next: string) => page.evaluate((h) => void (window.location.hash = h), next);
+/**
+ * GitHub antwortet auf das Lesen der Datei `path` erst, wenn der Test `release` ruft: So bleibt die Vorschau oder die Seite
+ * dieser Datei beim Laden. `held.asked` zählt die Anfragen, die warten oder gewartet haben.
+ */
+async function holdReads(page: Page, path: string) {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const held = { asked: 0 };
+  await page.route(
+    (url) => decodeURIComponent(url.pathname).endsWith(`/contents/${path}`),
+    async (route) => {
+      if (route.request().method() === 'GET') {
+        held.asked++;
+        await gate;
+      }
+      await route.fallback();
+    },
+  );
+  return { release, held };
+}
+/** Merkt sich die Schreibfläche, die jetzt da ist: `newSurface` wartet dann, bis die nächste Seite ihre eigene hat. */
+const markSurface = (page: Page) =>
+  page.evaluate(() => {
+    (window as unknown as { oldSurface?: Element | null }).oldSurface = document.querySelector('[data-testid="surface"] canvas');
+  });
+const newSurface = (page: Page) =>
+  page.waitForFunction(() => {
+    const now = document.querySelector('[data-testid="surface"] canvas');
+    return now !== null && now !== (window as unknown as { oldSurface?: Element | null }).oldSurface;
+  });
+/**
+ * Wo die Tagesseite liegt, abgelesen an der Ebene ihrer Karten: Sie folgt der Ansicht der Fläche auch, solange die Seite noch
+ * lädt und der Testzugang der App fehlt. Wie `viewOf`: Ort des Seitenursprungs in Bildschirmkoordinaten und Maßstab.
+ */
+const cardView = (page: Page) =>
+  page.evaluate(() => {
+    const stage = document.querySelector('.buehne')!.getBoundingClientRect();
+    const m = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.karten')!).transform);
+    return { x: stage.left + m.e, y: stage.top + m.f, scale: m.a };
+  });
+/** Ein Finger zieht auf der Fläche von `from` nach `to` (Bildschirmkoordinaten) und hebt ab, ohne den Testzugang der App. */
+const swipeOnScreen = (page: Page, from: { x: number; y: number }, to: { x: number; y: number }) =>
+  page.evaluate(
+    ({ a, b }) => {
+      const target = document.querySelector('[data-testid="surface"] canvas[data-layer="live"]')!;
+      const send = (type: 'pointerdown' | 'pointermove' | 'pointerup', f: number) =>
+        target.dispatchEvent(
+          new PointerEvent(type, {
+            pointerId: 29,
+            pointerType: 'touch',
+            isPrimary: true,
+            pressure: 0.5,
+            width: 1,
+            height: 1,
+            clientX: a.x + (b.x - a.x) * f,
+            clientY: a.y + (b.y - a.y) * f,
+            button: type === 'pointermove' ? -1 : 0,
+            buttons: type === 'pointerup' ? 0 : 1,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+          }),
+        );
+      send('pointerdown', 0);
+      for (const f of [0.25, 0.5, 0.75, 1]) send('pointermove', f);
+      send('pointerup', 1);
+    },
+    { a: from, b: to },
+  );
+/** Wie `scrollUntil`, aber ohne den Testzugang der App: für eine Tagesseite, die noch lädt. Die Lage kommt aus `cardView`. */
+async function scrollWhileLoading(page: Page, target: number) {
+  for (let i = 0; i < 5; i++) {
+    const box = (await page.getByTestId('surface').boundingBox())!;
+    const view = await cardView(page);
+    const dy = ((box.y + box.height / 2 - view.y) / view.scale - target) * view.scale;
+    const room = box.height - 2 * MARGIN;
+    const step = Math.max(-room, Math.min(room, dy));
+    const x = box.x + box.width / 2;
+    const from = dy < 0 ? box.y + box.height - MARGIN : box.y + MARGIN;
+    await swipeOnScreen(page, { x, y: from }, { x, y: from + step });
+    if (step === dy) return;
+  }
+  throw new Error(`Die Mitte kam nicht bis ${target}.`);
+}
+
 /** Ein erfundener Strich mit dem Kugelschreiber quer durch `at` (Seiteneinheiten). */
 function strokeThrough(id: string, [x, y]: [number, number]): Stroke {
   return {
@@ -361,7 +448,7 @@ test('the page left behind becomes the neighbour with its newest stroke', async 
   // Gleich weiter, ohne auf ein Hochladen zu warten: Der 29.10. hängt darüber, mit dem Strich.
   await scrollUntil(page, PAST_BELOW);
   await waitForPageOf(page, 'tag', '2026-10-30');
-  expect(await neighbors(page)).toEqual({ above: 1, below: 0 });
+  await expect.poll(() => neighbors(page)).toEqual({ above: 1, below: 0 });
 
   await sendToBackground(page);
   await expect.poll(() => repo.puts.map((put) => put.path)).toEqual([tagFile('2026-10-29')]);
@@ -384,8 +471,9 @@ test('scrolling on at once does not mix up pages', async ({ page }) => {
 });
 
 test('no loading notice flashes when scrolling to a page', async ({ page }) => {
-  await openSeeded(page, DAY);
-  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  // Die Vorschau des 30.10. ist gelesen, sobald sie seinen Strich zeigt: Dann ist die Seite beim Wechsel schon zu sehen.
+  await openSeeded(page, DAY, { files: { [tagFile('2026-10-30')]: dayWith('2026-10-30', strokeThrough('a', CLEAN)) } });
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 1 });
   await countLoadingNotices(page);
 
   await scrollUntil(page, PAST_BELOW);
@@ -466,7 +554,50 @@ test('scrolling up keeps the day before where it was, and the day left behind ha
 
   const after = await viewOf(page);
   expect(Math.abs(after.y - previousTop.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after.x - previousTop.x)).toBeLessThanOrEqual(1);
   expect(after.scale).toBeCloseTo(before.scale, 6);
   // Der 29.10. hängt jetzt darunter, mit seinem Strich, der 27.10. darüber hat keinen.
-  expect(await neighbors(page)).toEqual({ above: 0, below: 1 });
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 1 });
+});
+
+test('a day left before it was read is read by the next one, also when scrolling on at once', async ({ page }) => {
+  // Der 30.10. hat einen Strich, aber GitHub antwortet auf ihn erst, wenn der Test es erlaubt.
+  const middle = tagFile('2026-10-30');
+  await openSeeded(page, '#/tag/2026-10-25', { files: { [middle]: dayWith('2026-10-30', strokeThrough('a', CLEAN)) } });
+  const { release, held } = await holdReads(page, middle);
+  await goTo(page, DAY);
+  await waitForPageOf(page, 'tag', '2026-10-29');
+  await expect.poll(() => held.asked).toBeGreaterThan(0); // die Vorschau des 30.10. wartet
+
+  // Zum 30.10. und gleich weiter zum 31.10., solange der 30.10. noch lädt (seine Sitzung hat also nie gelesen).
+  await markSurface(page);
+  await scrollUntil(page, PAST_BELOW);
+  await newSurface(page);
+  expect(await hash(page)).toBe('#/tag/2026-10-30');
+  await scrollWhileLoading(page, PAST_BELOW);
+  expect(await hash(page)).toBe('#/tag/2026-10-31');
+  await waitForPageOf(page, 'tag', '2026-10-31');
+
+  // Der 30.10. hängt darüber. Er hat nie geschrieben: Der 31.10. liest ihn wie jeden Nachbarn und zeigt seinen Strich, sobald
+  // GitHub antwortet.
+  release();
+  await expect.poll(() => neighbors(page)).toEqual({ above: 1, below: 0 });
+  expect(await queued(page)).toEqual({}); // nichts geschrieben, auch nicht in die Datei des 30.10.
+});
+
+test('a day whose preview was not read yet says that it is loading', async ({ page }) => {
+  const next = tagFile('2026-10-30');
+  await openSeeded(page, '#/tag/2026-10-25', { files: { [next]: dayWith('2026-10-30', strokeThrough('a', CLEAN)) } });
+  const { release, held } = await holdReads(page, next);
+  await goTo(page, DAY);
+  await waitForPageOf(page, 'tag', '2026-10-29');
+  await expect.poll(() => held.asked).toBeGreaterThan(0);
+
+  // Die Vorschau zeigte noch nichts vom 30.10.: Bis seine Datei da ist, sagt er wie jede Seite, dass er lädt.
+  await scrollUntil(page, PAST_BELOW);
+  await expect(page.getByText('Seite wird geladen')).toBeVisible();
+  release();
+  await waitForPageOf(page, 'tag', '2026-10-30');
+  expect(await strokeCount(page)).toBe(1);
+  await expect(page.getByText('Seite wird geladen')).toHaveCount(0);
 });
