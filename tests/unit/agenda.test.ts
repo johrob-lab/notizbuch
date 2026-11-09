@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import { agendaInfo, fitLines, moreLabel, SEPARATOR, prioItems, terminItems, textWidth, type AgendaItem } from '../../src/pages/agenda';
 import type { Termin } from '../../src/lib/termine';
+import { wocheLayout } from '../../src/pages/layouts';
 
 const day = '2026-10-29';
 const termin = (title: string, start?: string, end?: string): Termin => ({ date: day, start, end, allDay: start === undefined, title });
@@ -32,9 +33,30 @@ test('priorities get an arrow, done ones a check', () => {
   ]);
 });
 
-test('textWidth is 0.58 of the size per character', () => {
+test('textWidth is 0.58 of the size per ordinary character', () => {
   expect(textWidth('abcd', 10)).toBeCloseTo(23.2, 10);
-  expect(textWidth('a🙂', 10)).toBeCloseTo(11.6, 10);
+});
+
+test('textWidth counts per character: capitals, wide, narrow and emoji', () => {
+  expect(textWidth('A', 10)).toBeCloseTo(7.2, 10);
+  expect(textWidth('Mw', 10)).toBeCloseTo(18, 10);
+  expect(textWidth(' i.|', 10)).toBeCloseTo(12.8, 10);
+  expect(textWidth('a🙂', 10)).toBeCloseTo(16.8, 10);
+});
+
+test('a title in capitals is estimated wider than the same title in lowercase', () => {
+  const title = 'Koordinationsbesprechung Brücke';
+  expect(textWidth(title.toUpperCase(), 13)).toBeGreaterThan(textWidth(title.toLowerCase(), 13) * 1.2);
+});
+
+test('a title in capitals with " +2" fits the week area when fitLines says it fits', () => {
+  const [, , w] = wocheLayout('2026-W44').fields.find((f) => f.id.startsWith('tag-'))!.rect;
+  const area = w - 190 - 14; // wie in agendaMarks, ohne Feiertag
+  const title = 'BKM KAB FEBRUAR 2027';
+  const lines = fitLines([{ text: title, tone: 'termin' }, ...items(3)], 1, area, 13);
+  expect(lines[0].items[0].text).toBe(title);
+  expect(textWidth(title + moreLabel(lines[0].more), 13)).toBeLessThanOrEqual(area);
+  expect(lines[0].more).toBeGreaterThan(0);
 });
 
 test('fitLines puts items on a line with separators and counts the rest', () => {

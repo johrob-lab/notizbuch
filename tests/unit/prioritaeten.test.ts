@@ -67,8 +67,28 @@ describe('parsePrioritaeten', () => {
   });
 
   it('copes with CRLF, a byte order mark and spaces around the heading', () => {
-    const md = '﻿' + note.replace('### Prioritäten', '###  Prioritäten  ').replace(/\n/g, '\r\n');
+    const md = '\ufeff' + note.replace('### Prioritäten', '###  Prioritäten  ').replace(/\n/g, '\r\n');
     expect(parsePrioritaeten(md)).toEqual(expected);
+  });
+
+  it('a wikilink with an empty display text falls back to the target', () => {
+    const md = ['## Handschrift', '### Prioritäten', '- [ ] [[ziel|]] prüfen', '- [ ] [[a|b]] und [[c]]'].join('\n');
+    expect(parsePrioritaeten(md).map((p) => p.text)).toEqual(['ziel prüfen', 'b und c']);
+  });
+
+  it('removes bold markers ** and __', () => {
+    const md = ['## Handschrift', '### Prioritäten', '**Überschrift**', '- [ ] __wichtig__ und **fett**'].join('\n');
+    expect(parsePrioritaeten(md).map((p) => p.text)).toEqual(['Überschrift', 'wichtig und fett']);
+  });
+
+  it('skips table separator rows', () => {
+    const md = ['## Handschrift', '### Prioritäten', '|---|---|', '| :--- | ---: |', '- | - |', 'Text'].join('\n');
+    expect(parsePrioritaeten(md).map((p) => p.text)).toEqual(['Text']);
+  });
+
+  it('joins the non-empty cells of a table row with a dot', () => {
+    const md = ['## Handschrift', '### Prioritäten', '| Was | Wer |', '|---|---|', '| Plan |  | Anna |'].join('\n');
+    expect(parsePrioritaeten(md).map((p) => p.text)).toEqual(['Was · Wer', 'Plan · Anna']);
   });
 
   it('a done task needs a box with x', () => {

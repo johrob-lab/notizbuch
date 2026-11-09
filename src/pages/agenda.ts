@@ -41,9 +41,21 @@ export function agendaInfo(termine: number, prioritaeten: number): string {
   return parts.join(', ');
 }
 
-/** Geschätzte Breite eines Textes: 0,58 der Schriftgröße je Zeichen (ein Emoji zählt als ein Zeichen). */
+/** Breite eines Zeichens in Teilen der Schriftgröße (Schätzung): Versalien breiter, schmale Zeichen schmaler, Emoji am breitesten. */
+function charFactor(ch: string): number {
+  const cp = ch.codePointAt(0) ?? 0;
+  if (cp >= 0x1f000) return 1.1;
+  if ('MWmw'.includes(ch)) return 0.9;
+  if (' ijl.,:;!\'|'.includes(ch)) return 0.32;
+  if (ch !== ch.toLowerCase() && ch === ch.toUpperCase()) return 0.72;
+  return 0.58;
+}
+
+/** Geschätzte Breite eines Textes: je Zeichen (Codepunkt) ein Faktor der Schriftgröße, siehe `charFactor`. */
 export function textWidth(s: string, size: number): number {
-  return Array.from(s).length * size * 0.58;
+  let sum = 0;
+  for (const ch of Array.from(s)) sum += charFactor(ch);
+  return sum * size;
 }
 
 const joined = (list: AgendaItem[]): string => list.map((i) => i.text).join(SEPARATOR);

@@ -165,6 +165,9 @@ test('a stroke in progress goes on when new priorities come in', async ({ page }
   await expect.poll(() => screenBackground(page)).toContain('✓ Plan schicken');
   await expect(dayLink(page, /29\.10\.2026, 2 Termine, 2 Prioritäten$/)).toHaveAttribute('href', '#/tag/2026-10-29');
 
+  // Zwei Bilder warten, damit das neue Hintergrundbild geladen und gezeichnet ist, bevor der Strich weitergeht.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
   // Der Strich geht weiter und endet dort, wo der Stift abhebt.
   await pen(page).move(x + 300, row + 5);
   await pen(page).move(x + 400, row);
