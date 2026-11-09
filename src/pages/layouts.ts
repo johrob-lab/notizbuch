@@ -3,6 +3,9 @@ import { MM, PAGE_H, PAGE_W, PAPER, type FieldBox, type PageKind } from '../ink/
 import { formatDayLong, isValidDay, isoWeekKey, monthGrid, MONTHS, weekDays, type Day } from '../lib/dates';
 import { besprechungBase } from '../lib/filenames';
 import { holidaysAT } from '../lib/holidays';
+import type { Prioritaet } from '../lib/prioritaeten';
+import type { Termin } from '../lib/termine';
+import { fitLines, prioItems, terminItems, textWidth, type AgendaItem } from './agenda';
 
 // Aufbau der Seiten. Ein Layout sagt, wo auf der Seite geschrieben wird (Felder), wo später Karten liegen und wie
 // das Papier aussieht (Hintergrund als SVG-Text für Papier, Rahmen, Linien und Feldnamen). Alles hier ist reine
@@ -392,4 +395,66 @@ export function todayMarks(l: Layout, today: Day): string {
     rect([x + 1, y + 1, w - 2, h - 2], { fill: 'none', stroke: COLOR.ring, 'stroke-width': 2.5 }) +
     circle(x + w - 22, y + 22, 19, { fill: 'none', stroke: COLOR.ring, 'stroke-width': 1.5 })
   );
+}
+
+/** Die Termine und Prioritäten eines Tages, so wie `agendaMarks` sie braucht (Termine schon auf den Tag gefiltert und sortiert). */
+export type AgendaDay = { termine: Termin[]; prioritaeten: Prioritaet[] };
+
+const AGENDA_COLOR = { termin: '#55657a', prio: '#3d434d', erledigt: '#9aa1a9' };
+
+/** Eine Zeile als `<text>` mit einem `<tspan>` je Eintrag. Trenner und Rest " +N" haben die Farbe der Termine. */
+function agendaLine(x: number, y: number, size: number, items: AgendaItem[], more: number): string {
+  const sep = (s: string) => `<tspan fill="${AGENDA_COLOR.termin}">${escText(s)}</tspan>`;
+  const body = items.map((i) => `<tspan fill="${AGENDA_COLOR[i.tone]}">${escText(i.text)}</tspan>`).join(sep(' · '));
+  return `<text x="${num(x)}" y="${num(y)}"${attrs({ 'font-family': FONT, 'font-size': size })}>${body}${more > 0 ? sep(` +${more}`) : ''}</text>`;
+}
+
+/**
+ * Termine und Prioritäten eines Tages als SVG-Text über dem Hintergrund, nur auf dem Bildschirm und nie in der Datei
+ * (wie `todayMarks`). Woche: in der Kopfzeile des Tages rechts von Tageszahl und Wochentag, links vom Feiertagsnamen,
+ * Zeile 1 Termine, Zeile 2 Prioritäten; gibt es nur eine Art, bekommt sie beide Zeilen. Monat: nur Termine, oben links
+ * in der Zelle, links von Tageszahl und Kreis für heute. Jede Fläche hat ein Clip-Rechteck, damit nie etwas darüber hinausläuft.
+ * Leer für Tag und Besprechung und für Tage ohne Daten.
+ */
+export function agendaMarks(l: Layout, dayData: (day: Day) => AgendaDay): string {
+  if (l.kind !== 'woche' && l.kind !== 'monat') return '';
+  const holiday = holidayLookup();
+  let out = '';
+  for (const f of l.fields) {
+    if (!f.id.startsWith('tag-')) continue;
+    const day = f.id.slice(4);
+    const { termine, prioritaeten } = dayData(day);
+    const termineItems = terminItems(termine);
+    const prios = l.kind === 'woche' ? prioItems(prioritaeten) : [];
+    if (termineItems.length === 0 && prios.length === 0) continue;
+    const [x, y, w] = f.rect;
+    let area: Rect;
+    let size: number;
+    let baselines: [number, number];
+    let rows: ReturnType<typeof fitLines>[];
+    if (l.kind === 'woche') {
+      // Der Feiertagsname ist fett und rechtsbündig: seine Breite mit Zuschlag für Fett rechnen, dazu 12 Abstand.
+      const name = holiday(day);
+      const right = x + w - 14 - (name ? textWidth(name, 14 * 1.1) + 12 : 0);
+      area = [x + 190, y + 4, right - (x + 190), 42];
+      size = 13;
+      baselines = [y + 20, y + 38];
+      const both = termineItems.length > 0 && prios.length > 0;
+      rows = both
+        ? [fitLines(termineItems, 1, area[2], size), fitLines(prios, 1, area[2], size)]
+        : [fitLines(termineItems.length > 0 ? termineItems : prios, 2, area[2], size)];
+    } else {
+      area = [x + 8, y + 4, 92, 28];
+      size = 10.5;
+      baselines = [y + 15, y + 28];
+      rows = [fitLines(termineItems, 2, area[2], size)];
+    }
+    const lines = rows.flat();
+    if (area[2] <= 0 || lines.length === 0) continue;
+    const id = `agenda-${day}`;
+    out +=
+      `<clipPath id="${id}">${rect(area)}</clipPath>` +
+      `<g clip-path="url(#${id})">${lines.map((line, i) => agendaLine(area[0], baselines[i], size, line.items, line.more)).join('')}</g>`;
+  }
+  return out;
 }
