@@ -17,7 +17,7 @@ import type { SyncEngine } from '../sync/engine';
 import { normalizePath } from '../sync/paths';
 import { watchCards } from './cardGestures';
 import { offerHandoff, takeHandoff } from './handoff';
-import type { NeighborSpec } from './neighbors';
+import type { Neighbors, NeighborSpec } from './neighbors';
 import { PageSession, type Phase } from './pageSession';
 import { QuickSwitch } from './QuickSwitch';
 import { retryCues } from './retryCues';
@@ -107,11 +107,12 @@ type Props = PageProps & {
   /** Zusatz zum Namen eines Tages in der Liste „Tage dieser Seite“, zum Beispiel `2 Termine, 1 Priorität`. Leer heißt: keiner. */
   dayInfo?: (day: Day) => string;
   /**
-   * Die Seiten über und unter dieser (Tag, Woche, Monat, siehe `neighborsOf`): Die Fläche zeigt sie als Vorschau, man scrollt in
-   * sie hinein, und wer loslässt, während eine die Mitte bedeckt, hat sie offen. Ihre Dateien werden nur gelesen. Ein neues
-   * Objekt liest sie neu: Die Seite gibt es darum nur bei einer anderen Route neu.
+   * Die Seiten über und unter dieser (Tag, Woche, Monat, siehe `neighborsOf`), jede mit ihrem `marks` (`withMarks`): Die Fläche
+   * zeigt sie als Vorschau, man scrollt in sie hinein, und wer loslässt, während eine die Mitte bedeckt, hat sie offen. Ihre
+   * Dateien werden nur gelesen, und nur für einen neuen Pfad neu: Ein neues Objekt mit anderem `marks` ändert nur den
+   * Hintergrund ihrer Vorschau.
    */
-  neighbors?: { above: NeighborSpec | null; below: NeighborSpec | null };
+  neighbors?: Neighbors;
 };
 
 /**
@@ -133,7 +134,7 @@ const NOT_LOADED = 'Diese Seite konnte nicht geladen werden. Neuer Versuch, soba
 /**
  * Testzugang: nur lesen, enthält keine Geheimnisse. Er steht da, sobald die Seite gelesen ist. `screenBackground` ist der
  * Hintergrund, den die Fläche gerade zeigt, mit allem, was nur auf dem Bildschirm steht. `neighbors` sagt, wie viele Striche
- * die Vorschau der Nachbarn zeigt (`null` ohne Nachbarn).
+ * die Vorschau der Nachbarn zeigt (`null` ohne Nachbarn), `neighborBackground` den Hintergrund ihrer Vorschau.
  */
 type TestAccess = {
   currentPage(): Page;
@@ -141,6 +142,7 @@ type TestAccess = {
   liveStats(): { events: number; ptsMax: number };
   screenBackground(): string;
   neighbors(): { above: number | null; below: number | null };
+  neighborBackground(side: Side): string | null;
 };
 const testAccessHolder = (): { __notizbuch?: TestAccess } => window as unknown as { __notizbuch?: TestAccess };
 
@@ -303,6 +305,7 @@ export function PageView(p: Props) {
       liveStats: () => view.liveStats(),
       screenBackground: () => view.shownBackground,
       neighbors: () => view.neighborStrokes,
+      neighborBackground: (side) => view.neighborBackground(side),
     };
     const session = new PageSession({
       engine,
@@ -355,66 +358,74 @@ export function PageView(p: Props) {
   }, [shown, marks]);
 
   // Die Nachbarn über und unter der Seite: Die Fläche zeigt sie sofort mit Papier und Hintergrund (dazu die Markierung für heute
-  // und ihr `marks`), ihre Striche, sobald ihre Datei gelesen ist. Ändert ein anderes Gerät eine der Dateien, liest der Effekt
-  // sie neu. Er liest nur, er schreibt nie. Er läuft nach dem Effekt der Fläche, sie ist also da. Die Seite, von der man durch
-  // Weiterscrollen kam, liest er nur nach einer fremden Änderung, wenn sie ihre Datei gelesen hatte (`keptFrom`): Bis dahin zeigt
-  // sie, was die Übergabe brachte.
+  // und ihr `marks`), ihre Striche, sobald ihre Datei gelesen ist (im Effekt danach). Er läuft nach dem Effekt der Fläche, sie ist
+  // also da. Ein neues `marks` (Termine und Geburtstage sind gelesen oder haben sich geändert) bringt nur einen neuen Hintergrund:
+  // Die Striche bleiben stehen, und ihre Datei wird deswegen nicht neu gelesen.
   const neighbors = p.neighbors;
   useEffect(() => {
-    let current = true;
-    const shownNow: ShownNeighbors = { above: null, below: null };
-    // Je Nachbar zählt die neueste Anfrage: Antwortet eine frühere erst nach einer späteren, gilt die spätere.
-    const latest: Record<Side, number> = { above: 0, below: 0 };
-    const show = () => {
-      shownNeighbors.current = { ...shownNow };
-      surface.current?.setNeighbors(pagesOf(shownNow));
-    };
-    const load = (side: Side) => {
-      const target = shownNow[side];
-      if (!target) return;
-      const mine = ++latest[side];
-      // Fehlt die Datei, lässt sie sich nicht lesen oder ist sie kaputt, zeigt die Vorschau nur das Papier. Gelesen ist sie, sobald
-      // die Engine geantwortet hat, auch mit „gibt es nicht“; ein Fehler lässt sie ungelesen.
-      engine
-        .read(target.path)
-        .then((text) => ({ strokes: text === null ? [] : parsePage(text).strokes, read: true }))
-        .catch(() => ({ strokes: [] as Stroke[], read: false }))
-        .then(({ strokes, read }) => {
-          const now = shownNow[side];
-          if (!current || mine !== latest[side] || !now) return;
-          shownNow[side] = { ...now, page: { ...now.page, strokes }, read };
-          show();
-        });
-    };
+    const next: ShownNeighbors = { above: null, below: null };
     for (const side of SIDES) {
       const spec = neighbors?.[side];
       if (!spec) continue;
       const path = normalizePath(spec.path);
-      // Bis die Datei gelesen ist, bleiben die Striche, die die Vorschau von ihr schon zeigte (ein neues `marks`), und mit ihnen,
-      // ob sie gelesen waren. Derselbe Nachbar behält auch seinen Hintergrund: Nach einer Übergabe ist das der, den die verlassene
-      // Seite zeigte.
+      // Bis die Datei gelesen ist, bleiben die Striche, die die Vorschau von ihr schon zeigte, und mit ihnen, ob sie gelesen waren.
+      // Mit demselben `marks` bleibt auch der Hintergrund: Nach einer Übergabe ist das der, den die verlassene Seite zeigte (in der
+      // Woche mit ihren Prioritäten).
       const before = shownNeighbors.current[side];
-      const background = before?.spec === spec ? before.page.background : spec.layout.background() + todayMarks(spec.layout, today) + (spec.marks ?? '');
       const same = before?.path === path ? before : null;
-      shownNow[side] = { spec, path, page: { strokes: same?.page.strokes ?? [], background }, read: same?.read ?? false };
+      const keep = same && (same.spec === spec || same.spec.marks === spec.marks);
+      const background = keep ? same.page.background : spec.layout.background() + todayMarks(spec.layout, today) + (spec.marks ?? '');
+      next[side] = { spec, path, page: { strokes: same?.page.strokes ?? [], background }, read: same?.read ?? false };
     }
-    show();
-    if (!shownNow.above && !shownNow.below) return; // ohne Nachbarn (Besprechung) gibt es nichts zu lesen
+    shownNeighbors.current = next;
+    surface.current?.setNeighbors(pagesOf(next));
+  }, [neighbors, today]);
+
+  // Die Dateien der Nachbarn: gelesen, sobald sie Nachbarn sind, und neu, wenn ein anderes Gerät eine davon ändert. Er liest nur, er
+  // schreibt nie, und er hängt nur an ihren Pfaden. Eine Antwort gilt, solange der Nachbar diesen Pfad hat, und je Nachbar zählt die
+  // neueste Anfrage. Die Seite, von der man durch Weiterscrollen kam, liest er nur nach einer fremden Änderung, wenn sie ihre Datei
+  // gelesen hatte (`keptFrom`): Bis dahin zeigt sie, was die Übergabe brachte.
+  const abovePath = neighbors?.above ? normalizePath(neighbors.above.path) : null;
+  const belowPath = neighbors?.below ? normalizePath(neighbors.below.path) : null;
+  useEffect(() => {
+    const paths: Record<Side, string | null> = { above: abovePath, below: belowPath };
+    if (!paths.above && !paths.below) return; // ohne Nachbarn (Besprechung) gibt es nichts zu lesen
+    let current = true;
+    // Je Nachbar zählt die neueste Anfrage: Antwortet eine frühere erst nach einer späteren, gilt die spätere.
+    const latest: Record<Side, number> = { above: 0, below: 0 };
+    const load = (side: Side) => {
+      const path = paths[side];
+      if (!path) return;
+      const mine = ++latest[side];
+      // Fehlt die Datei, lässt sie sich nicht lesen oder ist sie kaputt, zeigt die Vorschau nur das Papier. Gelesen ist sie, sobald
+      // die Engine geantwortet hat, auch mit „gibt es nicht“; ein Fehler lässt sie ungelesen.
+      engine
+        .read(path)
+        .then((text) => ({ strokes: text === null ? [] : parsePage(text).strokes, read: true }))
+        .catch(() => ({ strokes: [] as Stroke[], read: false }))
+        .then(({ strokes, read }) => {
+          const now = shownNeighbors.current[side];
+          if (!current || mine !== latest[side] || now?.path !== path) return;
+          const shownNow = { ...shownNeighbors.current, [side]: { ...now, page: { ...now.page, strokes }, read } };
+          shownNeighbors.current = shownNow;
+          surface.current?.setNeighbors(pagesOf(shownNow));
+        });
+    };
     // Ein Lesen der verlassenen Seite setzte in der Engine den Stand, auf dem ihre Sitzung schreibt, und die speichert vielleicht
     // noch. Ihre Striche hat die Vorschau schon aus der Übergabe.
     for (const side of SIDES) if (side !== keptFrom.current) load(side);
-    const stop = engine.addRemoteChangeListener((paths) => {
-      const changed = new Set(paths.map(normalizePath));
+    const stop = engine.addRemoteChangeListener((changed) => {
+      const touched = new Set(changed.map(normalizePath));
       for (const side of SIDES) {
-        const target = shownNow[side];
-        if (target && changed.has(target.path)) load(side);
+        const path = paths[side];
+        if (path && touched.has(path)) load(side);
       }
     });
     return () => {
       current = false;
       stop();
     };
-  }, [engine, neighbors, today]);
+  }, [engine, abovePath, belowPath]);
 
   // Die Karten liegen über der Fläche und fangen Berührungen und Rad ab, die auf ihnen beginnen. `watchCards` gibt der Seite, was
   // die Karte nicht selbst braucht: Finger, die ziehen oder zoomen, und das Rad. Auch das Tor gegen Handballen gilt auf den Karten.

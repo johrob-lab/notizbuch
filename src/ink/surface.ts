@@ -1,5 +1,5 @@
 import { boundsOf, emptyBox, growBox, lineWidth, type Box } from './bounds';
-import { chainSpan, neighborOffset, settledSide, SIDES, type Present, type Side } from './chain';
+import { chainSpan, neighborOffset, settledSide, sideAt, SIDES, type Present, type Side } from './chain';
 import { cutStroke, ERASER_PX, ERASER_STEP_PX, hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
 import { clampView, GestureFilter, gestureView, isFingerTap, isTwoFingerTap, SIDE_MARGIN_PX, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
 import { GRAIN, GRAIN_MIN_PX, grainMask } from './grain';
@@ -61,9 +61,11 @@ export type SurfaceOptions = {
    */
   noInk?: readonly (readonly [x: number, y: number, w: number, h: number])[];
   /**
-   * Weiterscrollen: Ein Zug mit Fingern oder der Maus ist zu Ende, und die Nachbarseite `side` (siehe `setNeighbors`) bedeckt
-   * die Mitte des Bildschirms (`settledSide`). Wer das hört, macht sie zur offenen Seite. `view` ist die Ansicht in diesem
-   * Moment, gerechnet in Einheiten dieser Seite. Ohne Nachbarn kommt es nie.
+   * Weiterscrollen: Die Nachbarseite `side` (siehe `setNeighbors`) soll die offene Seite werden. Das kommt, wenn sie die Mitte
+   * des Bildschirms bedeckt (`settledSide`), sobald ein Zug mit Fingern oder der Maus zu Ende ist oder das Mausrad
+   * `WHEEL_SETTLE_MS` lang stillsteht. Es kommt auch, wenn der Stift auf ihr oder im Spalt davor aufsetzt oder ein Finger oder
+   * die Maus dort tippt (`sideAt`): Dann schreibt der Stift nichts, und der Tipp gilt nicht der Seite (`onTap`). `view` ist die
+   * Ansicht in diesem Moment, gerechnet in Einheiten dieser Seite. Ohne Nachbarn kommt es nie.
    */
   onNeighbor?: (side: Side, view: View) => void;
   /**
@@ -114,6 +116,11 @@ const HEAVY_POINTS = 8000;
 /** Zoom als Vielfaches der normalen Größe (`fit`, die Seite füllt die Breite): kleiner als normal wird die Seite nie. */
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 10;
+/**
+ * So lange (ms) muss das Mausrad stillstehen, bis die Ansicht zur Ruhe kommt wie nach dem Loslassen eines Zugs: Bedeckt dann ein
+ * Nachbar die Mitte, wird er die offene Seite (`onNeighbor`). Jedes Rad-Ereignis, auch Zoomen mit Strg, beginnt die Zeit neu.
+ */
+export const WHEEL_SETTLE_MS = 250;
 /** Die Spitze beim Schweben ist auf dem Bildschirm mindestens so lang (Punkte), sonst wäre sie in normaler Größe kaum zu sehen. */
 const TIP_MIN_PX = 8;
 /** So lange (ms) bleibt die Spitze nach der letzten Schwebe-Meldung stehen. */
@@ -304,6 +311,8 @@ export class InkSurface {
   private liveArea: Box | null = null;
   private predArea: Box | null = null;
   private predTimer = 0;
+  /** Läuft ab, wenn das Mausrad `WHEEL_SETTLE_MS` lang stillsteht (siehe `onWheel`). */
+  private wheelTimer = 0;
   /** Messung der Schreibverzögerung, siehe `meter.ts`. */
   readonly meter = new InkMeter();
   private liveEvents = 0;
@@ -423,6 +432,14 @@ export class InkSurface {
   /** Wie viele Striche die Vorschau der Nachbarn zeigt, `null` für einen, den es nicht gibt. */
   get neighborStrokes(): { above: number | null; below: number | null } {
     return { above: this.neighbors.above?.strokes.length ?? null, below: this.neighbors.below?.strokes.length ?? null };
+  }
+
+  /**
+   * Der Hintergrund, den die Vorschau des Nachbarn `side` zeigt, als SVG-Text: der zuletzt gesetzte, auch solange sein Bild noch
+   * lädt. `null` ohne diesen Nachbarn.
+   */
+  neighborBackground(side: Side): string | null {
+    return this.neighbors[side]?.svg ?? null;
   }
 
   /** Die Seite, wie sie jetzt ist: eine Momentaufnahme, spätere Änderungen verändern sie nicht. */
@@ -548,6 +565,7 @@ export class InkSurface {
     cancelAnimationFrame(this.raf);
     this.stopMeter();
     clearTimeout(this.predTimer);
+    clearTimeout(this.wheelTimer);
     clearTimeout(this.flashTimer);
     this.flashEl?.remove();
     this.hideTip();
@@ -1374,6 +1392,16 @@ export class InkSurface {
     return { above: this.neighbors.above !== null, below: this.neighbors.below !== null };
   }
 
+  /** Der Nachbar an einem Ort der Fläche (Bildschirmpunkte), auch im Spalt vor ihm (`sideAt`). Auf der Seite selbst `null`. */
+  private neighborAt(at: Pt2): Side | null {
+    return sideAt(this.toPage(at.x, at.y).y, this.present());
+  }
+
+  /** Macht den Nachbarn `side` zur offenen Seite (siehe `onNeighbor`), mit der Ansicht, wie sie jetzt ist. */
+  private openNeighbor(side: Side): void {
+    this.opts.onNeighbor?.(side, { ...this.view });
+  }
+
   /** Eine Geste beginnt oder die Zahl der Finger ändert sich: Ab jetzt zählt, was die Finger von hier aus tun. */
   private rebaseGesture(): void {
     const g = (this.gesture ??= { revert: { ...this.view }, ref: this.view, from: [], moved: false, snapView: null });
@@ -1424,7 +1452,7 @@ export class InkSurface {
     this.render();
     const side = revert ? null : settledSide(this.view, { w: this.vw, h: this.vh }, this.present());
     if (!side || !this.opts.onNeighbor) return false;
-    this.opts.onNeighbor(side, { ...this.view });
+    this.openNeighbor(side);
     return true;
   }
 
@@ -1516,6 +1544,13 @@ export class InkSurface {
       this.forgetTaps();
       if (this.drawing) this.finishDraw(true);
       if (this.erasing) this.finishErase();
+      // Auf einer Nachbarseite oder im Spalt davor schreibt und radiert der Stift nicht, gleich welches Werkzeug gilt: Sein
+      // Aufsetzen macht sie zur offenen Seite. Erst der nächste Kontakt schreibt, dann auf ihr.
+      const side = this.neighborAt(this.local(e));
+      if (side) {
+        this.openNeighbor(side);
+        return;
+      }
       if (this.readOnly) return;
       this.capture(e);
       this.beginDraw(e);
@@ -1575,17 +1610,31 @@ export class InkSurface {
       this.forgetTaps(); // die Nachbarseite wird die offene: Hier zählt der Zug weder als Tipp noch als Rückgängig
       return;
     }
+    // Zwei Finger machen auf der offenen Seite rückgängig, auch wenn sie auf einem Nachbarn tippen.
     if (isTwoFingerTap(this.fingerLog)) this.undo();
-    else if (isFingerTap(this.tapLog)) this.opts.onTap?.(this.toPage(this.tapLog[0].x, this.tapLog[0].y));
+    else if (isFingerTap(this.tapLog)) this.tapAt(this.tapLog[0]);
     this.forgetTaps();
   };
+
+  /**
+   * Ein Finger oder die Maus hat an diesem Ort der Fläche getippt: Auf einem Nachbarn (oder im Spalt davor) wird er die offene
+   * Seite, sonst gilt der Tipp der Seite (`onTap`).
+   */
+  private tapAt(at: Pt2): void {
+    const side = this.neighborAt(at);
+    if (side) this.openNeighbor(side);
+    else this.opts.onTap?.(this.toPage(at.x, at.y));
+  }
 
   /** Der Stift verlässt die Fläche: Die Spitze beim Schweben geht mit. */
   private onLeave = (e: PointerEvent): void => {
     if (e.pointerType === 'pen') this.hideTip();
   };
 
-  /** Mausrad: blättern, mit Strg (oder Cmd, so meldet das Trackpad Zwei-Finger-Zoomen) zoomen. */
+  /**
+   * Mausrad: blättern, mit Strg (oder Cmd, so meldet das Trackpad Zwei-Finger-Zoomen) zoomen. Beides kann die Mitte in einen
+   * Nachbarn bringen: Steht das Rad danach `WHEEL_SETTLE_MS` lang still, gilt das wie das Loslassen eines Zugs (`wheelSettled`).
+   */
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
     this.refreshRect();
@@ -1597,5 +1646,27 @@ export class InkSurface {
     }
     this.clampView();
     this.scheduleRender();
+    this.awaitWheelRest();
+  };
+
+  /** Beginnt die Zeit bis zur Ruhe des Rads neu. */
+  private awaitWheelRest(): void {
+    clearTimeout(this.wheelTimer);
+    this.wheelTimer = window.setTimeout(this.wheelSettled, WHEEL_SETTLE_MS);
+  }
+
+  /**
+   * Das Rad steht still: Bedeckt ein Nachbar die Mitte, wird er die offene Seite. Liegt noch ein Finger, die Maus oder der Stift
+   * auf, wartet das, bis alles losgelassen ist: Ein Zug, der gerade läuft, soll nicht mitten drin auf einer anderen Seite landen.
+   */
+  private wheelSettled = (): void => {
+    this.wheelTimer = 0;
+    if (this.destroyed) return;
+    if (this.touches.size > 0 || this.drawing || this.erasing) {
+      this.awaitWheelRest();
+      return;
+    }
+    const side = settledSide(this.view, { w: this.vw, h: this.vh }, this.present());
+    if (side) this.openNeighbor(side);
   };
 }
