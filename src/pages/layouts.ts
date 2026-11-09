@@ -446,9 +446,9 @@ export function agendaMarks(l: Layout, dayData: (day: Day) => AgendaDay): string
     if (!f.id.startsWith('tag-')) continue;
     const day = f.id.slice(4);
     const { geburtstage, termine, prioritaeten } = dayData(day);
-    const termineItems = [...geburtstagItems(geburtstage ?? []), ...terminItems(termine)];
+    const gruppe = [...geburtstagItems(geburtstage ?? []), ...terminItems(termine)];
     const prios = l.kind === 'woche' ? prioItems(prioritaeten) : [];
-    if (termineItems.length === 0 && prios.length === 0) continue;
+    if (gruppe.length === 0 && prios.length === 0) continue;
     const [x, y, w] = f.rect;
     let area: Rect;
     let size: number;
@@ -461,15 +461,15 @@ export function agendaMarks(l: Layout, dayData: (day: Day) => AgendaDay): string
       area = [x + 190, y + 4, right - (x + 190), 42];
       size = 13;
       baselines = [y + 20, y + 38];
-      const both = termineItems.length > 0 && prios.length > 0;
+      const both = gruppe.length > 0 && prios.length > 0;
       rows = both
-        ? [fitLines(termineItems, 1, area[2], size), fitLines(prios, 1, area[2], size)]
-        : [fitLines(termineItems.length > 0 ? termineItems : prios, 2, area[2], size)];
+        ? [fitLines(gruppe, 1, area[2], size), fitLines(prios, 1, area[2], size)]
+        : [fitLines(gruppe.length > 0 ? gruppe : prios, 2, area[2], size)];
     } else {
       area = [x + 8, y + 4, 92, 28];
       size = 10.5;
       baselines = [y + 15, y + 28];
-      rows = [fitLines(termineItems, 2, area[2], size)];
+      rows = [fitLines(gruppe, 2, area[2], size)];
     }
     const lines = rows.flat();
     if (area[2] <= 0 || lines.length === 0) continue;

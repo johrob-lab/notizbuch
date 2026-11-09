@@ -1804,8 +1804,8 @@ body {
 .karte .tag.geburtstag::before {
   content: '';
   position: absolute;
-  top: 2px;
-  right: 3px;
+  top: 3px;
+  right: 4px;
   width: 6px;
   height: 6px;
   border-radius: 50%;

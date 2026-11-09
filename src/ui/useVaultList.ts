@@ -1,17 +1,19 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { normalizePath } from '../sync/paths';
 import type { SyncEngine } from '../sync/engine';
 
 /**
  * Die Einträge einer Datei des Vaults (zum Beispiel `Termine.md`), solange die Seite offen ist. `parse` macht aus dem Text die
  * Liste. Fehlt die Datei, lässt sie sich nicht lesen oder ist sie kaputt, ist die Liste leer: Die Seite lädt trotzdem. Ändert
- * ein anderes Gerät die Datei, kommt die neue Liste von selbst. `parse` muss eine Funktion eines Moduls sein (wie
- * `parseTermine`), dann bleibt sie dieselbe. Eine Funktion, die bei jedem Zeichnen neu entsteht, ließe den Effekt bei jedem
- * Zeichnen neu laufen und die Datei neu lesen. `path` darf in jeder Unicode-Form kommen (auch mit zerlegten Umlauten): Verglichen
- * wird mit der NFC-Form.
+ * ein anderes Gerät die Datei, kommt die neue Liste von selbst. Wirft `parse`, zählt das wie eine kaputte Datei: Die Liste ist
+ * leer. `parse` darf bei jedem Zeichnen neu entstehen (zum Beispiel als Pfeilfunktion im Aufruf): Eine neue Funktion gilt ab
+ * dem nächsten Lesen, sie löst kein Lesen aus. `path` darf in jeder Unicode-Form kommen (auch mit zerlegten Umlauten): Gelesen,
+ * verglichen und gemeldet wird mit der NFC-Form.
  */
 export function useVaultList<T>(engine: SyncEngine, path: string, parse: (text: string) => T[]): T[] {
   const [list, setList] = useState<T[]>([]);
+  const parseRef = useRef(parse);
+  parseRef.current = parse;
 
   useEffect(() => {
     const nfc = normalizePath(path);
@@ -20,10 +22,14 @@ export function useVaultList<T>(engine: SyncEngine, path: string, parse: (text: 
     let latest = 0;
     const load = () => {
       const mine = ++latest;
-      engine.read(path).then(
-        (text) => current && mine === latest && setList(text === null ? [] : parse(text)),
-        () => current && mine === latest && setList([]),
-      );
+      // Eine fehlgeschlagene Anfrage und ein `parse`, das wirft, enden beide im zweiten Schritt: leere Liste.
+      engine
+        .read(nfc)
+        .then((text) => (text === null ? [] : parseRef.current(text)))
+        .then(
+          (items) => current && mine === latest && setList(items),
+          () => current && mine === latest && setList([]),
+        );
     };
     load();
     const stop = engine.addRemoteChangeListener((paths) => {
@@ -33,7 +39,7 @@ export function useVaultList<T>(engine: SyncEngine, path: string, parse: (text: 
       current = false;
       stop();
     };
-  }, [engine, path, parse]);
+  }, [engine, path]);
 
   return list;
 }
