@@ -622,6 +622,16 @@ describe('agendaMarks', () => {
     expect(texts(svg)[0].y).toBe(106);
   });
 
+  test('too many long birthday names on the day page end in a rest in the colour of the appointments', () => {
+    const names = ['Maximilian Beispielmann-Musterfrau', 'Wilhelmine Musterfrau-Beispielmann', 'Bartholomaeus Beispielhuber-Muster', 'Konstantin Musterberger-Beispiel'];
+    const svg = agendaMarks(tagLayout('2026-10-29'), (d) => ({ geburtstage: names.map((n) => geb(n, d)), termine: [], prioritaeten: [] }));
+    const out = lines(svg);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatch(/<tspan fill="#55657a"> \+\d+<\/tspan>$/);
+    const plain = out[0].replace(/<[^>]*>/g, '');
+    expect(textWidth(plain, 16)).toBeLessThanOrEqual(732);
+  });
+
   test('names with special characters stay valid SVG', () => {
     const svg = agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: [geb('Anna & Ben <Beispiel> "B"')], termine: [], prioritaeten: [] }));
     expect(xmlProblem(`<svg xmlns="http://www.w3.org/2000/svg">${svg}</svg>`)).toBeNull();

@@ -416,6 +416,19 @@ function agendaLine(x: number, y: number, size: number, items: AgendaItem[], mor
   return `<text x="${num(x)}" y="${num(y)}"${attrs({ 'font-family': FONT, 'font-size': size, ...(anchor ? { 'text-anchor': anchor } : {}) })}>${body}${rest}</text>`;
 }
 
+/** Tagesseite: die Geburtstage des Tages rechtsbündig in der Zeile des Untertitels, sonst leer. */
+function dayHeadMarks(l: Layout, dayData: (day: Day) => AgendaDay): string {
+  const items = geburtstagItems(dayData(l.key).geburtstage ?? []);
+  const lines = fitLines(items, 1, DAY_BIRTHDAY_AREA[2], 16);
+  if (lines.length === 0) return '';
+  const id = `agenda-${l.key}`;
+  const [ax, , aw] = DAY_BIRTHDAY_AREA;
+  return (
+    `<clipPath id="${id}">${rect(DAY_BIRTHDAY_AREA)}</clipPath>` +
+    `<g clip-path="url(#${id})">${agendaLine(ax + aw, DAY_BIRTHDAY_BASELINE, 16, lines[0].items, lines[0].more, 'end')}</g>`
+  );
+}
+
 /**
  * Geburtstage, Termine und Prioritäten eines Tages als SVG-Text über dem Hintergrund, nur auf dem Bildschirm und nie
  * in der Datei (wie `todayMarks`). Woche: in der Kopfzeile des Tages rechts von Tageszahl und Wochentag, links vom
@@ -425,18 +438,8 @@ function agendaLine(x: number, y: number, size: number, items: AgendaItem[], mor
  * damit nie etwas darüber hinausläuft. Leer für die Besprechung und für Tage ohne Daten.
  */
 export function agendaMarks(l: Layout, dayData: (day: Day) => AgendaDay): string {
-  if (l.kind !== 'woche' && l.kind !== 'monat' && l.kind !== 'tag') return '';
-  if (l.kind === 'tag') {
-    const items = geburtstagItems(dayData(l.key).geburtstage ?? []);
-    const lines = fitLines(items, 1, DAY_BIRTHDAY_AREA[2], 16);
-    if (lines.length === 0) return '';
-    const id = `agenda-${l.key}`;
-    const [ax, , aw] = DAY_BIRTHDAY_AREA;
-    return (
-      `<clipPath id="${id}">${rect(DAY_BIRTHDAY_AREA)}</clipPath>` +
-      `<g clip-path="url(#${id})">${agendaLine(ax + aw, DAY_BIRTHDAY_BASELINE, 16, lines[0].items, lines[0].more, 'end')}</g>`
-    );
-  }
+  if (l.kind === 'tag') return dayHeadMarks(l, dayData);
+  if (l.kind !== 'woche' && l.kind !== 'monat') return '';
   const holiday = holidayLookup();
   let out = '';
   for (const f of l.fields) {

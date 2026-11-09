@@ -46,7 +46,7 @@ export function geburtstagItems(list: Geburtstag[]): AgendaItem[] {
 /** Zusatz für die Liste „Tage dieser Seite“: zum Beispiel `1 Geburtstag, 2 Termine, 1 Priorität`. Was 0 ist, fehlt; ohne alles ist er leer. */
 export function agendaInfo(day: AgendaDay): string {
   const geburtstage = (day.geburtstage ?? []).filter((g) => g.art === 'Geburtstag').length;
-  const jahrestage = (day.geburtstage ?? []).length - geburtstage;
+  const jahrestage = (day.geburtstage ?? []).filter((g) => g.art === 'Jahrestag').length;
   const termine = day.termine.length;
   const prioritaeten = day.prioritaeten.length;
   const parts: string[] = [];
