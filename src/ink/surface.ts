@@ -1,5 +1,5 @@
 import { boundsOf, emptyBox, growBox, lineWidth, type Box } from './bounds';
-import { chainSpan, neighborOffset, settledSide, type Present, type Side } from './chain';
+import { chainSpan, neighborOffset, settledSide, SIDES, type Present, type Side } from './chain';
 import { cutStroke, ERASER_PX, ERASER_STEP_PX, hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
 import { clampView, GestureFilter, gestureView, isFingerTap, isTwoFingerTap, SIDE_MARGIN_PX, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
 import { GRAIN, GRAIN_MIN_PX, grainMask } from './grain';
@@ -79,8 +79,6 @@ export type NeighborPage = { strokes: Stroke[]; background: string };
 /** Eine Nachbarseite, wie die Fläche sie zeigt. `image` ist ihr Hintergrund `svg` als Bild, sobald eines geladen ist. */
 type Neighbor = { strokes: Stroke[]; svg: string; image: HTMLImageElement | null };
 
-const SIDES: readonly Side[] = ['above', 'below'];
-
 /**
  * Ein Strich, der entsteht, mit Stift und Farbe des Strichs. `drawn` sagt, was schon fest auf der Live-Ebene steht: bei Linien das erste Segment, das
  * noch fehlt (siehe `live.ts`), bei Formen die Zahl der Punkte, deren Viereck vom vorigen Punkt und deren Kreis dort stehen.
@@ -152,6 +150,32 @@ function backgroundSrc(svg: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${PAGE_W}" height="${PAGE_H}" viewBox="0 0 ${PAGE_W} ${PAGE_H}">${svg}</svg>`,
   )}`;
+}
+
+/**
+ * Hintergründe, die schon als Bild geladen sind, nach ihrem SVG-Text, der zuletzt gebrauchte zuletzt. Eine neue Fläche zeigt so
+ * sofort, was die vorige eben noch zeigte: Beim Weiterscrollen wird die Vorschau des Nachbarn zum Hintergrund der neuen Seite
+ * und die bisherige Seite zu ihrem Nachbarn. Müsste das Bild erst laden, stünde die Seite einen Augenblick ohne Linien und
+ * Schrift da. Wenige genügen: die Seite und ihre zwei Nachbarn, dazu die der Fläche davor.
+ */
+const loadedBackgrounds = new Map<string, HTMLImageElement>();
+const KEEP_BACKGROUNDS = 6;
+
+/** Das schon geladene Bild zu einem Hintergrund, sonst `null`. */
+function loadedBackground(svg: string): HTMLImageElement | null {
+  const img = loadedBackgrounds.get(svg);
+  if (img) keepBackground(svg, img);
+  return img ?? null;
+}
+
+/** Merkt sich ein geladenes Bild als zuletzt gebraucht. Das am längsten nicht gebrauchte geht, wenn es zu viele sind. */
+function keepBackground(svg: string, img: HTMLImageElement): void {
+  loadedBackgrounds.delete(svg);
+  loadedBackgrounds.set(svg, img);
+  for (const oldest of loadedBackgrounds.keys()) {
+    if (loadedBackgrounds.size <= KEEP_BACKGROUNDS) break;
+    loadedBackgrounds.delete(oldest);
+  }
 }
 
 /** Was von einem neuen Strich auf der Live-Ebene steht, bevor etwas gezeichnet ist (siehe `Drawing.drawn`). */
@@ -527,7 +551,7 @@ export class InkSurface {
     clearTimeout(this.flashTimer);
     this.flashEl?.remove();
     this.hideTip();
-    this.neighbors = { above: null, below: null }; // ihre Bilder gehen mit
+    this.neighbors = { above: null, below: null }; // ihre Bilder gehen mit (die zuletzt gebrauchten hält `loadedBackgrounds`)
     for (const c of [this.base, this.live, this.pred, this.snap]) {
       c.remove();
       // Safari gibt den Speicher einer Zeichenfläche erst frei, wenn sie nichts mehr zu halten hat, und deckelt alle zusammen.
@@ -725,17 +749,25 @@ export class InkSurface {
   }
 
   /**
-   * Hintergrund als SVG-Bild, damit er bei jedem Zoom scharf bleibt. Gleicher Text: nichts neu laden. Mit `keepOld` bleibt das
-   * bisherige Bild stehen, bis das neue geladen ist: Bei jeder Eingabe im Kopf einer Besprechung ändert sich der Hintergrund,
-   * und eine Zeichnung zwischendurch zeigte kurz leeres Papier.
+   * Hintergrund als SVG-Bild, damit er bei jedem Zoom scharf bleibt. Gleicher Text: nichts neu laden. Ein Bild, das schon
+   * geladen ist (siehe `loadedBackgrounds`), gilt sofort. Mit `keepOld` bleibt das bisherige Bild stehen, bis das neue geladen
+   * ist: Bei jeder Eingabe im Kopf einer Besprechung ändert sich der Hintergrund, und eine Zeichnung zwischendurch zeigte kurz
+   * leeres Papier.
    */
   private setBackground(svg: string, keepOld = false): void {
     if (svg === this.backgroundSvg) return;
     this.backgroundSvg = svg;
+    const ready = svg ? loadedBackground(svg) : null;
+    if (ready) {
+      this.background = ready;
+      this.scheduleRender();
+      return;
+    }
     if (!keepOld) this.background = null;
     if (!svg) return;
     const img = new Image();
     img.onload = () => {
+      keepBackground(svg, img);
       if (this.destroyed || svg !== this.backgroundSvg) return;
       this.background = img;
       this.scheduleRender();
@@ -751,14 +783,18 @@ export class InkSurface {
     if (!next) return null;
     const before = this.neighbors[side];
     const svg = next.background;
-    if (svg && svg !== before?.svg) this.loadNeighborImage(side, svg);
-    return { strokes: next.strokes.slice(), svg, image: svg ? (before?.image ?? null) : null };
+    const changed = svg !== '' && svg !== before?.svg;
+    // Ein Bild, das schon geladen ist (siehe `loadedBackgrounds`), gilt sofort.
+    const ready = changed ? loadedBackground(svg) : null;
+    if (changed && !ready) this.loadNeighborImage(side, svg);
+    return { strokes: next.strokes.slice(), svg, image: ready ?? (svg ? (before?.image ?? null) : null) };
   }
 
   /** Lädt den Hintergrund eines Nachbarn als Bild. Es gilt nur, wenn der Nachbar dann noch genau diesen Hintergrund hat. */
   private loadNeighborImage(side: Side, svg: string): void {
     const img = new Image();
     img.onload = () => {
+      keepBackground(svg, img);
       const n = this.neighbors[side];
       if (this.destroyed || !n || n.svg !== svg) return;
       n.image = img;

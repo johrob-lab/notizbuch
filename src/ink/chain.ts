@@ -10,6 +10,8 @@ export const PAGE_GAP = 24;
 
 /** Der Nachbar über oder unter der offenen Seite. */
 export type Side = 'above' | 'below';
+/** Beide Nachbarn, der obere zuerst. */
+export const SIDES: readonly Side[] = ['above', 'below'];
 /** Welche Nachbarn es gibt (die erste Seite hat keinen oberen, die letzte keinen unteren). */
 export type Present = { above: boolean; below: boolean };
 
