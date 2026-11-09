@@ -310,8 +310,8 @@ export class InkSurface {
   private tapLog: FingerEvent[] = [];
   /** Der Stift, von dem das Tor gegen Handballen weiß, dass er aufliegt (`pointerId`), bis er abhebt. */
   private penKnown: number | null = null;
-  /** Hört nicht mehr auf das Ende eines Stifts, den die Fläche erst unterwegs bemerkt hat (siehe `noticePen`). */
-  private stopPenEnd: (() => void) | null = null;
+  /** Der Stift, den die Fläche erst unterwegs bemerkt hat (siehe `noticePen`), und wie sie aufhört, auf sein Ende zu hören. */
+  private noticed: { id: number; stop: () => void } | null = null;
   private gesture: Gesture | null = null;
   private liveArea: Box | null = null;
   private predArea: Box | null = null;
@@ -573,7 +573,7 @@ export class InkSurface {
     this.stopMeter();
     clearTimeout(this.predTimer);
     clearTimeout(this.wheelTimer);
-    this.forgetPenEnd();
+    this.forgetNoticedPen();
     clearTimeout(this.flashTimer);
     this.flashEl?.remove();
     this.hideTip();
@@ -1620,39 +1620,52 @@ export class InkSurface {
       this.logFinger(e, 'move');
       this.moveGesture();
     } else if (e.pointerType === 'pen') {
+      // Auf liegt der Stift nur, wenn die Spitze berührt (Taste 1). Mit gedrückter Taste am Schaft oder Radiertaste schwebt er nur.
+      if ((e.buttons & 1) !== 0) {
+        if (this.penKnown !== e.pointerId) this.noticePen(e);
+        return;
+      }
+      // Schwebt ein bemerkter Stift, hat er abgehoben, auch wenn sein Abheben nirgends ankam: Das Tor geht wieder auf.
+      if (this.noticed?.id === e.pointerId) this.releaseNoticedPen(e.timeStamp);
       if (e.buttons === 0) this.hover(e);
-      else if (this.penKnown !== e.pointerId) this.noticePen(e);
     }
   };
 
   /**
    * Ein Stift liegt auf, aber sein Aufsetzen kam bei der Seite davor an, die dann zu dieser wechselte (er setzte auf ihrem Nachbarn
    * auf). Das Tor gegen Handballen erfährt es einmal: Sonst nähme es die Hand, die noch aufliegt, als Finger. Sein Ende hört das
-   * Fenster, denn er kann auch über der Leiste oder einer Karte abheben, wo es nie bei der Fläche ankäme (wie bei den Karten): So
-   * geht das Tor auf jeden Fall wieder auf.
+   * Fenster, denn er kann auch über der Leiste oder einer Karte abheben, wo es nie bei der Fläche ankäme (wie bei den Karten). Kommt
+   * es gar nicht, geht das Tor auf, sobald er wieder schwebt (`onMove`): So bleibt es nie zu.
    */
   private noticePen(e: PointerEvent): void {
     const id = e.pointerId;
+    this.forgetNoticedPen();
     this.penKnown = id;
     this.filter.penDown(e.timeStamp);
-    this.forgetPenEnd();
     const end = (ev: PointerEvent): void => {
-      if (ev.pointerId !== id) return;
-      this.forgetPenEnd();
-      if (this.penKnown === id) this.penKnown = null;
-      this.filter.penUp(ev.timeStamp);
+      if (ev.pointerId === id) this.releaseNoticedPen(ev.timeStamp);
     };
     window.addEventListener('pointerup', end, true);
     window.addEventListener('pointercancel', end, true);
-    this.stopPenEnd = () => {
+    const stop = (): void => {
       window.removeEventListener('pointerup', end, true);
       window.removeEventListener('pointercancel', end, true);
     };
+    this.noticed = { id, stop };
   }
 
-  private forgetPenEnd(): void {
-    this.stopPenEnd?.();
-    this.stopPenEnd = null;
+  /** Der bemerkte Stift hat abgehoben (zur Zeit `at`): Das Tor geht wieder auf, und die Fläche hört nicht mehr auf sein Ende. */
+  private releaseNoticedPen(at: number): void {
+    const n = this.noticed;
+    if (!n) return;
+    this.forgetNoticedPen();
+    if (this.penKnown === n.id) this.penKnown = null;
+    this.filter.penUp(at);
+  }
+
+  private forgetNoticedPen(): void {
+    this.noticed?.stop();
+    this.noticed = null;
   }
 
   private onUp = (e: PointerEvent): void => {

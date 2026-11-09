@@ -1182,3 +1182,50 @@ test('after a click opened the next day, turning the wheel a little does not go 
   await page.waitForTimeout(400);
   expect(await hash(page)).toBe('#/tag/2026-10-30');
 });
+
+/** Der Stift bewegt sich über `at` (Seiteneinheiten der offenen Seite) mit diesen Tasten (`buttons`), ohne Druck. */
+const penMoveWith = (page: Page, at: [number, number], buttons: number) =>
+  page.evaluate(
+    ({ at: [x, y], buttons: pressed }) => {
+      const live = document.querySelector('[data-testid="surface"] canvas[data-layer="live"]')!;
+      const c = window.__notizbuch.toClient(x, y);
+      const init = { pointerId: 11, pointerType: 'pen', isPrimary: true, pressure: 0, clientX: c.x, clientY: c.y, button: -1, buttons: pressed };
+      live.dispatchEvent(new PointerEvent('pointermove', { ...init, bubbles: true, cancelable: true, composed: true }));
+    },
+    { at, buttons },
+  );
+
+test('a pen hovering with a button held leaves the fingers working', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  // Mit gedrückter Taste am Schaft (2) oder Radiertaste (32) schwebt der Stift nur, er liegt nicht auf: Finger schieben weiter.
+  for (const buttons of [2, 32]) {
+    await penMoveWith(page, [600, 900], buttons);
+    const before = await viewOf(page);
+    await touch(page).stroke([
+      [300, 900],
+      [300, 850],
+    ]);
+    expect((await viewOf(page)).y, `Taste ${buttons}`).toBeLessThan(before.y - 20);
+  }
+});
+
+test('a pen that opened the neighbour and hovers again without a lift that arrived leaves the fingers working', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 0 });
+  await scrollUntil(page, NEXT_IN_VIEW);
+  await pen(page).down(...ON_NEXT);
+  await waitForPageOf(page, 'tag', '2026-10-30');
+  await penMoveWith(page, [600, 220], 1); // liegt auf: Das Tor gegen Handballen ist zu
+
+  // Sein Abheben kam nirgends an, aber er schwebt wieder: Dann liegt er nicht mehr auf, und das Tor geht wieder auf.
+  await penMoveWith(page, [600, 260], 0);
+  await toolButton(page, 'Ganze Seite').click();
+  await afterPalmWindow(page);
+  const fitted = await viewOf(page);
+  await touch(page).stroke([
+    [300, 800],
+    [300, 700],
+  ]);
+  expect((await viewOf(page)).y).toBeLessThan(fitted.y - 50);
+});
