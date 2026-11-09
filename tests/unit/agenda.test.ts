@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { fitLines, moreLabel, SEPARATOR, prioItems, terminItems, textWidth, type AgendaItem } from '../../src/pages/agenda';
+import { agendaInfo, fitLines, moreLabel, SEPARATOR, prioItems, terminItems, textWidth, type AgendaItem } from '../../src/pages/agenda';
 import type { Termin } from '../../src/lib/termine';
 
 const day = '2026-10-29';
@@ -109,4 +109,12 @@ test('an item that does not fit even as an ellipse is not drawn, so no line gets
   expect(fitLines([{ text: 'abc', tone: 'termin' }], 1, narrow, 13)[0].items[0].text).toBe('…');
   // In einer Folgezeile fällt der Eintrag weg, die Zeile bleibt innerhalb der Breite.
   for (const l of fitLines(items(4), 2, 5, 13)) expect(textWidth(l.items.map((i) => i.text).join(SEPARATOR), 13)).toBeLessThanOrEqual(5);
+});
+
+test('the day list names how many appointments and priorities a day has, leaving out what is 0', () => {
+  expect(agendaInfo(2, 1)).toBe('2 Termine, 1 Priorität');
+  expect(agendaInfo(1, 3)).toBe('1 Termin, 3 Prioritäten');
+  expect(agendaInfo(1, 0)).toBe('1 Termin');
+  expect(agendaInfo(0, 2)).toBe('2 Prioritäten');
+  expect(agendaInfo(0, 0)).toBe('');
 });

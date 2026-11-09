@@ -332,7 +332,8 @@ test('the day numbers are links, too, and the keyboard opens them', async ({ pag
   const days = page.getByRole('navigation', { name: 'Tage dieser Seite' }).getByRole('link');
   await expect(days).toHaveCount(31);
   await expect(link(page, 'Mo 26.10.2026, Nationalfeiertag')).toHaveAttribute('href', '#/tag/2026-10-26');
-  const today = link(page, 'Do 29.10.2026');
+  // Der 29.10. hat im Mini-Vault einen Termin: Das steht im Namen dazu.
+  const today = link(page, 'Do 29.10.2026, 1 Termin');
   await expect(today).toHaveAttribute('aria-current', 'date');
   await expect(link(page, 'Mi 28.10.2026')).not.toHaveAttribute('aria-current', 'date');
   await today.focus();

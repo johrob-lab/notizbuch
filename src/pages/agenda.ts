@@ -33,6 +33,14 @@ export function prioItems(list: Prioritaet[]): AgendaItem[] {
   return list.map((p) => (p.done ? { text: `✓ ${p.text}`, tone: 'erledigt' } : { text: `▸ ${p.text}`, tone: 'prio' }));
 }
 
+/** Zusatz für die Liste „Tage dieser Seite“: zum Beispiel `2 Termine, 1 Priorität`. Was 0 ist, fehlt; ohne beides ist er leer. */
+export function agendaInfo(termine: number, prioritaeten: number): string {
+  const parts: string[] = [];
+  if (termine > 0) parts.push(`${termine} ${termine === 1 ? 'Termin' : 'Termine'}`);
+  if (prioritaeten > 0) parts.push(`${prioritaeten} ${prioritaeten === 1 ? 'Priorität' : 'Prioritäten'}`);
+  return parts.join(', ');
+}
+
 /** Geschätzte Breite eines Textes: 0,58 der Schriftgröße je Zeichen (ein Emoji zählt als ein Zeichen). */
 export function textWidth(s: string, size: number): number {
   return Array.from(s).length * size * 0.58;
