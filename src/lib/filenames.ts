@@ -7,6 +7,9 @@ const MAX_THEMA_LENGTH = 80;
 /** Die Terminliste, die das Morgenbriefing schreibt. Die App liest sie nur. */
 export const TERMINE_PATH = '04 Ressourcen/Kalender/Termine.md';
 
+/** Die Geburtstage und Jahrestage, die das Morgenbriefing schreibt. Die App liest sie nur. */
+export const GEBURTSTAGE_PATH = '04 Ressourcen/Kalender/Geburtstage.md';
+
 export function dailyNotePath(d: Day): string {
   return `${DAILY_NOTES_DIR}/${d}.md`;
 }
