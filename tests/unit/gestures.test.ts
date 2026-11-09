@@ -238,3 +238,12 @@ test('stillTap: a finger that was down when the pen came down, or that holds, ne
   expect(g.stillTap(m, 1450)).toBe(false); // der Stift setzte auf, während der Finger lag
   expect(g.stillTap(g.mark(2000), 2100)).toBe(true); // ein neuer Finger danach darf tippen
 });
+
+test('clampView lets the page move into the neighbours, but keeps 60 px of the chain on the screen', () => {
+  const size = { w: 1000, h: 1600 };
+  const page = { w: 1192, h: 1590 };
+  const span = { top: -1614, bottom: 3204 };
+  expect(clampView({ s: 0.5, x: 0, y: -5000 }, size, page, span).y).toBe(60 - 3204 * 0.5);
+  expect(clampView({ s: 0.5, x: 0, y: 5000 }, size, page, span).y).toBe(1600 - 60 + 1614 * 0.5);
+  expect(clampView({ s: 0.5, x: 0, y: -5000 }, size, page).y).toBe(60 - 1590 * 0.5); // ohne Bereich wie bisher
+});
