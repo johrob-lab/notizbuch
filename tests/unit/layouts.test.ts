@@ -1,8 +1,10 @@
-import { afterEach, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { mergePages, parsePage, serializePage } from '../../src/ink/svg';
 import { MM, PAGE_H, PAGE_W, type Page } from '../../src/ink/types';
 import { monthGrid, weekDays } from '../../src/lib/dates';
+import type { Termin } from '../../src/lib/termine';
 import {
+  agendaMarks,
   besprechungLayout,
   monatLayout,
   tagLayout,
@@ -10,6 +12,7 @@ import {
   tapTargets,
   todayMarks,
   wocheLayout,
+  type AgendaDay,
   type Layout,
 } from '../../src/pages/layouts';
 
@@ -471,4 +474,110 @@ test('today is marked on the screen only, and only on a page that shows it', () 
   expect(todayMarks(besprechungLayout(MEETING), '2026-10-29')).toBe('');
   // Die Marke für zwei verschiedene Tage ist verschieden
   expect(todayMarks(week, '2026-10-28')).not.toBe(mark);
+});
+
+describe('agendaMarks', () => {
+  const lang = (n: number, titel = 'Besprechung') =>
+    Array.from({ length: n }, (_, i): Termin => ({ date: '2026-10-28', start: `${String(8 + i).padStart(2, '0')}:00`, end: '23:00', allDay: false, title: `${titel} Nummer ${i}` }));
+  const termin = (title: string, date = '2026-10-28'): Termin => ({ date, allDay: true, title });
+  const prio = [{ text: 'Angebot prüfen', done: false }];
+  const only = (day: string, data: AgendaDay) => (d: string): AgendaDay => (d === day ? data : { termine: [], prioritaeten: [] });
+  const texts = (svg: string) => [...svg.matchAll(/<text x="([\d.]+)" y="([\d.]+)"([^>]*)>/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]), attrs: m[3] }));
+  const clips = (svg: string) =>
+    [...svg.matchAll(/<clipPath id="([^"]+)"><rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)"\/><\/clipPath>/g)].map((m) => ({
+      id: m[1],
+      rect: [Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])],
+    }));
+
+  test('the week shows appointments in line 1 and priorities in line 2 of the day head', () => {
+    const woche = wocheLayout('2026-W44');
+    const [x, top] = fieldRect(woche, 'tag-2026-10-28');
+    const svg = agendaMarks(woche, only('2026-10-28', { termine: [termin('Abstimmung')], prioritaeten: prio }));
+    const t = texts(svg);
+    expect(t).toHaveLength(2);
+    expect(t[0].x).toBe(48 + 190);
+    expect(t[1].x).toBe(48 + 190);
+    expect(t[0].y).toBeGreaterThan(top);
+    expect(t[1].y).toBeLessThanOrEqual(top + 49);
+    expect(t[0].y).toBeLessThan(t[1].y);
+    expect(t[0].attrs).toContain('font-size="13"');
+    expect(x).toBe(48);
+    expect(svg).toContain('fill="#55657a"');
+    expect(svg).toContain('fill="#3d434d"');
+    expect(svg.indexOf('#55657a')).toBeLessThan(svg.indexOf('#3d434d'));
+  });
+
+  test('the rest label takes the colour of its line', () => {
+    const woche = wocheLayout('2026-W44');
+    const many = Array.from({ length: 12 }, (_, i) => ({ text: `Aufgabe Nummer ${i}`, done: false }));
+    const svg = agendaMarks(woche, only('2026-10-28', { termine: lang(12), prioritaeten: many }));
+    const [termLine, prioLine] = [...svg.matchAll(/<text [^>]*>.*?<\/text>/g)].map((m) => m[0]);
+    expect(termLine).toMatch(/<tspan fill="#55657a"> \+\d+<\/tspan><\/text>$/);
+    expect(prioLine).toMatch(/<tspan fill="#3d434d"> \+\d+<\/tspan><\/text>$/);
+  });
+
+  test('with only one kind it gets both lines', () => {
+    const woche = wocheLayout('2026-W44');
+    const svg = agendaMarks(woche, only('2026-10-28', { termine: lang(3), prioritaeten: [] }));
+    expect(texts(svg)).toHaveLength(2);
+    expect(svg).toContain('#55657a');
+    expect(svg).not.toContain('#3d434d');
+  });
+
+  test('a holiday name keeps its place', () => {
+    const woche = wocheLayout('2026-W44');
+    const withHoliday = clips(agendaMarks(woche, only('2026-10-26', { termine: [termin('Frei', '2026-10-26')], prioritaeten: [] })))[0].rect;
+    const without = clips(agendaMarks(woche, only('2026-10-28', { termine: [termin('Abstimmung')], prioritaeten: [] })))[0].rect;
+    expect(without[0] + without[2]).toBe(48 + 600 - 14);
+    expect(withHoliday[0]).toBe(48 + 190);
+    expect(withHoliday[0] + withHoliday[2]).toBeLessThan(48 + 600 - 14 - 100);
+  });
+
+  test('the month shows only appointments, top left in the cell, left of the day number and the circle for today', () => {
+    const monat = monatLayout('2026-10');
+    const [x, y] = fieldRect(monat, 'tag-2026-10-28');
+    const svg = agendaMarks(monat, () => ({ termine: [termin('Abstimmung')], prioritaeten: prio }));
+    const c = clips(svg).find((k) => k.id === 'agenda-2026-10-28')!;
+    expect(c.rect).toEqual([x + 8, y + 4, 92, 28]);
+    expect(svg).toContain('font-size="10.5"');
+    expect(svg).not.toContain('#3d434d');
+    expect(svg).not.toContain('Angebot');
+    expect(clips(svg)).toHaveLength(31);
+    expect(clips(svg).some((k) => k.id === 'agenda-2026-11-01')).toBe(false);
+  });
+
+  test('special characters stay valid SVG', () => {
+    const woche = wocheLayout('2026-W44');
+    const svg = agendaMarks(woche, (d) =>
+      d === '2026-10-28'
+        ? { termine: [{ date: d, allDay: true, title: '<b>&"x"</b> 🙂' }], prioritaeten: [{ text: '<i>&', done: true }] }
+        : d === '2026-10-29'
+          ? { termine: [termin('x'.repeat(80), d)], prioritaeten: [] }
+          : { termine: [], prioritaeten: [] },
+    );
+    const wrapped = `<svg xmlns="http://www.w3.org/2000/svg">${svg}</svg>`;
+    // happy-dom lässt ein rohes < oder & im Text durch, darum zusätzlich der strenge Helfer.
+    expect(xmlProblem(wrapped)).toBeNull();
+    expect(new DOMParser().parseFromString(wrapped, 'image/svg+xml').querySelector('parsererror')).toBeNull();
+    expect(svg).toContain('&lt;b&gt;&amp;');
+    expect(svg).toContain('&lt;i&gt;&amp;');
+    expect(svg).not.toContain('x'.repeat(80));
+    expect(svg).toMatch(/x+…/);
+  });
+
+  test('days without data and day pages give nothing', () => {
+    expect(agendaMarks(tagLayout('2026-10-29'), () => ({ termine: [termin('A', '2026-10-29')], prioritaeten: prio }))).toBe('');
+    expect(agendaMarks(besprechungLayout(MEETING), () => ({ termine: [termin('A')], prioritaeten: prio }))).toBe('');
+    expect(agendaMarks(wocheLayout('2026-W44'), () => ({ termine: [], prioritaeten: [] }))).toBe('');
+  });
+
+  test('the marks never touch the background', () => {
+    const woche = wocheLayout('2026-W44');
+    const before = woche.background();
+    const svg = agendaMarks(woche, only('2026-10-28', { termine: [termin('Abstimmung')], prioritaeten: prio }));
+    expect(svg).not.toBe('');
+    expect(woche.background()).toBe(before);
+    expect(before).not.toContain('agenda');
+    expect(before).not.toContain('Abstimmung');
+  });
 });

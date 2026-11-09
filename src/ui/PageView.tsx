@@ -8,7 +8,7 @@ import { inkPrefs } from './inkPrefs';
 import { inkTools } from './inkTools';
 import { InkSurface } from '../ink/surface';
 import type { FieldBox, Page } from '../ink/types';
-import { todayVienna } from '../lib/dates';
+import { todayVienna, type Day } from '../lib/dates';
 import type { VollbildWerkzeuge } from '../lib/settings';
 import { tapTargetAt, tapTargets, todayMarks, type Layout } from '../pages/layouts';
 import type { SyncEngine } from '../sync/engine';
@@ -92,6 +92,14 @@ type Props = PageProps & {
    * stehen in Seiteneinheiten, 1192 mal 1590 Punkte groß. Der Stift schreibt nicht in den Rechtecken der Karten (`Layout.cards`).
    */
   overlay?: ComponentChildren;
+  /**
+   * SVG nur für den Bildschirm, über dem Hintergrund und der Markierung für heute: die Termine und Prioritäten in Woche und
+   * Monat. Es kommt nie in die Datei. Ändert es sich, zeigt die Fläche es, ohne neu zu entstehen: Striche, Rückgängig, Ansicht
+   * und ein Strich, der gerade entsteht, bleiben. Seiten mit Kopfdaten zeigen ihren eigenen Hintergrund und kein `marks`.
+   */
+  marks?: string;
+  /** Zusatz zum Namen eines Tages in der Liste „Tage dieser Seite“, zum Beispiel `2 Termine, 1 Priorität`. Leer heißt: keiner. */
+  dayInfo?: (day: Day) => string;
 };
 
 const UNREADABLE = 'Diese Seite lässt sich nicht lesen und wird nicht verändert.';
@@ -99,8 +107,16 @@ const TOO_NEW = 'Diese Seite stammt aus einer neueren Version der App. Bitte neu
 const BLOCKED = 'Die App öffnet diese Seite nicht, denn Wörter wie Passwort sind im Dateinamen nicht erlaubt.';
 const NOT_LOADED = 'Diese Seite konnte nicht geladen werden. Neuer Versuch, sobald das Netz da ist.';
 
-/** Testzugang: nur lesen, enthält keine Geheimnisse. Er steht da, sobald die Seite gelesen ist. */
-type TestAccess = { currentPage(): Page; toClient(x: number, y: number): { x: number; y: number }; liveStats(): { events: number; ptsMax: number } };
+/**
+ * Testzugang: nur lesen, enthält keine Geheimnisse. Er steht da, sobald die Seite gelesen ist. `screenBackground` ist der
+ * Hintergrund, den die Fläche gerade zeigt, mit allem, was nur auf dem Bildschirm steht.
+ */
+type TestAccess = {
+  currentPage(): Page;
+  toClient(x: number, y: number): { x: number; y: number };
+  liveStats(): { events: number; ptsMax: number };
+  screenBackground(): string;
+};
 const testAccessHolder = (): { __notizbuch?: TestAccess } => window as unknown as { __notizbuch?: TestAccess };
 
 /**
@@ -114,7 +130,7 @@ function placeCards(layer: HTMLElement | null, view: View): void {
 }
 
 export function PageView(p: Props) {
-  const { engine, layout, path, sigma, prediction, kopf, overlay } = p;
+  const { engine, layout, path, sigma, prediction, kopf, overlay, marks = '' } = p;
   // Das zweite Fenster eines Geräts (die Engine liest nur) schreibt nichts, auch keine Kopfdaten.
   const locked = engine.readOnly;
   const readOnly = p.readOnly || locked;
@@ -131,6 +147,12 @@ export function PageView(p: Props) {
   // Heute, solange die Seite offen ist: Die Markierung und `aria-current` sollen sich nicht mitten im Schreiben ändern.
   const [today] = useState(() => todayVienna());
   const days = useMemo(() => tapTargets(layout), [layout]);
+  // Was die Fläche ohne `marks` als Hintergrund zeigt: den Hintergrund der Seite (nur er kommt in die Datei) und die Markierung
+  // für heute.
+  const shown = useMemo(() => layout.background() + todayMarks(layout, today), [layout, today]);
+  // Das `marks`, das die Fläche zeigt. Zeigt die Sitzung die Seite neu (`setPage`), nimmt sie es mit. Neu wird es erst in dem
+  // Effekt, der es auch zeigt (unten): Bis dahin bleibt die Sitzung bei dem, was zu sehen ist.
+  const marksRef = useRef(marks);
   const [phase, setPhase] = useState<Phase>('laden');
   // Eine Seite aus einer neueren Version: Vielleicht liegt diese schon bereit, dann lädt die App sie im ruhigen Moment.
   useEffect(() => {
@@ -151,11 +173,10 @@ export function PageView(p: Props) {
       const page: Page = { kind: layout.kind, key: layout.key, meta: {}, strokes: [] };
       return head ? head.complete(page) : page;
     };
-    // In die Datei kommt der Hintergrund der Seite, auf den Bildschirm dazu die Markierung für heute. Eine Seite mit
-    // Kopfdaten zeigt sie im Hintergrund: Er gehört zu den Kopfdaten, die gerade gelten.
+    // In die Datei kommt der Hintergrund der Seite, auf den Bildschirm dazu die Markierung für heute und das neueste `marks`.
+    // Eine Seite mit Kopfdaten zeigt sie im Hintergrund: Er gehört zu den Kopfdaten, die gerade gelten.
     const background = layout.background();
-    const shown = background + todayMarks(layout, today);
-    const shownFor = (meta: Record<string, string>): string => (head ? head.layoutFor(meta).background : shown);
+    const shownFor = (meta: Record<string, string>): string => (head ? head.layoutFor(meta).background : shown + marksRef.current);
 
     const view: InkSurface = new InkSurface(el, {
       readOnly: true, // bis die Seite gelesen ist
@@ -192,7 +213,12 @@ export function PageView(p: Props) {
     });
     surface.current = view;
 
-    const access: TestAccess = { currentPage: () => view.getPage(), toClient: (x, y) => view.toClient(x, y), liveStats: () => view.liveStats() };
+    const access: TestAccess = {
+      currentPage: () => view.getPage(),
+      toClient: (x, y) => view.toClient(x, y),
+      liveStats: () => view.liveStats(),
+      screenBackground: () => view.shownBackground,
+    };
     const session = new PageSession({
       engine,
       path,
@@ -231,7 +257,14 @@ export function PageView(p: Props) {
       session.close();
       view.destroy();
     };
-  }, [engine, layout, path, days, today, readOnly, locked, sigma, prediction, palm]);
+  }, [engine, layout, path, days, shown, readOnly, locked, sigma, prediction, palm]);
+
+  // Neue Termine und Prioritäten zeigt die Fläche an Ort und Stelle. Darum steht `marks` nicht im Effekt oben: Eine neue Fläche
+  // verlöre den Strich, der gerade entsteht, und den Verlauf für Rückgängig. Dieser Effekt läuft nach jenem, die Fläche ist da.
+  useEffect(() => {
+    marksRef.current = marks;
+    if (!kopfRef.current) surface.current?.showBackground(shown + marks);
+  }, [shown, marks]);
 
   // Die Karten liegen über der Fläche und fangen Berührungen und Rad ab, die auf ihnen beginnen. `watchCards` gibt der Seite, was
   // die Karte nicht selbst braucht: Finger, die ziehen oder zoomen, und das Rad. Auch das Tor gegen Handballen gilt auf den Karten.
@@ -332,11 +365,14 @@ export function PageView(p: Props) {
         {/* Die Tageszahlen sind auf der Seite gezeichnet. Als Links sind sie auch mit der Tastatur und für Sprachausgabe da. */}
         {days.length > 0 && (
           <nav class="tage" aria-label="Tage dieser Seite">
-            {days.map((d) => (
-              <a key={d.day} href={routeHash({ view: 'tag', key: d.day })} aria-current={d.day === today ? 'date' : undefined}>
-                {d.label}
-              </a>
-            ))}
+            {days.map((d) => {
+              const info = p.dayInfo?.(d.day);
+              return (
+                <a key={d.day} href={routeHash({ view: 'tag', key: d.day })} aria-current={d.day === today ? 'date' : undefined}>
+                  {info ? `${d.label}, ${info}` : d.label}
+                </a>
+              );
+            })}
           </nav>
         )}
         {/* Die Hinweise liegen über der Fläche, damit sie die Seite nicht verschieben, wenn sie kommen oder gehen. */}

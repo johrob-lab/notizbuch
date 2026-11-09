@@ -17,6 +17,8 @@ declare global {
       toClient(x: number, y: number): { x: number; y: number };
       /** Zählt die Stiftbewegungen und die meisten Punkte, die eine Bewegung neu gezeichnet hat (seit dem Öffnen der Seite). */
       liveStats(): { events: number; ptsMax: number };
+      /** Was die Fläche gerade als Hintergrund zeigt (SVG-Text), mit allem, was nur auf dem Bildschirm steht. */
+      screenBackground(): string;
     };
   }
 }

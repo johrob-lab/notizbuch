@@ -339,6 +339,20 @@ export class InkSurface {
     this.setBackground(background, true);
   }
 
+  /**
+   * Zeigt einen anderen Hintergrund (fertiges SVG wie bei `setPage`), zum Beispiel mit neuen Terminen, ohne die Striche, den
+   * Verlauf für Rückgängig und die Ansicht anzutasten. Ein Strich im Gang bleibt, und bis das neue Bild geladen ist, bleibt das
+   * alte stehen. Gemeldet wird nichts: Die Seite selbst ist dieselbe.
+   */
+  showBackground(svg: string): void {
+    this.setBackground(svg, true);
+  }
+
+  /** Der Hintergrund, den die Fläche zeigt, als SVG-Text: der zuletzt gesetzte, auch solange sein Bild noch lädt. */
+  get shownBackground(): string {
+    return this.backgroundSvg;
+  }
+
   /** Die Seite, wie sie jetzt ist: eine Momentaufnahme, spätere Änderungen verändern sie nicht. */
   getPage(): Page {
     return { ...this.head, meta: { ...this.head.meta }, strokes: this.strokes.slice() };
