@@ -10,7 +10,12 @@ export type AgendaItem = { text: string; tone: 'termin' | 'prio' | 'erledigt' };
 /** Eine Zeile: die gezeigten Einträge und die Zahl der Einträge, die nicht mehr hineinpassten (nur in der letzten Zeile). */
 export type AgendaLine = { items: AgendaItem[]; more: number };
 
-const SEPARATOR = ' · ';
+/** Trenner zwischen zwei Einträgen einer Zeile. Gemessen (hier) und gezeichnet (`agendaMarks`) wird mit demselben Text. */
+export const SEPARATOR = ' · ';
+
+/** Der Rest am Ende der letzten Zeile: die Zahl der Einträge, die nicht mehr hineinpassten. */
+export const moreLabel = (n: number): string => ` +${n}`;
+
 const ELLIPSIS = '…';
 
 /**
@@ -35,12 +40,16 @@ export function textWidth(s: string, size: number): number {
 
 const joined = (list: AgendaItem[]): string => list.map((i) => i.text).join(SEPARATOR);
 
-/** Der Text mit Ellipse am Ende, so dass er höchstens `width` breit ist. Passt nicht einmal die Ellipse, bleibt sie allein. */
-function shorten(s: string, size: number, width: number): string {
+/**
+ * Der Text mit Ellipse am Ende (ohne Leerraum davor), so dass er höchstens `width` breit ist. Passt nicht einmal die
+ * Ellipse, gibt es `undefined`: Der Eintrag wird dann gar nicht gezeichnet.
+ */
+function shorten(s: string, size: number, width: number): string | undefined {
   if (textWidth(s, size) <= width) return s;
+  if (textWidth(ELLIPSIS, size) > width) return undefined;
   const chars = Array.from(s);
-  while (chars.length > 0 && textWidth(chars.join('') + ELLIPSIS, size) > width) chars.pop();
-  return chars.join('') + ELLIPSIS;
+  while (chars.length > 0 && textWidth(chars.join('').trimEnd() + ELLIPSIS, size) > width) chars.pop();
+  return chars.join('').trimEnd() + ELLIPSIS;
 }
 
 /**
@@ -52,26 +61,35 @@ function shorten(s: string, size: number, width: number): string {
 export function fitLines(items: AgendaItem[], lines: number, width: number, size: number): AgendaLine[] {
   const out: AgendaLine[] = [];
   let next = 0;
-  for (let n = 0; n < lines && next < items.length; n++) {
-    const last = n === lines - 1;
+  let row = 0;
+  while (row < lines && next < items.length) {
+    const last = row === lines - 1;
     let taken = 0;
     while (next + taken < items.length && textWidth(joined(items.slice(next, next + taken + 1)), size) <= width) taken++;
     let more = 0;
     if (last) {
       // " +N" muss mitpassen: so lange den letzten Eintrag weglassen, bis es stimmt.
       const rest = (k: number) => items.length - next - k;
-      while (taken > 0 && rest(taken) > 0 && textWidth(`${joined(items.slice(next, next + taken))} +${rest(taken)}`, size) > width) taken--;
+      while (taken > 0 && rest(taken) > 0 && textWidth(joined(items.slice(next, next + taken)) + moreLabel(rest(taken)), size) > width) taken--;
       more = rest(Math.max(taken, 1));
     }
     if (taken === 0) {
-      // Der erste Eintrag passt allein nicht (in der letzten Zeile samt " +N"): kürzen.
-      const room = width - (more > 0 ? textWidth(` +${more}`, size) : 0);
-      out.push({ items: [{ ...items[next], text: shorten(items[next].text, size, room) }], more });
+      // Der erste Eintrag passt allein nicht (in der letzten Zeile samt " +N"): kürzen. Reicht der Platz nicht einmal
+      // für die Ellipse, wird er nicht gezeichnet: in der letzten Zeile endet damit alles, sonst zählt die Zeile neu.
+      const room = width - (more > 0 ? textWidth(moreLabel(more), size) : 0);
+      const text = shorten(items[next].text, size, room);
+      if (text === undefined) {
+        if (last) break;
+        next++;
+        continue;
+      }
+      out.push({ items: [{ ...items[next], text }], more });
       next++;
     } else {
       out.push({ items: items.slice(next, next + taken), more });
       next += taken;
     }
+    row++;
   }
   return out;
 }

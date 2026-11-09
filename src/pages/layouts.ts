@@ -5,7 +5,7 @@ import { besprechungBase } from '../lib/filenames';
 import { holidaysAT } from '../lib/holidays';
 import type { Prioritaet } from '../lib/prioritaeten';
 import type { Termin } from '../lib/termine';
-import { fitLines, prioItems, terminItems, textWidth, type AgendaItem } from './agenda';
+import { fitLines, moreLabel, prioItems, SEPARATOR, terminItems, textWidth, type AgendaItem } from './agenda';
 
 // Aufbau der Seiten. Ein Layout sagt, wo auf der Seite geschrieben wird (Felder), wo später Karten liegen und wie
 // das Papier aussieht (Hintergrund als SVG-Text für Papier, Rahmen, Linien und Feldnamen). Alles hier ist reine
@@ -402,11 +402,12 @@ export type AgendaDay = { termine: Termin[]; prioritaeten: Prioritaet[] };
 
 const AGENDA_COLOR = { termin: '#55657a', prio: '#3d434d', erledigt: '#9aa1a9' };
 
-/** Eine Zeile als `<text>` mit einem `<tspan>` je Eintrag. Trenner und Rest " +N" haben die Farbe der Termine. */
+/** Eine Zeile als `<text>` mit einem `<tspan>` je Eintrag. Der Trenner hat die Farbe der Termine, der Rest " +N" die der Zeile. */
 function agendaLine(x: number, y: number, size: number, items: AgendaItem[], more: number): string {
-  const sep = (s: string) => `<tspan fill="${AGENDA_COLOR.termin}">${escText(s)}</tspan>`;
-  const body = items.map((i) => `<tspan fill="${AGENDA_COLOR[i.tone]}">${escText(i.text)}</tspan>`).join(sep(' · '));
-  return `<text x="${num(x)}" y="${num(y)}"${attrs({ 'font-family': FONT, 'font-size': size })}>${body}${more > 0 ? sep(` +${more}`) : ''}</text>`;
+  const span = (s: string, color: string) => `<tspan fill="${color}">${escText(s)}</tspan>`;
+  const body = items.map((i) => span(i.text, AGENDA_COLOR[i.tone])).join(span(SEPARATOR, AGENDA_COLOR.termin));
+  const rest = more > 0 ? span(moreLabel(more), items[0].tone === 'termin' ? AGENDA_COLOR.termin : AGENDA_COLOR.prio) : '';
+  return `<text x="${num(x)}" y="${num(y)}"${attrs({ 'font-family': FONT, 'font-size': size })}>${body}${rest}</text>`;
 }
 
 /**

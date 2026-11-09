@@ -501,10 +501,19 @@ describe('agendaMarks', () => {
     expect(t[1].y).toBeLessThanOrEqual(top + 49);
     expect(t[0].y).toBeLessThan(t[1].y);
     expect(t[0].attrs).toContain('font-size="13"');
+    expect(x).toBe(48);
     expect(svg).toContain('fill="#55657a"');
     expect(svg).toContain('fill="#3d434d"');
     expect(svg.indexOf('#55657a')).toBeLessThan(svg.indexOf('#3d434d'));
-    expect(x).toBe(48);
+  });
+
+  test('the rest label takes the colour of its line', () => {
+    const woche = wocheLayout('2026-W44');
+    const many = Array.from({ length: 12 }, (_, i) => ({ text: `Aufgabe Nummer ${i}`, done: false }));
+    const svg = agendaMarks(woche, only('2026-10-28', { termine: lang(12), prioritaeten: many }));
+    const [termLine, prioLine] = [...svg.matchAll(/<text [^>]*>.*?<\/text>/g)].map((m) => m[0]);
+    expect(termLine).toMatch(/<tspan fill="#55657a"> \+\d+<\/tspan><\/text>$/);
+    expect(prioLine).toMatch(/<tspan fill="#3d434d"> \+\d+<\/tspan><\/text>$/);
   });
 
   test('with only one kind it gets both lines', () => {
@@ -539,16 +548,21 @@ describe('agendaMarks', () => {
 
   test('special characters stay valid SVG', () => {
     const woche = wocheLayout('2026-W44');
-    const svg = agendaMarks(
-      woche,
-      only('2026-10-28', {
-        termine: [{ date: '2026-10-28', allDay: true, title: '<b>&"x"</b> 🙂' }, termin('x'.repeat(80))],
-        prioritaeten: [{ text: '<i>&', done: true }],
-      }),
+    const svg = agendaMarks(woche, (d) =>
+      d === '2026-10-28'
+        ? { termine: [{ date: d, allDay: true, title: '<b>&"x"</b> 🙂' }], prioritaeten: [{ text: '<i>&', done: true }] }
+        : d === '2026-10-29'
+          ? { termine: [termin('x'.repeat(80), d)], prioritaeten: [] }
+          : { termine: [], prioritaeten: [] },
     );
-    const doc = new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${svg}</svg>`, 'image/svg+xml');
-    expect(doc.querySelector('parsererror')).toBeNull();
+    const wrapped = `<svg xmlns="http://www.w3.org/2000/svg">${svg}</svg>`;
+    // happy-dom lässt ein rohes < oder & im Text durch, darum zusätzlich der strenge Helfer.
+    expect(xmlProblem(wrapped)).toBeNull();
+    expect(new DOMParser().parseFromString(wrapped, 'image/svg+xml').querySelector('parsererror')).toBeNull();
     expect(svg).toContain('&lt;b&gt;&amp;');
+    expect(svg).toContain('&lt;i&gt;&amp;');
+    expect(svg).not.toContain('x'.repeat(80));
+    expect(svg).toMatch(/x+…/);
   });
 
   test('days without data and day pages give nothing', () => {

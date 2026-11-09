@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { fitLines, prioItems, terminItems, textWidth, type AgendaItem } from '../../src/pages/agenda';
+import { fitLines, moreLabel, SEPARATOR, prioItems, terminItems, textWidth, type AgendaItem } from '../../src/pages/agenda';
 import type { Termin } from '../../src/lib/termine';
 
 const day = '2026-10-29';
@@ -71,4 +71,42 @@ test('two lines carry on where the first ends, the rest goes to the last line', 
 
 test('nothing in gives no lines', () => {
   expect(fitLines([], 2, 300, 13)).toEqual([]);
+});
+
+test('a too long first item on the second line is shortened there', () => {
+  const list: AgendaItem[] = [
+    { text: 'kurz', tone: 'termin' },
+    { text: 'y'.repeat(200), tone: 'termin' },
+  ];
+  const lines = fitLines(list, 2, 300, 13);
+  expect(lines).toHaveLength(2);
+  expect(lines[0].items.map((i) => i.text)).toEqual(['kurz']);
+  expect(lines[1].items[0].text.endsWith('…')).toBe(true);
+  expect(textWidth(lines[1].items[0].text, 13)).toBeLessThanOrEqual(300);
+  expect(lines[1].more).toBe(0);
+});
+
+test('a too long single item on the last line is shortened together with the rest label', () => {
+  const list: AgendaItem[] = [{ text: 'y'.repeat(200), tone: 'termin' }, ...items(2)];
+  const lines = fitLines(list, 1, 300, 13);
+  expect(lines).toHaveLength(1);
+  expect(lines[0].more).toBe(2);
+  expect(lines[0].items[0].text.endsWith('…')).toBe(true);
+  expect(textWidth(lines[0].items[0].text + moreLabel(2), 13)).toBeLessThanOrEqual(300);
+});
+
+test('shortening leaves no space before the ellipsis', () => {
+  const lines = fitLines([{ text: 'Abstimmung mit dem Team', tone: 'termin' }], 1, textWidth('Abstimmung …', 13) + 1, 13);
+  expect(lines[0].items[0].text).toBe('Abstimmung…');
+});
+
+test('an item that does not fit even as an ellipse is not drawn, so no line gets too wide', () => {
+  const narrow = textWidth('…', 13) + 0.5;
+  expect(fitLines(items(3), 1, 5, 13)).toEqual([]);
+  // Die Ellipse passt, aber nicht mit " +2": nichts wird gezeichnet.
+  expect(fitLines(items(3), 1, narrow, 13)).toEqual([]);
+  // Ein einzelner Eintrag darf als Ellipse bleiben.
+  expect(fitLines([{ text: 'abc', tone: 'termin' }], 1, narrow, 13)[0].items[0].text).toBe('…');
+  // In einer Folgezeile fällt der Eintrag weg, die Zeile bleibt innerhalb der Breite.
+  for (const l of fitLines(items(4), 2, 5, 13)) expect(textWidth(l.items.map((i) => i.text).join(SEPARATOR), 13)).toBeLessThanOrEqual(5);
 });
