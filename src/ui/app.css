@@ -1800,7 +1800,7 @@ body {
   background: currentColor;
 }
 
-/* Geburtstage und Jahrestage: ein Punkt oben rechts in der Farbe der Feiertage, mit hellem Rand für den gezeigten Tag. */
+/* Geburtstage und Jahrestage: ein Punkt oben rechts in der Farbe der Feiertage. Der helle Rand hält ihn auf dem grünen gezeigten Tag und auf Feiertagen sichtbar. */
 .karte .tag.geburtstag::before {
   content: '';
   position: absolute;
