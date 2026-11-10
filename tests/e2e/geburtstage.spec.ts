@@ -130,12 +130,13 @@ test('the week shows birthdays first and counts them in the day list, only on th
   // Am 27.10. passen Geburtstag und Termin in die erste Zeile, der Geburtstag zuerst.
   expect(shown).toContain('🎂 Erika Muster');
   expect(shown.indexOf('🎂 Erika Muster')).toBeLessThan(shown.indexOf('Schulung Beispiel'));
-  // Am 29.10. (1 Geburtstag, 1 Jahrestag, 2 Termine) stehen Geburtstag und Jahrestag in einem Eintrag, auch wenn er auf höchstens
-  // 40 % der Zeile gekürzt wird (also etwa „🎂 Max Beispiel ♥ Anna …“), in Größe 11. Gleich dahinter steht in derselben Zeile der
-  // erste Termin (09:30 Zahnarzt, gekürzt oder ganz), und nur der zweite Termin steht in „+1“.
-  expect(shown).toMatch(/font-size="11">🎂 Max Beispiel[^<]*<\/tspan><tspan[^>]*> · <\/tspan><tspan[^>]*>09:30[^<]*<\/tspan>/);
-  expect(shown.indexOf('🎂 Max Beispiel')).toBeLessThan(shown.indexOf('09:30'));
-  expect(shown).toContain('+1');
+  // Am 29.10. (1 Geburtstag, 1 Jahrestag, 2 Termine, 1 Priorität) stehen Geburtstag und Jahrestag in einem Eintrag in Größe 11.
+  // Die Geburtstage werden nur so weit gekürzt, wie der erste Termin es braucht, aber nie unter 40 %; hier ist genug Platz, der
+  // Eintrag steht ganz da. Gleich dahinter steht in derselben Zeile der erste Termin (09:30 Zahnarzt), und nur der zweite Termin
+  // steht in „+1“ am Ende dieser Zeile.
+  expect(shown).toMatch(
+    /font-size="11">🎂 Max Beispiel ♥ Anna und Ben Beispiel<\/tspan><tspan[^>]*> · <\/tspan><tspan[^>]*>09:30 Zahnarzt<\/tspan><tspan[^>]*> \+1<\/tspan><\/text>/,
+  );
 
   // In die Datei kommt nur, was zur Seite gehört.
   await pen(page).stroke(strokeAcross(WOCHE, 'tag-2026-10-28'));
@@ -152,12 +153,14 @@ test('the week shows birthdays first and counts them in the day list, only on th
 test('the month shows birthdays first', async ({ page }) => {
   const repo = await openSeeded(page, MONTH, { files: FILES });
   await expect(dayLink(page, /29\.10\.2026, 1 Geburtstag, 1 Jahrestag, 2 Termine$/)).toHaveAttribute('href', '#/tag/2026-10-29');
-  // Am 29.10. steht der Eintrag aus Geburtstag und Jahrestag in Größe 9 vorn in Zeile 1 (hier auf 40 % gekürzt), gleich dahinter
-  // der Anfang des ersten Termins im selben `<text>`. Der zweite Termin steht in Zeile 2.
-  await expect.poll(() => screenBackground(page)).toMatch(/font-size="9">🎂 Max[^<]*<\/tspan><tspan[^>]*> · <\/tspan><tspan[^>]*>09:30[^<]*<\/tspan><\/text>/);
-  expect(await screenBackground(page)).toContain('14:00 Runde');
-  // Am 27.10. steht der Geburtstag (gekürzt) in der ersten Zeile des Kästchens, der erste Termin (gekürzt) daneben, der Geburtstag zuerst.
-  await expect.poll(() => screenBackground(page)).toMatch(/font-size="9">🎂 Eri[^<]*<\/tspan><tspan[^>]*> · <\/tspan><tspan[^>]*>Schulu[^<]*<\/tspan><\/text>/);
+  // Hat ein Tag Geburtstage und Termine, gehört Zeile 1 dem Eintrag der Geburtstage (Größe 9, ganze Breite des Kästchens) und
+  // Zeile 2 den Terminen. Am 29.10. steht in Zeile 1 nur der Eintrag, Zeile 2 beginnt mit dem ersten Termin (09:30), und der
+  // zweite (14:00) zählt in „+1“ am Ende. Wo gekürzt wird, prüft der Test nicht.
+  await expect
+    .poll(() => screenBackground(page))
+    .toMatch(/font-size="9">🎂 Max Beispiel[^<]*<\/tspan><\/text><text[^>]*><tspan fill="#55657a">09:30[^<]*<\/tspan><tspan[^>]*> \+1<\/tspan><\/text>/);
+  // Am 27.10. steht der Geburtstag ganz in Zeile 1, der ganztägige Termin beginnt Zeile 2.
+  await expect.poll(() => screenBackground(page)).toMatch(/font-size="9">🎂 Erika Muster<\/tspan><\/text><text[^>]*><tspan fill="#55657a">Schulung/);
   // Der Monat liest keine Tagesnotizen, auch nicht wegen der Geburtstage.
   expect(repo.requests.filter((request) => decodeURIComponent(request).includes('/05 Daily Notes/'))).toEqual([]);
 });

@@ -90,15 +90,16 @@ const rowWidth = (list: AgendaItem[], size: number): number =>
   list.reduce((sum, i, k) => sum + textWidth(i.text, i.size ?? size) + (k > 0 ? textWidth(SEPARATOR, size) : 0), 0);
 
 /**
- * Der Text mit Ellipse am Ende (ohne Leerraum davor), so dass er höchstens `width` breit ist. Passt nicht einmal die
- * Ellipse, gibt es `undefined`: Der Eintrag wird dann gar nicht gezeichnet.
+ * Der Text mit Ellipse am Ende (ohne Leerraum und ohne Komma davor), so dass er höchstens `width` breit ist. Passt nicht
+ * einmal die Ellipse, gibt es `undefined`: Der Eintrag wird dann gar nicht gezeichnet.
  */
 function shorten(s: string, size: number, width: number): string | undefined {
   if (textWidth(s, size) <= width) return s;
   if (textWidth(ELLIPSIS, size) > width) return undefined;
   const chars = Array.from(s);
-  while (chars.length > 0 && textWidth(chars.join('').trimEnd() + ELLIPSIS, size) > width) chars.pop();
-  return chars.join('').trimEnd() + ELLIPSIS;
+  const cut = () => chars.join('').replace(/[\s,]+$/, '') + ELLIPSIS;
+  while (chars.length > 0 && textWidth(cut(), size) > width) chars.pop();
+  return cut();
 }
 
 /**
@@ -146,21 +147,53 @@ export function fitLines(items: AgendaItem[], lines: number, width: number | num
   return out;
 }
 
-/** Höchster Anteil der Zeile 1, den die Geburtstage einnehmen, wenn Termine folgen. */
+/**
+ * Anteil der Zeile 1, den die Geburtstage in jedem Fall behalten, wenn Termine folgen: Die Geburtstage werden nur so weit
+ * gekürzt, wie der erste Termin es braucht, aber nie unter 40 %.
+ */
 export const HEAD_SHARE = 0.4;
 
 /**
+ * Der Eintrag der Geburtstage allein auf bis zu `lines` Zeilen. Passt er nicht in eine Zeile, bricht er nach einem
+ * Namen um (nach „, “ oder vor „ ♥“), ohne zweiten Kuchen: Jede Zeile außer der letzten nimmt so viele ganze Namen, wie
+ * hineinpassen (passt nicht einmal der erste, wird er gekürzt). Die letzte Zeile nimmt den Rest und endet notfalls mit
+ * „…“. Keine Zeile ist breiter als `width`. Mit einer Zeile wie `fitLines([head], 1, …)`.
+ */
+function wrapHead(head: AgendaItem, lines: number, width: number, size: number): AgendaLine[] {
+  const s = head.size ?? size;
+  const out: AgendaLine[] = [];
+  let text = head.text;
+  while (text !== '' && out.length < lines) {
+    let cut = text.length;
+    if (out.length < lines - 1 && textWidth(text, s) > width) {
+      // Stellen nach einem Namen: hinter dem Komma von „, “ und vor dem Leerzeichen von „ ♥“.
+      const breaks = [...text.matchAll(/,(?= )| (?=♥)/g)].map((m) => m.index + (m[0] === ',' ? 1 : 0));
+      cut = breaks.filter((b) => textWidth(text.slice(0, b), s) <= width).pop() ?? breaks[0] ?? text.length;
+    }
+    const shown = shorten(text.slice(0, cut), s, width);
+    if (shown === undefined) break;
+    out.push({ items: [{ ...head, text: shown }], more: 0 });
+    text = text.slice(cut).trimStart();
+  }
+  return out;
+}
+
+/**
  * Die Geburtstage (`head`) als erster Eintrag der Zeile 1, dahinter die übrigen Einträge (`rest`, meist Termine).
- * Ohne `head` wie `fitLines`, ohne `rest` darf `head` die ganze Breite nehmen. Sonst wird `head` mit Ellipse auf
- * höchstens `HEAD_SHARE * width` gekürzt und `rest` fließt in den Rest von Zeile 1 und dann in die Zeilen darunter in
- * voller Breite. Reicht der Rest von Zeile 1 nicht einmal für eine Ellipse, steht `head` allein und `rest` beginnt in
- * Zeile 2 (gibt es nur eine Zeile, zählt `more` die Einträge von `rest`). `more` zählt nur `rest`.
+ * Ohne `head` wie `fitLines`. Ohne `rest` darf `head` alle Zeilen nutzen und bricht nach einem Namen um (`wrapHead`).
+ * Sonst wird `head` nur so weit mit Ellipse gekürzt, wie der erste Eintrag von `rest` es braucht (samt Trenner und, wenn
+ * es nur eine Zeile gibt und weitere folgen, „ +N“), aber nie unter `HEAD_SHARE * width`. Bekommt `head` mehr als diesen
+ * Anteil, steht der erste Eintrag von `rest` also ganz daneben. `rest` fließt in den Rest von Zeile 1 und dann in die
+ * Zeilen darunter in voller Breite. Reicht der Rest von Zeile 1 nicht einmal für eine Ellipse, steht `head` allein und
+ * `rest` beginnt in Zeile 2 (gibt es nur eine Zeile, zählt `more` die Einträge von `rest`). `more` zählt nur `rest`.
  */
 export function withHead(head: AgendaItem | undefined, rest: AgendaItem[], lines: number, width: number, size: number): AgendaLine[] {
   if (!head) return fitLines(rest, lines, width, size);
-  if (rest.length === 0) return fitLines([head], lines, width, size);
+  if (rest.length === 0) return wrapHead(head, lines, width, size);
   const headSize = head.size ?? size;
-  const text = shorten(head.text, headSize, HEAD_SHARE * width);
+  const plus = lines === 1 && rest.length > 1 ? textWidth(moreLabel(rest.length - 1), size) : 0;
+  const need = textWidth(SEPARATOR, size) + textWidth(rest[0].text, rest[0].size ?? size) + plus;
+  const text = shorten(head.text, headSize, Math.max(HEAD_SHARE * width, width - need));
   if (text === undefined) return fitLines(rest, lines, width, size);
   const shown: AgendaItem = { ...head, text };
   const avail = width - textWidth(text, headSize) - textWidth(SEPARATOR, size);

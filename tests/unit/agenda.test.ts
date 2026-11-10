@@ -161,7 +161,7 @@ test('an entry with its own size is measured with that size', () => {
   expect(fitLines([head, termin], 1, exact - 1, 13)[0].more).toBe(1);
 });
 
-test('with appointments the birthdays get at most 40 % of line 1 and the first appointment stands next to them', () => {
+test('with a long first appointment the birthdays keep 40 % of line 1 and the first appointment stands next to them', () => {
   const head = { text: '🎂 Max Beispiel, Paul Beispiel, Erika Muster, Hans Beispiel', tone: 'geburtstag' as const, size: 11 };
   const rest = ['08:00 Schulung Beispiel mit sehr langem Titel', '10:00 Abnahme Brücke'].map((text) => ({ text, tone: 'termin' as const }));
   const [line] = withHead(head, rest, 1, 300, 13);
@@ -191,13 +191,72 @@ test('with two lines the appointments continue in line 2 in full width', () => {
   expect(textWidth(lines[1].items.map((i) => i.text).join(SEPARATOR), 13)).toBeLessThanOrEqual(300);
 });
 
-test('only an anniversary and appointments: the entry starts with a heart and takes at most 40 %', () => {
+test('only an anniversary and a long first appointment: the entry starts with a heart and keeps 40 %', () => {
   const head = geburtstagItem([{ date: '2026-10-29', name: 'Anna und Ben Beispiel mit einem sehr langen Namen und noch mehr', art: 'Jahrestag' }], 11)!;
-  const rest = [{ text: '08:00 Schulung', tone: 'termin' as const }];
+  const rest = [{ text: '08:00 Schulung Beispiel mit sehr langem Titel', tone: 'termin' as const }];
   const [line] = withHead(head, rest, 1, 300, 13);
   expect(line.items[0].text.startsWith('♥')).toBe(true);
+  expect(line.items[0].text.endsWith('…')).toBe(true);
   expect(textWidth(line.items[0].text, 11)).toBeLessThanOrEqual(0.4 * 300);
-  expect(line.items[1].text).toBe('08:00 Schulung');
+  expect(line.items[1].text.startsWith('08:00 Schulung')).toBe(true);
+});
+
+test('the birthdays are only shortened as far as the first appointment needs, with one line and with two', () => {
+  const head = { text: '🎂 Max Beispiel, Paul Beispiel, Erika Muster, Hans Beispiel', tone: 'geburtstag' as const, size: 11 };
+  const rest = ['08:00 Abstimmung', '10:00 Abnahme Brücke'].map((text) => ({ text, tone: 'termin' as const }));
+  // Eine Zeile: Platz bleibt für Trenner, ersten Termin und „ +1“. Der Eintrag bekommt mehr als 40 %, der Termin steht ganz da.
+  const [one] = withHead(head, rest, 1, 396, 13);
+  expect(one.items.map((i) => i.text)).toEqual(['🎂 Max Beispiel, Paul Beispiel, Erika Mus…', '08:00 Abstimmung']);
+  expect(one.more).toBe(1);
+  // Zwei Zeilen: „ +1“ braucht Zeile 1 nicht, der zweite Termin steht in Zeile 2. Vor der Ellipse steht kein Komma.
+  expect(withHead(head, rest, 2, 396, 13).map((l) => [lineText(l), l.more])).toEqual([
+    ['🎂 Max Beispiel, Paul Beispiel, Erika Muster… · 08:00 Abstimmung', 0],
+    ['10:00 Abnahme Brücke', 0],
+  ]);
+});
+
+test('with room in line 1 nothing is shortened, with one line and with two', () => {
+  const head = { text: '🎂 Max Beispiel, Paul Beispiel', tone: 'geburtstag' as const, size: 11 };
+  const termin = { text: '08:00 Abstimmung', tone: 'termin' as const };
+  for (const lines of [1, 2]) expect(withHead(head, [termin], lines, 396, 13)).toEqual([{ items: [head, termin], more: 0 }]);
+  // Wie am 29.10. mit einer Priorität: eine Zeile und zwei Termine. Geburtstag und Jahrestag stehen ganz da, der zweite Termin in „+1“.
+  const feier = { text: '🎂 Max Beispiel ♥ Anna und Ben Beispiel', tone: 'geburtstag' as const, size: 11 };
+  const rest = ['09:30 Zahnarzt', '14:00 Runde Werkstatt'].map((text) => ({ text, tone: 'termin' as const }));
+  expect(withHead(feier, rest, 1, 396, 13)).toEqual([{ items: [feier, rest[0]], more: 1 }]);
+});
+
+test('alone on two lines the birthday entry wraps after a name, behind one cake, the last line ends with an ellipsis if needed', () => {
+  const wrap = (text: string) => withHead({ text, tone: 'geburtstag', size: 9 }, [], 2, 92, 10.5);
+  const cases: [string, string[]][] = [
+    ['🎂 Max Beispiel, Paul Beispiel', ['🎂 Max Beispiel,', 'Paul Beispiel']],
+    ['🎂 Max Beispiel, Paul Beispiel, Erika Muster', ['🎂 Max Beispiel,', 'Paul Beispiel, Erik…']],
+    ['🎂 Max Beispiel ♥ Anna und Ben Beispiel', ['🎂 Max Beispiel', '♥ Anna und Ben Bei…']],
+    // Passt nicht einmal der erste Name in Zeile 1, wird er gekürzt, und Zeile 2 beginnt mit dem nächsten Namen.
+    ['🎂 Maximilian Beispielmann, Paul Beispiel', ['🎂 Maximilian Beis…', 'Paul Beispiel']],
+    // Ein einzelner Name bricht nicht um.
+    ['🎂 Maximilian Beispielmann-Musterfrau', ['🎂 Maximilian Beis…']],
+  ];
+  for (const [text, want] of cases) {
+    const lines = wrap(text);
+    expect(lines.map(lineText)).toEqual(want);
+    for (const l of lines) {
+      expect(l.items).toHaveLength(1);
+      expect(l.items[0]).toMatchObject({ tone: 'geburtstag', size: 9 });
+      expect(l.more).toBe(0);
+      expect(textWidth(l.items[0].text, 9)).toBeLessThanOrEqual(92);
+    }
+  }
+});
+
+test('alone on one line the birthday entry is shortened as before', () => {
+  const head = { text: '🎂 Max Beispiel, Erika Muster, Paul Beispiel, Anna Beispiel, Ben Beispiel, Lena Muster', tone: 'geburtstag' as const, size: 11 };
+  expect(withHead(head, [], 1, 396, 13)).toEqual([{ items: [{ ...head, text: '🎂 Max Beispiel, Erika Muster, Paul Beispiel, Anna Beispiel, Ben Beis…' }], more: 0 }]);
+});
+
+test('a shortened entry has no comma before the ellipsis', () => {
+  // Breit genug für „Max Beispiel,…“, aber nicht für „Max Beispiel, P…“.
+  const [line] = fitLines([{ text: 'Max Beispiel, Paul Beispiel', tone: 'termin' }], 1, textWidth('Max Beispiel, P…', 13) - 1, 13);
+  expect(line.items[0].text).toBe('Max Beispiel…');
 });
 
 test('when line 1 next to the birthdays has no room for an ellipse the appointments start in line 2', () => {

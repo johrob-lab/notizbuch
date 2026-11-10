@@ -397,7 +397,8 @@ export function todayMarks(l: Layout, today: Day): string {
   );
 }
 
-// Schriftgröße des Eintrags der Geburtstage: kleiner als die Termine (Woche 13, Monat 10,5), damit mehr Namen und ein Termin danebenpassen.
+// Schriftgröße des Eintrags der Geburtstage: kleiner als die Termine (Woche 13, Monat 10,5). In der Woche passen so mehr
+// Namen und ein Termin daneben, im Monat mehr Namen in die Zeile, die den Geburtstagen gehört.
 const WEEK_BIRTHDAY_SIZE = 11;
 const MONTH_BIRTHDAY_SIZE = 9;
 
@@ -438,9 +439,12 @@ function dayHeadMarks(l: Layout, dayData: (day: Day) => AgendaDay): string {
  * Geburtstage, Termine und Prioritäten eines Tages als SVG-Text über dem Hintergrund, nur auf dem Bildschirm und nie
  * in der Datei (wie `todayMarks`). Woche: in der Kopfzeile des Tages rechts von Tageszahl und Wochentag, links vom
  * Feiertagsnamen, Zeile 1 Geburtstage und Termine, Zeile 2 Prioritäten; gibt es nur eine Art, bekommt sie beide
- * Zeilen. Alle Geburtstage eines Tages stehen in einem kleineren Eintrag vorn (höchstens 40 % der Zeile 1, wenn Termine
- * folgen), daneben beginnt der erste Termin. Monat: nur Geburtstage und Termine, oben links in der Zelle, links von
- * Tageszahl und Kreis für heute. Tag: nur die Geburtstage, rechtsbündig in der Zeile des Untertitels. Jede Fläche hat ein Clip-Rechteck,
+ * Zeilen. Alle Geburtstage eines Tages stehen in einem kleineren Eintrag vorn, daneben beginnt der erste Termin: Die
+ * Geburtstage werden nur so weit gekürzt, wie der erste Termin es braucht, aber nie unter 40 %. Ohne Termine bricht der
+ * Eintrag nach einem Namen in Zeile 2 um, wenn sie frei ist. Monat: nur Geburtstage und Termine, oben links in der Zelle,
+ * links von Tageszahl und Kreis für heute. Zeile 1 gehört den Geburtstagen (ganze Breite), Zeile 2 den Terminen
+ * (mindestens einer, weitere als „+N“); ohne Termine dürfen die Geburtstage beide Zeilen nutzen, ohne Geburtstage die
+ * Termine. Tag: nur die Geburtstage, rechtsbündig in der Zeile des Untertitels. Jede Fläche hat ein Clip-Rechteck,
  * damit nie etwas darüber hinausläuft. Leer für die Besprechung und für Tage ohne Daten.
  */
 export function agendaMarks(l: Layout, dayData: (day: Day) => AgendaDay): string {
@@ -477,7 +481,11 @@ export function agendaMarks(l: Layout, dayData: (day: Day) => AgendaDay): string
       area = [x + 8, y + 4, 92, 28];
       size = 10.5;
       baselines = [y + 15, y + 28];
-      rows = [withHead(head, items, 2, area[2], size)];
+      // Mit Geburtstagen und Terminen gehört Zeile 1 dem Eintrag der Geburtstage (ganze Breite) und Zeile 2 den Terminen
+      // (mindestens einer, weitere als „+N“): 40 % von 92 ließen nur „🎂 Max…“ übrig. `fitLines` macht genau das, weil der
+      // Eintrag als erster allein oder vorn in Zeile 1 steht und „+N“ nur Termine zählt; nur ein sehr kurzes Paar teilt sich
+      // Zeile 1. Sonst wie `withHead`: ohne Termine nutzen die Geburtstage beide Zeilen, ohne Geburtstage die Termine.
+      rows = [head && items.length > 0 ? fitLines([head, ...items], 2, area[2], size) : withHead(head, items, 2, area[2], size)];
     }
     const lines = rows.flat();
     if (area[2] <= 0 || lines.length === 0) continue;

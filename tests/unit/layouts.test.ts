@@ -592,6 +592,22 @@ describe('agendaMarks', () => {
     expect(lines(svg)[0]).toContain('08:00 Besprechung');
   });
 
+  test('with only birthdays the week gives them both lines, broken after a name, behind one cake', () => {
+    const names = ['Max Beispiel', 'Erika Muster', 'Paul Beispiel', 'Anna Beispiel', 'Ben Beispiel', 'Lena Muster'];
+    const svg = agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: names.map((n) => geb(n)), termine: [], prioritaeten: [] }));
+    const out = lines(svg);
+    expect(out).toHaveLength(2);
+    // Jeder Name steht ganz in einer der Zeilen, nichts ist gekürzt, und nur Zeile 1 hat den Kuchen.
+    for (const n of names) expect(out.some((l) => plain(l).includes(n))).toBe(true);
+    expect(out.join('')).not.toContain('…');
+    expect(out.join('').match(/🎂/g)).toHaveLength(1);
+    expect(plain(out[0]).startsWith('🎂 Max Beispiel')).toBe(true);
+    for (const l of out) {
+      expect(l).toMatch(/^<tspan fill="#a8674f" font-size="11">[^<]*<\/tspan>$/);
+      expect(textWidth(plain(l), 11)).toBeLessThanOrEqual(clips(svg)[0].rect[2]);
+    }
+  });
+
   test('with a birthday and a priority but no appointments the week shows the whole entry in line 1 and the priority in line 2', () => {
     const out = lines(agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: LONG.map((n) => geb(n)), termine: [], prioritaeten: prio })));
     expect(out).toHaveLength(2);
@@ -612,10 +628,33 @@ describe('agendaMarks', () => {
     expect(withHoliday[2]).toBeLessThan(without[2]);
   });
 
-  test('the month puts the small birthday entry first, the first appointment in the same line or in line 2', () => {
+  test('the month gives line 1 to the birthdays over the whole cell and line 2 to the appointments, the second one in +1', () => {
+    const termine: Termin[] = [
+      { date: '2026-10-28', start: '14:00', end: '15:00', allDay: false, title: 'Runde Werkstatt' },
+      { date: '2026-10-28', start: '09:30', end: '10:00', allDay: false, title: 'Zahnarzt' },
+    ];
+    const geburtstage = [geb('Max Beispiel'), geb('Anna und Ben Beispiel', '2026-10-28', 'Jahrestag')];
+    const out = lines(agendaMarks(monatLayout('2026-10'), only('2026-10-28', { geburtstage, termine, prioritaeten: prio })));
+    expect(out).toHaveLength(2);
+    // Zeile 1: nur der Eintrag, in Größe 9, ohne Trenner und nicht breiter als das Kästchen.
+    expect(out[0].match(/<tspan/g)).toHaveLength(1);
+    expect(out[0]).toMatch(/^<tspan fill="#a8674f" font-size="9">🎂 Max Beispiel[^<]*<\/tspan>$/);
+    expect(textWidth(plain(out[0]), 9)).toBeLessThanOrEqual(92);
+    // Zeile 2: zuerst der Termin, der früher beginnt; der andere zählt in „+1“.
+    expect(out[1]).toMatch(/^<tspan fill="#55657a">09:30[^<]*<\/tspan><tspan fill="#55657a"> \+1<\/tspan>$/);
+  });
+
+  test('the month shows one birthday and one appointment whole, one below the other', () => {
     const out = lines(agendaMarks(monatLayout('2026-10'), only('2026-10-28', { geburtstage: [geb('Max Beispiel')], termine: [termin('Abstimmung')], prioritaeten: prio })));
-    expect(out[0]).toMatch(/^<tspan fill="#a8674f" font-size="9">🎂 /);
-    expect(out.join('')).toMatch(/<tspan fill="#55657a">Abs/);
+    expect(out).toEqual(['<tspan fill="#a8674f" font-size="9">🎂 Max Beispiel</tspan>', '<tspan fill="#55657a">Abstimmung</tspan>']);
+    // Sind beide sehr kurz, teilen sie sich Zeile 1.
+    const short = lines(agendaMarks(monatLayout('2026-10'), only('2026-10-28', { geburtstage: [geb('Ina')], termine: [termin('Arzt')], prioritaeten: [] })));
+    expect(short).toEqual(['<tspan fill="#a8674f" font-size="9">🎂 Ina</tspan><tspan fill="#55657a"> · </tspan><tspan fill="#55657a">Arzt</tspan>']);
+  });
+
+  test('without appointments the birthdays in the month go on in line 2 after a name, behind one cake', () => {
+    const out = lines(agendaMarks(monatLayout('2026-10'), only('2026-10-28', { geburtstage: [geb('Max Beispiel'), geb('Paul Beispiel')], termine: [], prioritaeten: prio })));
+    expect(out).toEqual(['<tspan fill="#a8674f" font-size="9">🎂 Max Beispiel,</tspan>', '<tspan fill="#a8674f" font-size="9">Paul Beispiel</tspan>']);
   });
 
   test('the day page shows its birthdays right aligned in the line of the subtitle, nothing else', () => {
