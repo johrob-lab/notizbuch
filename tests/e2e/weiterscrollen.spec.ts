@@ -245,6 +245,9 @@ async function scrollWhileLoading(page: Page, target: number) {
   }
   throw new Error(`Die Mitte kam nicht bis ${target}.`);
 }
+/** Wartet zwei Bilder ab: Was die App auf Ereignisse hin zeichnet und neu aufbaut, ist dann geschehen. */
+const twoFrames = (page: Page) =>
+  page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 /** Wie `pen(page).stroke`, aber ohne den Testzugang der App: für eine Tagesseite, die noch lädt. Die Lage kommt aus `cardView`. */
 async function penWhileLoading(page: Page, path: [number, number][]) {
   const view = await cardView(page);
@@ -845,8 +848,10 @@ test('a day whose preview was not read yet says that it is loading', async ({ pa
   // Die Vorschau zeigte noch nichts vom 30.10.: Bis seine Datei da ist, sagt er wie jede Seite, dass er lädt.
   await scrollUntil(page, PAST_BELOW);
   await expect(page.getByText('Seite wird geladen')).toBeVisible();
-  // Solange nimmt er keinen Strich an: Die Fläche zeigt noch nicht, was in seiner Datei steht.
+  // Solange nimmt er keinen Strich an: Die Fläche zeigt noch nicht, was in seiner Datei steht. Geprüft wird erst, wenn der Stift
+  // verarbeitet ist: Ein angenommener Strich hätte Rückgängig bis dahin aktiv gemacht.
   await penWhileLoading(page, IN_HEAD);
+  await twoFrames(page);
   await expect(toolButton(page, 'Rückgängig')).toBeDisabled();
   release();
   await waitForPageOf(page, 'tag', '2026-10-30');

@@ -1,5 +1,5 @@
 import { mergePages, PageTooNewError, parsePage, serializePage } from '../ink/svg';
-import type { FieldBox, Page } from '../ink/types';
+import type { FieldBox, Page, Stroke } from '../ink/types';
 import type { SyncEngine } from '../sync/engine';
 import { normalizePath, PathNotAllowedError } from '../sync/paths';
 
@@ -77,6 +77,15 @@ type Options = {
 function readPage(svg: string): Page {
   const page = parsePage(svg);
   return { ...page, strokes: page.strokes.slice().sort((a, b) => a.t - b.t) };
+}
+
+/**
+ * Die Striche, die die Vorschau eines Nachbarn aus dem Text seiner Datei zeigt (`null`: es gibt sie nicht), in der Reihenfolge,
+ * in der die Sitzung sie liest (`readPage`). Wird der Nachbar durch Weiterscrollen zur offenen Seite, beginnt sein Entwurf damit:
+ * Bringt das Lesen nichts Neues, zeigt die Fläche dieselbe Seite, und der Verlauf für Rückgängig bleibt (siehe `samePage`).
+ */
+export function previewStrokes(text: string | null): Stroke[] {
+  return text === null ? [] : readPage(text).strokes;
 }
 
 /** Gleiche Seite, gleiche Striche (die `id` genügt, sie ist über alle Geräte eindeutig). */

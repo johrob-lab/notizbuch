@@ -8,7 +8,6 @@ import { FuellerPanel, fuellerPanel } from './FuellerPanel';
 import { inkPrefs } from './inkPrefs';
 import { inkTools } from './inkTools';
 import { InkSurface, type NeighborPage } from '../ink/surface';
-import { parsePage } from '../ink/svg';
 import type { FieldBox, Page, Stroke } from '../ink/types';
 import { todayVienna, type Day } from '../lib/dates';
 import type { VollbildWerkzeuge } from '../lib/settings';
@@ -18,7 +17,7 @@ import { normalizePath } from '../sync/paths';
 import { watchCards } from './cardGestures';
 import { offerHandoff, takeHandoff, updateHandoff, type Handoff } from './handoff';
 import type { Neighbors, NeighborSpec } from './neighbors';
-import { PageSession, type Phase } from './pageSession';
+import { PageSession, previewStrokes, type Phase } from './pageSession';
 import { QuickSwitch } from './QuickSwitch';
 import { retryCues } from './retryCues';
 import { routeHash, type Route } from './router';
@@ -417,10 +416,11 @@ export function PageView(p: Props) {
       if (!path) return;
       const mine = ++latest[side];
       // Fehlt die Datei, lässt sie sich nicht lesen oder ist sie kaputt, zeigt die Vorschau nur das Papier. Gelesen ist sie, sobald
-      // die Engine geantwortet hat, auch mit „gibt es nicht“; ein Fehler lässt sie ungelesen.
+      // die Engine geantwortet hat, auch mit „gibt es nicht“; ein Fehler lässt sie ungelesen. Ihre Striche stehen in der Reihenfolge,
+      // in der die Sitzung sie liest (siehe `previewStrokes`).
       engine
         .peek(path)
-        .then((text) => ({ strokes: text === null ? [] : parsePage(text).strokes, read: true }))
+        .then((text) => ({ strokes: previewStrokes(text), read: true }))
         .catch(() => ({ strokes: [] as Stroke[], read: false }))
         .then(({ strokes, read }) => {
           const now = shownNeighbors.current[side];

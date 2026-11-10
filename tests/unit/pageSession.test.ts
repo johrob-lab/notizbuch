@@ -8,6 +8,7 @@ import {
   holdsDrafts,
   PageSession,
   parkedDrafts,
+  previewStrokes,
   type PageSurface,
   type Phase,
   type SessionEngine,
@@ -1920,4 +1921,30 @@ test('a draft page that is being deleted holds no draft', async () => {
   await settle();
   expect(holdsDrafts()).toBe(false);
   expect(engine.writes).toEqual([]);
+});
+
+// ---------- Vorschau und Entwurf ----------
+
+/** Derselbe Strich im Feld Aufgaben, rechts neben den Notizen. */
+const inAufgaben = (s: Stroke): Stroke => ({ ...s, pts: s.pts.map((p) => ({ ...p, x: p.x + 600 })) });
+
+test('a draft that begins with the preview keeps its undo history, also when the file orders its strokes by field', async () => {
+  // Zuerst entstand der Strich bei den Aufgaben, danach der bei den Notizen. Die Datei ordnet nach Feldern: Notizen zuerst.
+  const file = serializePage(pageOf(inAufgaben(stroke('frueh', 1000)), stroke('spaet', 2000)), FIELDS, BACKGROUND);
+  expect(ids(file)).toEqual(['spaet', 'frueh']);
+  const engine = fakeEngine(file);
+  // So zeigt die Fläche den Nachbarn, der durch Weiterscrollen zur offenen Seite wird: mit den Strichen seiner Vorschau.
+  const surface = fakeSurface(pageOf(...previewStrokes(file)));
+  const read = engine.holdRead();
+  const { session } = open(engine, surface, { draft: true });
+  const loading = session.reload();
+  await read.reached;
+  surface.page = { ...surface.page, strokes: [...surface.page.strokes, stroke('neu', 3000)] };
+  session.changed(surface.page);
+  read.release();
+  await loading;
+  await settle();
+  expect(surface.sets).toEqual([]); // nicht neu gesetzt: Der Verlauf für Rückgängig bleibt
+  expect(ids(surface.page)).toEqual(['frueh', 'spaet', 'neu']);
+  expect(ids(engine.writes.at(-1)!).sort()).toEqual(['frueh', 'neu', 'spaet']);
 });
