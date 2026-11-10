@@ -274,14 +274,33 @@ export class SyncEngine {
    * Mit lokaler Kopie ist `unknown` nie wahr.
    */
   async lookup(path: string): Promise<{ text: string | null; unknown: boolean }> {
+    return this.#lookup(path, true);
+  }
+
+  /**
+   * Liest wie `read`, aber nur zum Anzeigen (die Vorschau eines Nachbarn): Die Seite dieses Fensters wird nicht an den Text
+   * gebunden (`#page` und `#pageText` bleiben, wie sie sind, damit das Zusammenführen beim Schreiben der offenen Seite nicht
+   * auf den Text einer Vorschau baut), und die Kopie wird nicht im Hintergrund aufgefrischt. Eine Datei von GitHub wird wie bei
+   * `read` als Kopie abgelegt.
+   */
+  async peek(path: string): Promise<string | null> {
+    return (await this.#lookup(path, false)).text;
+  }
+
+  /** Das Lesen hinter `lookup` und `peek`. Mit `bind` wird die Seite an den Text gebunden und im Hintergrund aufgefrischt. */
+  async #lookup(path: string, bind: boolean): Promise<{ text: string | null; unknown: boolean }> {
+    const gets = (text: string, version: PageVersion) => {
+      if (bind) this.#pageGets(path, text, version);
+    };
+    const gone = (): null => (bind ? this.#pageGetsNothing(path) : null);
     const local = await this.#store.get('files', path);
     if (local) {
-      this.#pageGets(path, local.text, { sha: local.sha, baseText: local.base });
-      if (!this.#frozen) void this.#refreshInBackground(path);
+      gets(local.text, { sha: local.sha, baseText: local.base });
+      if (bind && !this.#frozen) void this.#refreshInBackground(path);
       return { text: local.text, unknown: false };
     }
     // Gelöscht, das Löschen steht noch aus.
-    if ((await this.#store.get('outbox', path))?.deleted) return { text: this.#pageGetsNothing(path), unknown: false };
+    if ((await this.#store.get('outbox', path))?.deleted) return { text: gone(), unknown: false };
     let remote: Remote | null;
     try {
       remote = await this.#fetch(path);
@@ -292,7 +311,7 @@ export class SyncEngine {
       }
       throw error;
     }
-    if (!remote) return { text: this.#pageGetsNothing(path), unknown: false };
+    if (!remote) return { text: gone(), unknown: false };
     const fetched = remote;
     // Ein Fenster ohne Schreibrecht und eine beendete Engine zeigen, was auf GitHub liegt, und merken sich nichts davon.
     if (this.#frozen) return { text: fetched.text, unknown: false };
@@ -305,8 +324,8 @@ export class SyncEngine {
       await tx.objectStore('files').put(record);
       return record;
     });
-    if (!kept) return { text: this.#pageGetsNothing(path), unknown: false };
-    this.#pageGets(path, kept.text, { sha: kept.sha, baseText: kept.base });
+    if (!kept) return { text: gone(), unknown: false };
+    gets(kept.text, { sha: kept.sha, baseText: kept.base });
     return { text: kept.text, unknown: false };
   }
 

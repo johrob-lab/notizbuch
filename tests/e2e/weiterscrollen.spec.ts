@@ -460,6 +460,22 @@ test('the preview shows what the neighbour has', async ({ page }) => {
   expect(await hash(page)).toBe(DAY);
 });
 
+test('the preview of a neighbour the device knows does not ask GitHub', async ({ page }) => {
+  const file = tagFile('2026-10-30');
+  const repo = await openSeeded(page, '#/tag/2026-10-30', { files: { [file]: dayWith('2026-10-30', strokeThrough('a', CLEAN)) } });
+  await waitForPageOf(page, 'tag', '2026-10-30');
+  await expect.poll(() => strokeCount(page)).toBe(1); // gelesen, die Kopie liegt auf dem Gerät
+  await page.waitForTimeout(300); // das Auffrischen im Hintergrund der Seite ist angekommen
+  const reads = readsOf(repo, file);
+
+  // Der 29.10. hat den 30.10. als Nachbarn darunter: Seine Vorschau kommt aus der Kopie und fragt GitHub nicht.
+  await goTo(page, DAY);
+  await waitForPageOf(page, 'tag', '2026-10-29');
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 1 });
+  await page.waitForTimeout(300); // ein Auffrischen im Hintergrund wäre hier angekommen
+  expect(readsOf(repo, file)).toBe(reads);
+});
+
 test('a change from another device shows in the preview, and the neighbour is only read', async ({ page }) => {
   const file = tagFile('2026-10-30');
   const repo = await openSeeded(page, DAY, { files: { [file]: dayWith('2026-10-30', strokeThrough('a', CLEAN)) } });

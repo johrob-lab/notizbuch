@@ -378,6 +378,35 @@ test('an upload counts as a look', async () => {
   expect(fake.count('get')).toBe(0);
 });
 
+// ---------- Nur zum Anzeigen ----------
+
+test('peek returns the local copy and asks GitHub neither now nor in the background', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  await e.read(A); // legt die Kopie an
+  await quiet();
+  const gets = fake.count('get');
+  expect(await e.peek(A)).toBe(base);
+  await quiet();
+  expect(fake.count('get')).toBe(gets);
+});
+
+test('peek without a local copy fetches, keeps the copy and returns the text', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  expect(await e.peek(A)).toBe(base);
+  expect(await h.store.get('files', A)).toMatchObject({ path: A, text: base, sha: 's1', base });
+});
+
+test('peek reads a missing file, no network and no access as null', async () => {
+  expect(await e.peek(A)).toBeNull();
+  expect(await h.store.get('files', A)).toBeUndefined();
+  fake.files[A] = { text: base, sha: 's1' };
+  fake.offline = true;
+  expect(await e.peek(A)).toBeNull();
+  fake.offline = false;
+  fake.auth = false;
+  expect(await e.peek(A)).toBeNull();
+});
+
 // ---------- Löschen ----------
 
 test('remove queues a delete with the last known sha, drops the local copy and flush deletes', async () => {

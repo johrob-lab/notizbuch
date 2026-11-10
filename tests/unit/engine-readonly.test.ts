@@ -37,6 +37,14 @@ test('a read-only engine reads from GitHub and keeps no copy', async () => {
   expect(await h.store.getAll('meta')).toEqual([]);
 });
 
+test('peek in an engine that only reads keeps nothing', async () => {
+  h.fake.files[A] = { text: 'von GitHub', sha: 's1' };
+  const ro = readOnlyEngine();
+  expect(await ro.peek(A)).toBe('von GitHub');
+  await quiet();
+  expect(await h.store.get('files', A)).toBeUndefined();
+});
+
 test('a read-only engine shows the local copy of the active window and does not refresh it', async () => {
   h.fake.files[A] = { text: 'alt', sha: 's1' };
   await h.e.read(A);

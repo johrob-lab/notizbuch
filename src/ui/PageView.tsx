@@ -410,7 +410,7 @@ export function PageView(p: Props) {
       // Fehlt die Datei, lässt sie sich nicht lesen oder ist sie kaputt, zeigt die Vorschau nur das Papier. Gelesen ist sie, sobald
       // die Engine geantwortet hat, auch mit „gibt es nicht“; ein Fehler lässt sie ungelesen.
       engine
-        .read(path)
+        .peek(path)
         .then((text) => ({ strokes: text === null ? [] : parsePage(text).strokes, read: true }))
         .catch(() => ({ strokes: [] as Stroke[], read: false }))
         .then(({ strokes, read }) => {
@@ -421,8 +421,8 @@ export function PageView(p: Props) {
           surface.current?.setNeighbors(pagesOf(shownNow));
         });
     };
-    // Ein Lesen der verlassenen Seite setzte in der Engine den Stand, auf dem ihre Sitzung schreibt, und die speichert vielleicht
-    // noch. Ihre Striche hat die Vorschau schon aus der Übergabe. Das gilt nur für dieses erste Lesen nach dem Wechsel.
+    // Die Kopie der verlassenen Seite hat ihren letzten Strich vielleicht noch nicht, weil ihre Sitzung gerade speichert. Ihre
+    // Striche hat die Vorschau schon aus der Übergabe. Das gilt nur für dieses erste Lesen nach dem Wechsel.
     for (const side of SIDES) if (side !== keptFrom.current) load(side);
     keptFrom.current = null;
     const stop = engine.addRemoteChangeListener((changed) => {
