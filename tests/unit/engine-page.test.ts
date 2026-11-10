@@ -86,6 +86,26 @@ test('an edit that derives from the text the page read is merged after a poll re
   expect(h.conflicts).toEqual([]);
 });
 
+test('a peek after the poll leaves the page on the text it read, so its edit is still merged', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  fake.head = 'h1';
+  const shown = (await e.read(A)) as string;
+  await e.pollRemote();
+
+  fake.files[A] = { text: theirsGemeldet, sha: 's2' };
+  fake.changes = [A];
+  fake.head = 'h2';
+  await e.pollRemote();
+  expect(await e.peek(A)).toBe(theirsGemeldet); // eine Vorschau liest die neue Fassung, ohne die Seite umzubinden
+
+  await e.write(A, toggleTask(shown, lineOf(shown, 'Liste Planobjekte')), 'md');
+  await e.flush();
+  expect(fake.files[A].text).toContain('- [x] Liste Planobjekte');
+  expect(fake.files[A].text).toContain('todo:AAMkTEST2 gemeldet');
+  expect(puts(A)).toEqual([`put ${A} s1`, `put ${A} s2`]);
+  expect(h.conflicts).toEqual([]);
+});
+
 test('a page that read the new text after the poll writes on top of it without a conflict', async () => {
   fake.files[A] = { text: base, sha: 's1' };
   fake.head = 'h1';
