@@ -441,12 +441,13 @@ function dayHeadMarks(l: Layout, dayData: (day: Day) => AgendaDay): string {
  * Feiertagsnamen, Zeile 1 Geburtstage und Termine, Zeile 2 Prioritäten; gibt es nur eine Art, bekommt sie beide
  * Zeilen. Alle Geburtstage eines Tages stehen in einem kleineren Eintrag vorn, daneben beginnt der erste Termin: Die
  * Geburtstage werden nur so weit gekürzt, wie der erste Termin es braucht, aber nie unter 40 %. Ist Zeile 2 frei und
- * passen Eintrag und erster Termin nur untereinander ganz, steht der Termin ganz in Zeile 2 (`withHead`). Ohne Termine
- * bricht der Eintrag nach einem Namen in Zeile 2 um, wenn sie frei ist. Monat: nur Geburtstage und Termine, oben links
- * in der Zelle, links von Tageszahl und Kreis für heute. Zeile 1 gehört den Geburtstagen (ganze Breite), Zeile 2 den
- * Terminen (mindestens einer, weitere als „+N“); ohne Termine dürfen die Geburtstage beide Zeilen nutzen, ohne
- * Geburtstage die Termine. Tag: nur die Geburtstage, rechtsbündig in der Zeile des Untertitels. Jede Fläche hat ein
- * Clip-Rechteck, damit nie etwas darüber hinausläuft. Leer für die Besprechung und für Tage ohne Daten.
+ * passen Eintrag und erster Termin nicht nebeneinander, steht der Termin in Zeile 2, wenn beide untereinander ganz passen
+ * oder wenn es der einzige Termin ist (`withHead`). Ohne Termine bricht der Eintrag nach einem Namen in Zeile 2 um, wenn
+ * sie frei ist. Monat: nur Geburtstage und Termine, oben links in der Zelle, links von Tageszahl und Kreis für heute.
+ * Zeile 1 gehört den Geburtstagen (ganze Breite), Zeile 2 den Terminen (mindestens einer, weitere als „+N“); ohne
+ * Termine dürfen die Geburtstage beide Zeilen nutzen, ohne Geburtstage die Termine. Tag: nur die Geburtstage,
+ * rechtsbündig in der Zeile des Untertitels. Jede Fläche hat ein Clip-Rechteck, damit nie etwas darüber hinausläuft.
+ * Leer für die Besprechung und für Tage ohne Daten.
  */
 export function agendaMarks(l: Layout, dayData: (day: Day) => AgendaDay): string {
   if (l.kind === 'tag') return dayHeadMarks(l, dayData);

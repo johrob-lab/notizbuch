@@ -189,10 +189,12 @@ function wrapHead(head: AgendaItem, lines: number, width: number, size: number):
  * Die Geburtstage (`head`) als erster Eintrag der Zeile 1, dahinter die übrigen Einträge (`rest`, meist Termine).
  * Ohne `head` wie `fitLines`. Ohne `rest` darf `head` alle Zeilen nutzen und bricht nach einem Namen um (`wrapHead`).
  *
- * Der erste Termin steht in Zeile 1 oder, wenn zwei Zeilen frei sind, ganz in Zeile 2. Mit mehr als einer Zeile gilt
- * zuerst der Fluss `fitLines([head, ...rest], …)`: Stehen darin `head` und der erste Eintrag von `rest` ungekürzt,
- * nebeneinander oder untereinander, bleibt es dabei, auch wenn spätere Einträge in „+N“ wandern. Nie doppelt gekürzt:
- * Wo beide so ganz Platz haben, werden nicht Namen und Termin gekürzt, nur damit sie nebeneinander stehen.
+ * Der erste Termin steht in Zeile 1 oder, wenn zwei Zeilen frei sind, in Zeile 2. Mit mehr als einer Zeile gilt zuerst
+ * der Fluss `fitLines([head, ...rest], …)`. Er bleibt, wenn darin `head` und der erste Eintrag von `rest` ungekürzt
+ * stehen, nebeneinander oder untereinander, auch wenn spätere Einträge in „+N“ wandern. Hat `rest` genau einen Eintrag,
+ * bleibt er immer, sobald dieser darin steht, ganz oder gekürzt: Dann bekommen Eintrag und Termin notfalls je eine ganze
+ * Zeile, und es geht kein Termin verloren. Nie doppelt gekürzt: Wo beide so ganz Platz haben, und bei nur einem Termin
+ * überhaupt, werden nicht Namen und Termin gekürzt, nur damit sie nebeneinander stehen.
  *
  * Sonst, und mit nur einer Zeile immer, gilt Variante C: `head` wird nur so weit mit Ellipse gekürzt, wie der erste
  * Eintrag von `rest` es braucht (samt Trenner und, wenn es nur eine Zeile gibt und weitere folgen, „ +N“), aber nie unter
@@ -207,7 +209,8 @@ export function withHead(head: AgendaItem | undefined, rest: AgendaItem[], lines
   if (lines > 1) {
     const flow = fitLines([head, ...rest], lines, width, size);
     const [shownHead, shownFirst] = flow.flatMap((l) => l.items);
-    if (shownHead?.text === head.text && shownFirst?.text === rest[0].text) return flow;
+    const whole = shownHead?.text === head.text && shownFirst?.text === rest[0].text;
+    if (whole || (rest.length === 1 && shownFirst !== undefined)) return flow;
   }
   const headSize = head.size ?? size;
   const plus = lines === 1 && rest.length > 1 ? textWidth(moreLabel(rest.length - 1), size) : 0;

@@ -644,6 +644,29 @@ describe('agendaMarks', () => {
     expect(clips(agendaMarks(wocheLayout('2026-W44'), only('2026-10-26', { geburtstage: [geb('Max Beispiel', '2026-10-26')], termine: [], prioritaeten: [] })))[0].rect[2]).toBeLessThan(300);
   });
 
+  const weekOne = (names: string[], title: string) =>
+    lines(
+      agendaMarks(
+        wocheLayout('2026-W44'),
+        only('2026-10-28', { geburtstage: names.map((n) => geb(n)), termine: [{ date: '2026-10-28', start: '08:00', end: '09:00', allDay: false, title }], prioritaeten: [] }),
+      ),
+    );
+
+  test('with one appointment wider than the line and no priorities the week shows the whole entry in line 1 and the shortened appointment in line 2', () => {
+    expect(weekOne(['Max Beispiel', 'Paul Beispiel'], 'Koordinationsbesprechung Brückenprüfung Strecke Nord mit allen Beteiligten')).toEqual([
+      '<tspan fill="#a8674f" font-size="11">🎂 Max Beispiel, Paul Beispiel</tspan>',
+      '<tspan fill="#55657a">08:00 Koordinationsbesprechung Brückenprüfung Strecke…</tspan>',
+    ]);
+  });
+
+  test('with six birthdays, one appointment and no priorities the week fills line 1 with the entry and shows the appointment whole in line 2', () => {
+    const six = ['Max Beispiel', 'Erika Muster', 'Paul Beispiel', 'Anna Beispiel', 'Ben Beispiel', 'Lena Muster'];
+    expect(weekOne(six, 'Abstimmung')).toEqual([
+      '<tspan fill="#a8674f" font-size="11">🎂 Max Beispiel, Erika Muster, Paul Beispiel, Anna Beispiel, Ben Beis…</tspan>',
+      '<tspan fill="#55657a">08:00 Abstimmung</tspan>',
+    ]);
+  });
+
   test('with a birthday and a priority but no appointments the week shows the whole entry in line 1 and the priority in line 2', () => {
     const out = lines(agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: LONG.map((n) => geb(n)), termine: [], prioritaeten: prio })));
     expect(out).toHaveLength(2);
