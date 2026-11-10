@@ -85,6 +85,13 @@ export function textWidth(s: string, size: number): number {
   return sum * size;
 }
 
+/**
+ * Kleine Toleranz, wenn `fitLines` prüft, ob etwas in eine Zeile passt. Die Breiten sind Summen von Kommazahlen; was
+ * rechnerisch genau passt, soll nicht an einem Rest aus der Rundung scheitern (sonst würde zum Beispiel `withHead` den
+ * ersten Termin kürzen, obwohl er genau neben den Eintrag passt).
+ */
+const FIT_EPSILON = 1e-6;
+
 /** Breite einer Reihe von Einträgen mit Trennern: jeder Eintrag mit seiner eigenen Größe, der Trenner mit der der Zeile. */
 const rowWidth = (list: AgendaItem[], size: number): number =>
   list.reduce((sum, i, k) => sum + textWidth(i.text, i.size ?? size) + (k > 0 ? textWidth(SEPARATOR, size) : 0), 0);
@@ -118,12 +125,12 @@ export function fitLines(items: AgendaItem[], lines: number, width: number | num
     const last = row === lines - 1;
     const w = widths[Math.min(row, widths.length - 1)];
     let taken = 0;
-    while (next + taken < items.length && rowWidth(items.slice(next, next + taken + 1), size) <= w) taken++;
+    while (next + taken < items.length && rowWidth(items.slice(next, next + taken + 1), size) <= w + FIT_EPSILON) taken++;
     let more = 0;
     if (last) {
       // " +N" muss mitpassen: so lange den letzten Eintrag weglassen, bis es stimmt.
       const rest = (k: number) => items.length - next - k;
-      while (taken > 0 && rest(taken) > 0 && rowWidth(items.slice(next, next + taken), size) + textWidth(moreLabel(rest(taken)), size) > w) taken--;
+      while (taken > 0 && rest(taken) > 0 && rowWidth(items.slice(next, next + taken), size) + textWidth(moreLabel(rest(taken)), size) > w + FIT_EPSILON) taken--;
       more = rest(Math.max(taken, 1));
     }
     if (taken === 0) {
@@ -181,15 +188,27 @@ function wrapHead(head: AgendaItem, lines: number, width: number, size: number):
 /**
  * Die Geburtstage (`head`) als erster Eintrag der Zeile 1, dahinter die übrigen Einträge (`rest`, meist Termine).
  * Ohne `head` wie `fitLines`. Ohne `rest` darf `head` alle Zeilen nutzen und bricht nach einem Namen um (`wrapHead`).
- * Sonst wird `head` nur so weit mit Ellipse gekürzt, wie der erste Eintrag von `rest` es braucht (samt Trenner und, wenn
- * es nur eine Zeile gibt und weitere folgen, „ +N“), aber nie unter `HEAD_SHARE * width`. Bekommt `head` mehr als diesen
- * Anteil, steht der erste Eintrag von `rest` also ganz daneben. `rest` fließt in den Rest von Zeile 1 und dann in die
- * Zeilen darunter in voller Breite. Reicht der Rest von Zeile 1 nicht einmal für eine Ellipse, steht `head` allein und
- * `rest` beginnt in Zeile 2 (gibt es nur eine Zeile, zählt `more` die Einträge von `rest`). `more` zählt nur `rest`.
+ *
+ * Der erste Termin steht in Zeile 1 oder, wenn zwei Zeilen frei sind, ganz in Zeile 2. Mit mehr als einer Zeile gilt
+ * zuerst der Fluss `fitLines([head, ...rest], …)`: Stehen darin `head` und der erste Eintrag von `rest` ungekürzt,
+ * nebeneinander oder untereinander, bleibt es dabei, auch wenn spätere Einträge in „+N“ wandern. Nie doppelt gekürzt:
+ * Wo beide so ganz Platz haben, werden nicht Namen und Termin gekürzt, nur damit sie nebeneinander stehen.
+ *
+ * Sonst, und mit nur einer Zeile immer, gilt Variante C: `head` wird nur so weit mit Ellipse gekürzt, wie der erste
+ * Eintrag von `rest` es braucht (samt Trenner und, wenn es nur eine Zeile gibt und weitere folgen, „ +N“), aber nie unter
+ * `HEAD_SHARE * width`. Bekommt `head` mehr als diesen Anteil, steht der erste Eintrag von `rest` also ganz daneben.
+ * `rest` fließt in den Rest von Zeile 1 und dann in die Zeilen darunter in voller Breite. Reicht der Rest von Zeile 1
+ * nicht einmal für eine Ellipse, steht `head` allein und `rest` beginnt in Zeile 2 (gibt es nur eine Zeile, zählt `more`
+ * die Einträge von `rest`). `more` zählt nur `rest`.
  */
 export function withHead(head: AgendaItem | undefined, rest: AgendaItem[], lines: number, width: number, size: number): AgendaLine[] {
   if (!head) return fitLines(rest, lines, width, size);
   if (rest.length === 0) return wrapHead(head, lines, width, size);
+  if (lines > 1) {
+    const flow = fitLines([head, ...rest], lines, width, size);
+    const [shownHead, shownFirst] = flow.flatMap((l) => l.items);
+    if (shownHead?.text === head.text && shownFirst?.text === rest[0].text) return flow;
+  }
   const headSize = head.size ?? size;
   const plus = lines === 1 && rest.length > 1 ? textWidth(moreLabel(rest.length - 1), size) : 0;
   const need = textWidth(SEPARATOR, size) + textWidth(rest[0].text, rest[0].size ?? size) + plus;

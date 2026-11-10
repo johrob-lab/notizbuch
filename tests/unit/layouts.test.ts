@@ -608,6 +608,42 @@ describe('agendaMarks', () => {
     }
   });
 
+  test('without priorities the week keeps the whole entry in line 1 and the whole first appointment in line 2 when they do not fit side by side', () => {
+    const at = (date: string, start: string, title: string): Termin => ({ date, start, end: '23:00', allDay: false, title });
+    const cases: { day: string; names: string[]; termin: Termin; want: string[] }[] = [
+      {
+        day: '2026-10-28',
+        names: ['Max Beispiel', 'Paul Beispiel'],
+        termin: at('2026-10-28', '08:00', 'Koordinationsbesprechung Brücke'),
+        want: ['<tspan fill="#a8674f" font-size="11">🎂 Max Beispiel, Paul Beispiel</tspan>', '<tspan fill="#55657a">08:00 Koordinationsbesprechung Brücke</tspan>'],
+      },
+      {
+        day: '2026-10-28',
+        names: ['Max Beispiel', 'Erika Muster', 'Paul Beispiel'],
+        termin: at('2026-10-28', '08:00', 'Abstimmung Werkstatt'),
+        want: ['<tspan fill="#a8674f" font-size="11">🎂 Max Beispiel, Erika Muster, Paul Beispiel</tspan>', '<tspan fill="#55657a">08:00 Abstimmung Werkstatt</tspan>'],
+      },
+      {
+        // Nationalfeiertag: die schmalere Fläche links vom Namen des Feiertags.
+        day: '2026-10-26',
+        names: ['Max Beispiel', 'Paul Beispiel'],
+        termin: at('2026-10-26', '09:30', 'Zahnarzt'),
+        want: ['<tspan fill="#a8674f" font-size="11">🎂 Max Beispiel, Paul Beispiel</tspan>', '<tspan fill="#55657a">09:30 Zahnarzt</tspan>'],
+      },
+      {
+        day: '2026-10-28',
+        names: ['Maximilian Beispielmann', 'Wilhelmine Musterfrau'],
+        termin: at('2026-10-28', '08:00', 'Abstimmung'),
+        want: ['<tspan fill="#a8674f" font-size="11">🎂 Maximilian Beispielmann, Wilhelmine Musterfrau</tspan>', '<tspan fill="#55657a">08:00 Abstimmung</tspan>'],
+      },
+    ];
+    for (const c of cases) {
+      const svg = agendaMarks(wocheLayout('2026-W44'), only(c.day, { geburtstage: c.names.map((n) => geb(n, c.day)), termine: [c.termin], prioritaeten: [] }));
+      expect(lines(svg)).toEqual(c.want);
+    }
+    expect(clips(agendaMarks(wocheLayout('2026-W44'), only('2026-10-26', { geburtstage: [geb('Max Beispiel', '2026-10-26')], termine: [], prioritaeten: [] })))[0].rect[2]).toBeLessThan(300);
+  });
+
   test('with a birthday and a priority but no appointments the week shows the whole entry in line 1 and the priority in line 2', () => {
     const out = lines(agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: LONG.map((n) => geb(n)), termine: [], prioritaeten: prio })));
     expect(out).toHaveLength(2);

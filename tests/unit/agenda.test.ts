@@ -201,18 +201,58 @@ test('only an anniversary and a long first appointment: the entry starts with a 
   expect(line.items[1].text.startsWith('08:00 Schulung')).toBe(true);
 });
 
-test('the birthdays are only shortened as far as the first appointment needs, with one line and with two', () => {
+test('the birthdays are only shortened as far as the first appointment needs; with two free lines both stand whole one below the other', () => {
   const head = { text: '🎂 Max Beispiel, Paul Beispiel, Erika Muster, Hans Beispiel', tone: 'geburtstag' as const, size: 11 };
   const rest = ['08:00 Abstimmung', '10:00 Abnahme Brücke'].map((text) => ({ text, tone: 'termin' as const }));
   // Eine Zeile: Platz bleibt für Trenner, ersten Termin und „ +1“. Der Eintrag bekommt mehr als 40 %, der Termin steht ganz da.
   const [one] = withHead(head, rest, 1, 396, 13);
   expect(one.items.map((i) => i.text)).toEqual(['🎂 Max Beispiel, Paul Beispiel, Erika Mus…', '08:00 Abstimmung']);
   expect(one.more).toBe(1);
-  // Zwei Zeilen: „ +1“ braucht Zeile 1 nicht, der zweite Termin steht in Zeile 2. Vor der Ellipse steht kein Komma.
+  // Zwei Zeilen: Nebeneinander passen Eintrag und erster Termin nicht, untereinander schon. Dann wird nichts gekürzt.
   expect(withHead(head, rest, 2, 396, 13).map((l) => [lineText(l), l.more])).toEqual([
-    ['🎂 Max Beispiel, Paul Beispiel, Erika Muster… · 08:00 Abstimmung', 0],
+    ['🎂 Max Beispiel, Paul Beispiel, Erika Muster, Hans Beispiel', 0],
+    ['08:00 Abstimmung · 10:00 Abnahme Brücke', 0],
+  ]);
+});
+
+test('with two free lines the whole entry and the whole first appointment win, later appointments may go into +N', () => {
+  const head = { text: '🎂 Max Beispiel, Erika Muster, Paul Beispiel', tone: 'geburtstag' as const, size: 11 };
+  const rest = ['08:00 Abstimmung Werkstatt', '10:00 Abnahme Brücke', '12:00 Mittag'].map((text) => ({ text, tone: 'termin' as const }));
+  expect(withHead(head, rest, 2, 396, 13).map((l) => [lineText(l), l.more])).toEqual([
+    ['🎂 Max Beispiel, Erika Muster, Paul Beispiel', 0],
+    ['08:00 Abstimmung Werkstatt · 10:00 Abnahme Brücke', 1],
+  ]);
+});
+
+test('with two lines variant C stays when the entry and the first appointment would not both stand whole one below the other', () => {
+  // Der erste Termin passt allein in Zeile 2, aber nicht mit „ +1“: Untereinander würde er gekürzt.
+  const head = { text: '🎂 Max Beispiel, Paul Beispiel', tone: 'geburtstag' as const, size: 11 };
+  const rest = ['08:00 Koordinationsbesprechung Brücke mit Baufirma Ost', '10:00 Abnahme Brücke'].map((text) => ({ text, tone: 'termin' as const }));
+  expect(fitLines([head, ...rest], 2, 396, 13)[1].items[0].text.endsWith('…')).toBe(true);
+  const lines = withHead(head, rest, 2, 396, 13);
+  expect(lines.map((l) => [lineText(l), l.more])).toEqual([
+    ['🎂 Max Beispiel, Paul Beisp… · 08:00 Koordinationsbesprechung…', 0],
     ['10:00 Abnahme Brücke', 0],
   ]);
+  expect(textWidth(lines[0].items[0].text, 11)).toBeLessThanOrEqual(0.4 * 396);
+  // Der Eintrag passt nicht einmal allein in eine Zeile: Er wird nur so weit gekürzt, wie der erste Termin es braucht
+  // (mit zwei Zeilen ohne „ +1“), vor der Ellipse steht kein Komma.
+  const six = { text: '🎂 Max Beispiel, Erika Muster, Paul Beispiel, Anna Beispiel, Ben Beispiel, Lena Muster', tone: 'geburtstag' as const, size: 11 };
+  const two = ['08:00 Abstimmung', '10:00 Abnahme Brücke'].map((text) => ({ text, tone: 'termin' as const }));
+  expect(withHead(six, two, 2, 396, 13).map((l) => [lineText(l), l.more])).toEqual([
+    ['🎂 Max Beispiel, Erika Muster, Paul Beispiel… · 08:00 Abstimmung', 0],
+    ['10:00 Abnahme Brücke', 0],
+  ]);
+});
+
+test('exactly at the limit variant C keeps the first appointment whole, rounding does not shorten it', () => {
+  const head = { text: '🎂 Max Beispiel, Paul Beispiel', tone: 'geburtstag' as const, size: 11 };
+  const [first, second] = ['08:00 Abstimmung', '09:30 Zahnarzt'].map((text) => ({ text, tone: 'termin' as const }));
+  // Die Breite ist genau Eintrag, Trenner und erster Termin (dazu „ +1“, wenn ein zweiter folgt). Beim Rechnen mit
+  // Gleitkommazahlen bleibt davon ein winziger Rest, der den Termin nicht kürzen darf.
+  const exact = textWidth(head.text, 11) + textWidth(SEPARATOR, 13) + textWidth(first.text, 13);
+  expect(withHead(head, [first], 1, exact, 13)).toEqual([{ items: [head, first], more: 0 }]);
+  expect(withHead(head, [first, second], 1, exact + textWidth(moreLabel(1), 13), 13)).toEqual([{ items: [head, first], more: 1 }]);
 });
 
 test('with room in line 1 nothing is shortened, with one line and with two', () => {
