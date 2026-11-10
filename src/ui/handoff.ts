@@ -11,11 +11,12 @@ import { normalizePath } from '../sync/paths';
 /**
  * Was die Seite `path` beim Öffnen von der Seite übernimmt, die sie eben noch als Nachbarin zeigte. `view` ist die Ansicht in
  * Einheiten der neuen Seite (siehe `viewFor`), `page` das, was sie zeigt, bis ihre Datei gelesen ist (die Vorschau). `read` sagt,
- * ob die Vorschau ihre Datei schon gelesen hatte; sonst zeigt die neue Seite beim Laden den Hinweis wie jede andere. `from` ist
- * die bisherige Seite als Nachbarin, `side` von der neuen Seite aus gesehen. `from.read`: Ihre Sitzung hatte die Datei gelesen
- * (`bereit`). Dann zeigt `from.page` ihre neuesten Striche, und weil sie vielleicht noch speichert, liest die neue Seite die
- * Datei erst nach einer fremden Änderung. Sonst hat sie nie geschrieben, und die neue Seite liest sie wie jeden Nachbarn.
- * `at` ist `Date.now()` beim Anbieten.
+ * ob die Vorschau ihre Datei schon gelesen hatte: Dann nimmt die neue Seite, wo geschrieben wird, gleich Striche an (Entwurf, siehe
+ * `PageSession`), sonst zeigt sie beim Laden den Hinweis wie jede andere. `from` ist die bisherige Seite als Nachbarin, `side` von
+ * der neuen Seite aus gesehen. `from.read`: Ihre Sitzung hatte die Datei gelesen (`bereit`), oder die Seite war ein Entwurf, den
+ * ihre Sitzung nach dem Lesen speichert. Dann zeigt `from.page` ihre neuesten Striche, und weil sie vielleicht noch speichert,
+ * liest die neue Seite die Datei erst nach einer fremden Änderung. Sonst hat sie nie geschrieben, und die neue Seite liest sie wie
+ * jeden Nachbarn. `at` ist `Date.now()` beim Anbieten.
  */
 export type Handoff = {
   path: string;

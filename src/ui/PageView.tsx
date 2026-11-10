@@ -186,13 +186,14 @@ export function PageView(p: Props) {
   // Die Nachbarn, wie die Seite sie gerade bekommt, für den Effekt der Fläche: Er entsteht nicht neu, wenn sie sich ändern.
   const neighborsRef = useRef(p.neighbors);
   neighborsRef.current = p.neighbors;
-  // Öffnete die Seite durch Weiterscrollen (Übergabe, siehe `handoff.ts`) und hatte die verlassene Seite ihre Datei gelesen, liegt
-  // hier bis zum ersten Lesen der Nachbarn, auf welcher Seite sie als Nachbarin hängt. Dieses Lesen lässt ihre Datei aus: Ihre
-  // Sitzung speichert vielleicht noch.
+  // Öffnete die Seite durch Weiterscrollen (Übergabe, siehe `handoff.ts`) und hatte die verlassene Seite ihre Datei gelesen oder war
+  // sie ein Entwurf (siehe `read` im Effekt der Fläche), liegt hier bis zum ersten Lesen der Nachbarn, auf welcher Seite sie als
+  // Nachbarin hängt. Dieses Lesen lässt ihre Datei aus: Ihre Sitzung speichert vielleicht noch.
   const keptFrom = useRef<Side | null>(null);
   const [phase, setPhase] = useState<Phase>('laden');
   // Der Hinweis „Seite wird geladen“ kommt erst, wenn feststeht, dass die Seite nicht schon zu sehen ist (im Effekt der Fläche):
-  // Mit einer Übergabe, deren Vorschau gelesen war, zeigt sie bis zum Lesen ihrer Datei diese Vorschau.
+  // Mit einer Übergabe, deren Vorschau gelesen war, zeigt sie bis zum Lesen ihrer Datei diese Vorschau und nimmt, wo geschrieben
+  // wird, schon Striche an.
   const [loadingHint, setLoadingHint] = useState(false);
   // Eine Seite aus einer neueren Version: Vielleicht liegt diese schon bereit, dann lädt die App sie im ruhigen Moment.
   useEffect(() => {
@@ -223,11 +224,16 @@ export function PageView(p: Props) {
     // Weiterscrollen: Hat die Seite, von der man kam, eine Übergabe bereitgelegt, gilt sie nur beim ersten Aufbau dieser Seite.
     // Entsteht die Fläche später für dieselbe Seite neu (andere Einstellungen), ist sie verbraucht.
     const handoff = takeHandoff(path);
-    // Ob die Sitzung dieser Fläche die Datei gelesen hat (`bereit`): Erst dann zeigt die Fläche ihre Striche, und erst dann kann sie
-    // geschrieben haben. Eine Übergabe sagt das der nächsten Seite weiter.
-    let read = false;
+    // War die Vorschau dieser Seite gelesen, zeigt die Fläche von Anfang an einen gelesenen Stand der Seite: Dann nimmt sie sofort
+    // Striche an (Entwurf), geschrieben wird erst nach dem ersten Lesen (siehe `PageSession`). Wo nur angesehen wird, nie.
+    const draft = handoff?.read === true && !readOnly;
+    // Ob die Fläche einen gelesenen Stand der Seite zeigt, mit allem, was ihre Sitzung speichert: Die Sitzung hat die Datei gelesen
+    // (`bereit`), oder die Seite ist ein Entwurf. Dann zeigt die Fläche die gelesene Vorschau, und was sie dazubekommt, speichert die
+    // Sitzung nach dem Lesen, auch wenn die Seite dann schon verlassen ist. Eine Übergabe sagt das der nächsten Seite weiter: Sie
+    // zeigt diese Seite dann mit den Strichen aus der Übergabe und lässt ihre Datei beim ersten Lesen der Nachbarn aus (`keptFrom`).
+    let read = draft;
     // Diese Seite als Nachbarin der nächsten, von dort aus auf der Seite `side`: mit allen Strichen, die sie jetzt hat, dem
-    // Hintergrund, den sie gerade zeigt, und ob ihre Sitzung die Datei gelesen hat.
+    // Hintergrund, den sie gerade zeigt, und ob sie als gelesen gilt (`read`).
     const leaving = (side: Side): Handoff['from'] => ({ side, page: { strokes: view.getPage().strokes, background: view.shownBackground }, read });
     // Die Übergabe, die diese Seite zuletzt angeboten hat. Bis die nächste Seite aufgebaut ist, nimmt diese noch Eingaben an: Beim
     // Abbau (unten) kommt in die Übergabe, was sie dann ist.
@@ -255,7 +261,8 @@ export function PageView(p: Props) {
       // im Verlauf, die App baut dann die Seite neu auf wie bei jeder anderen Adresse. Damit dabei nichts springt, legt diese
       // Seite vorher eine Übergabe bereit: Die neue steht, wo sie als Nachbarin stand, zeigt zuerst ihre Vorschau, und diese
       // Seite hängt dort als Nachbarin, mit allen Strichen, die sie beim Abbau hat (auch einem, der erst dann fertig wird), und
-      // dem Hintergrund, den sie zeigt. Ob die Vorschau und diese Seite ihre Dateien schon gelesen hatten, sagt sie dazu.
+      // dem Hintergrund, den sie zeigt. Ob die Vorschau ihre Datei schon gelesen hatte und ob diese Seite als gelesen gilt (`read`),
+      // sagt sie dazu.
       onNeighbor: (side, now) => {
         const next = shownNeighbors.current[side];
         if (!next) return;
@@ -275,13 +282,14 @@ export function PageView(p: Props) {
     const first = emptyPage();
     if (handoff) {
       // Bis ihre Datei gelesen ist, zeigt die Seite, was die Vorschau von ihr zeigte. Für die Sitzung ist das keine Änderung (die
-      // Fläche meldet nichts), geschrieben wird deswegen nichts. Danach zeigt die Sitzung die Datei, wenn sie anders ist.
+      // Fläche meldet nichts), geschrieben wird deswegen nichts. Danach zeigt die Sitzung die Datei, wenn sie anders ist; im
+      // Entwurf kommt dazu, was auf der Fläche inzwischen dazukam.
       view.setPage({ ...first, strokes: handoff.page.strokes }, layout.fields, handoff.page.background);
       const from = handoff.from;
       const spec = neighborsRef.current?.[from.side];
       if (spec) {
-        // Hatte die verlassene Seite ihre Datei gelesen, bleibt es bei ihren Strichen aus der Übergabe. Sonst hat sie nie
-        // geschrieben, und der Nachbar-Effekt liest sie wie jeden Nachbarn; bis dahin zeigt sie, was sie zeigte.
+        // Hatte die verlassene Seite ihre Datei gelesen oder war sie ein Entwurf, bleibt es bei ihren Strichen aus der Übergabe.
+        // Sonst hat sie nie geschrieben, und der Nachbar-Effekt liest sie wie jeden Nachbarn; bis dahin zeigt sie, was sie zeigte.
         if (from.read) keptFrom.current = from.side;
         const withFrom = { ...shownNeighbors.current };
         withFrom[from.side] = { spec, path: normalizePath(spec.path), page: from.page, read: from.read };
@@ -319,6 +327,7 @@ export function PageView(p: Props) {
       path,
       emptyPage,
       readOnly,
+      draft,
       fields: layout.fields,
       background,
       completePage: head?.complete,
@@ -393,8 +402,8 @@ export function PageView(p: Props) {
   // Die Dateien der Nachbarn: gelesen, sobald sie Nachbarn sind, und neu, wenn ein anderes Gerät eine davon ändert. Er liest nur, er
   // schreibt nie, und er hängt nur an ihren Pfaden. Eine Antwort gilt, solange der Nachbar diesen Pfad hat, und je Nachbar zählt die
   // neueste Anfrage. Die Seite, von der man durch Weiterscrollen kam, liest er beim ersten Lauf nicht, wenn sie ihre Datei gelesen
-  // hatte (`keptFrom`): Sie zeigt, was die Übergabe brachte, bis eine fremde Änderung kommt oder er wieder läuft. Das tut er nur mit
-  // einer neuen Engine (die Pfade stehen mit der Seite fest), und deren Stand gilt dann auch für sie.
+  // hatte oder ein Entwurf war (`keptFrom`): Sie zeigt, was die Übergabe brachte, bis eine fremde Änderung kommt oder er wieder
+  // läuft. Das tut er nur mit einer neuen Engine (die Pfade stehen mit der Seite fest), und deren Stand gilt dann auch für sie.
   const abovePath = neighbors?.above ? normalizePath(neighbors.above.path) : null;
   const belowPath = neighbors?.below ? normalizePath(neighbors.below.path) : null;
   useEffect(() => {

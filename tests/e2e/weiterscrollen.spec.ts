@@ -182,22 +182,25 @@ const cardView = (page: Page) =>
     const m = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.karten')!).transform);
     return { x: stage.left + m.e, y: stage.top + m.f, scale: m.a };
   });
-/** Ein Finger zieht auf der Fläche von `from` nach `to` (Bildschirmkoordinaten) und hebt ab, ohne den Testzugang der App. */
-const swipeOnScreen = (page: Page, from: { x: number; y: number }, to: { x: number; y: number }) =>
+/**
+ * Ein Finger (`touch`) oder der Stift (`pen`) setzt am ersten Ort von `path` auf (Bildschirmkoordinaten), zieht zu den weiteren und
+ * hebt am letzten ab, ohne den Testzugang der App.
+ */
+const strokeOnScreen = (page: Page, kind: 'touch' | 'pen', path: { x: number; y: number }[]) =>
   page.evaluate(
-    ({ a, b }) => {
+    ({ pointerType, points }) => {
       const target = document.querySelector('[data-testid="surface"] canvas[data-layer="live"]')!;
-      const send = (type: 'pointerdown' | 'pointermove' | 'pointerup', f: number) =>
+      const send = (type: 'pointerdown' | 'pointermove' | 'pointerup', at: { x: number; y: number }) =>
         target.dispatchEvent(
           new PointerEvent(type, {
-            pointerId: 29,
-            pointerType: 'touch',
+            pointerId: pointerType === 'pen' ? 11 : 29,
+            pointerType,
             isPrimary: true,
             pressure: 0.5,
             width: 1,
             height: 1,
-            clientX: a.x + (b.x - a.x) * f,
-            clientY: a.y + (b.y - a.y) * f,
+            clientX: at.x,
+            clientY: at.y,
             button: type === 'pointermove' ? -1 : 0,
             buttons: type === 'pointerup' ? 0 : 1,
             bubbles: true,
@@ -205,11 +208,17 @@ const swipeOnScreen = (page: Page, from: { x: number; y: number }, to: { x: numb
             composed: true,
           }),
         );
-      send('pointerdown', 0);
-      for (const f of [0.25, 0.5, 0.75, 1]) send('pointermove', f);
-      send('pointerup', 1);
+      points.forEach((at, i) => send(i === 0 ? 'pointerdown' : 'pointermove', at));
+      send('pointerup', points[points.length - 1]);
     },
-    { a: from, b: to },
+    { pointerType: kind, points: path },
+  );
+/** Ein Finger zieht auf der Fläche von `from` nach `to` (Bildschirmkoordinaten) und hebt ab, ohne den Testzugang der App. */
+const swipeOnScreen = (page: Page, from: { x: number; y: number }, to: { x: number; y: number }) =>
+  strokeOnScreen(
+    page,
+    'touch',
+    [0, 0.25, 0.5, 0.75, 1].map((f) => ({ x: from.x + (to.x - from.x) * f, y: from.y + (to.y - from.y) * f })),
   );
 /** Wie `scrollUntil`, aber ohne den Testzugang der App: für eine Tagesseite, die noch lädt. Die Lage kommt aus `cardView`. */
 async function scrollWhileLoading(page: Page, target: number) {
@@ -225,6 +234,15 @@ async function scrollWhileLoading(page: Page, target: number) {
     if (step === dy) return;
   }
   throw new Error(`Die Mitte kam nicht bis ${target}.`);
+}
+/** Wie `pen(page).stroke`, aber ohne den Testzugang der App: für eine Tagesseite, die noch lädt. Die Lage kommt aus `cardView`. */
+async function penWhileLoading(page: Page, path: [number, number][]) {
+  const view = await cardView(page);
+  await strokeOnScreen(
+    page,
+    'pen',
+    path.map(([x, y]) => ({ x: view.x + x * view.scale, y: view.y + y * view.scale })),
+  );
 }
 
 /** Ein erfundener Strich mit dem Kugelschreiber quer durch `at` (Seiteneinheiten). */
@@ -817,10 +835,95 @@ test('a day whose preview was not read yet says that it is loading', async ({ pa
   // Die Vorschau zeigte noch nichts vom 30.10.: Bis seine Datei da ist, sagt er wie jede Seite, dass er lädt.
   await scrollUntil(page, PAST_BELOW);
   await expect(page.getByText('Seite wird geladen')).toBeVisible();
+  // Solange nimmt er keinen Strich an: Die Fläche zeigt noch nicht, was in seiner Datei steht.
+  await penWhileLoading(page, IN_HEAD);
+  await expect(toolButton(page, 'Rückgängig')).toBeDisabled();
   release();
   await waitForPageOf(page, 'tag', '2026-10-30');
   expect(await strokeCount(page)).toBe(1);
   await expect(page.getByText('Seite wird geladen')).toHaveCount(0);
+  // Der eine Strich ist der aus seiner Datei, der Stift hat keinen dazugebracht.
+  expect(await page.evaluate(() => window.__notizbuch.currentPage().strokes.map((s) => s.id))).toEqual(['a']);
+});
+
+/**
+ * Der 29.10. ist offen, und die Vorschau des 30.10. darunter hat seine Datei gelesen: Es gibt sie nicht. Von da an antwortet
+ * GitHub auf das Lesen dieser Datei erst, wenn der Test `release` ruft. Der Finger schiebt zum 30.10., dessen Sitzung fragt GitHub
+ * nach der Datei, und sofort schreibt der Stift einen Strich in seinen Kopf. Gibt das Repo, `release` und den Pfad der Datei zurück.
+ */
+async function writeOnNextDayWhileItLoads(page: Page) {
+  const file = tagFile('2026-10-30');
+  const previewRead = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' && decodeURIComponent(new URL(response.url()).pathname).endsWith(`/contents/${file}`),
+  );
+  const repo = await openSeeded(page, DAY);
+  await previewRead; // die Vorschau ist gelesen (an der Zahl ihrer Striche sieht man das nicht, sie ist vorher und nachher 0)
+  const { release, held } = await holdReads(page, file);
+
+  await markSurface(page);
+  await scrollUntil(page, PAST_BELOW);
+  await newSurface(page);
+  expect(await hash(page)).toBe('#/tag/2026-10-30');
+  await expect.poll(() => held.asked).toBeGreaterThan(0); // die Sitzung des 30.10. wartet auf GitHub
+  await expect(page.getByText('Seite wird geladen')).toHaveCount(0); // die Vorschau war gelesen
+  await penWhileLoading(page, IN_HEAD);
+  // Die Fläche hat den Strich angenommen, obwohl der 30.10. noch nicht gelesen ist (der Testzugang fehlt noch).
+  await expect(toolButton(page, 'Rückgängig')).toBeEnabled();
+  expect(await page.evaluate(() => window.__notizbuch === undefined)).toBe(true);
+  return { repo, release, file };
+}
+
+test('right after scrolling onto a day without a file the first stroke is taken at once and saved', async ({ page }) => {
+  const { repo, release, file } = await writeOnNextDayWhileItLoads(page);
+
+  release();
+  await waitForPageOf(page, 'tag', '2026-10-30');
+  expect(await strokeCount(page)).toBe(1);
+  // Das Lesen hat nichts an der Seite geändert: Der Verlauf für Rückgängig bleibt.
+  await expect(toolButton(page, 'Rückgängig')).toBeEnabled();
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.map((put) => put.path)).toEqual([file]);
+  expect(strokesIn(repo.puts[0].text)).toBe(1);
+});
+
+test('a stroke on a day left before its file was read is saved all the same', async ({ page }) => {
+  const { repo, release, file } = await writeOnNextDayWhileItLoads(page);
+
+  // Gleich zurück zum 29.10., solange GitHub noch wartet. Der 30.10. hängt darunter, mit dem Strich aus der Übergabe.
+  await afterPalmWindow(page);
+  await scrollWhileLoading(page, PAST_ABOVE);
+  expect(await hash(page)).toBe(DAY);
+  await waitForPageOf(page, 'tag', '2026-10-29');
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 1 });
+
+  // Die Sitzung des 30.10. liest noch zu Ende und speichert den Strich.
+  release();
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.map((put) => put.path)).toEqual([file]);
+  expect(strokesIn(repo.puts[0].text)).toBe(1);
+  expect(await neighbors(page)).toEqual({ above: 0, below: 1 });
+});
+
+test('there, back and there again before the file is read, the stroke stays', async ({ page }) => {
+  const { repo, release, file } = await writeOnNextDayWhileItLoads(page);
+
+  await afterPalmWindow(page);
+  await scrollWhileLoading(page, PAST_ABOVE);
+  await waitForPageOf(page, 'tag', '2026-10-29');
+  await expect.poll(() => neighbors(page)).toEqual({ above: 0, below: 1 });
+  // Wieder zum 30.10., noch bevor GitHub geantwortet hat.
+  await markSurface(page);
+  await scrollUntil(page, PAST_BELOW);
+  await newSurface(page);
+  expect(await hash(page)).toBe('#/tag/2026-10-30');
+
+  release();
+  await waitForPageOf(page, 'tag', '2026-10-30');
+  expect(await strokeCount(page)).toBe(1);
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.map((put) => put.path)).toEqual([file]);
+  expect(strokesIn(repo.puts[0].text)).toBe(1);
 });
 
 test('the pen on the neighbour opens it and writes nothing', async ({ page }) => {
