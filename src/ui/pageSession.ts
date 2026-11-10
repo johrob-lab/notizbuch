@@ -106,10 +106,15 @@ const finishing = new Map<string, Promise<void>>();
  */
 const parked = new Map<string, Page>();
 
-/** Nur für Tests: Vergisst, was verlassene Seiten hinterlassen haben, damit ein Test ohne Reste eines anderen beginnt. */
-export function forgetDraftsForTests(): void {
+/**
+ * Nur für Tests: Gibt zurück, was verlassene Seiten hinterlassen haben (die Pfade je Wert), und vergisst es. Nach einem Test
+ * muss beides leer sein: Was dort liegen bleibt, bekäme die nächste Sitzung derselben Datei.
+ */
+export function forgetDraftsForTests(): { finishing: string[]; parked: string[] } {
+  const left = { finishing: [...finishing.keys()], parked: [...parked.keys()] };
   finishing.clear();
   parked.clear();
+  return left;
 }
 
 export class PageSession {

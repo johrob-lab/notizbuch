@@ -217,9 +217,12 @@ function open(engine: ReturnType<typeof fakeEngine>, surface: ReturnType<typeof 
 /** Lässt alle schon möglichen Fortsetzungen laufen. */
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-// Was eine Seite im Entwurf beim Verlassen hinterlässt, gilt für alle Sitzungen derselben Datei. Bricht ein Test mittendrin ab,
-// bliebe es liegen und störte den nächsten.
-afterEach(() => forgetDraftsForTests());
+// Was eine Seite im Entwurf beim Verlassen hinterlässt, gilt für alle Sitzungen derselben Datei, auch über einen Test hinaus.
+// Nach jedem Test muss es abgeholt sein (einen geparkten Entwurf nimmt genau eine Sitzung). Was liegen blieb, lässt den Test
+// scheitern und wird vergessen, damit es den nächsten nicht stört.
+afterEach(() => {
+  expect(forgetDraftsForTests()).toEqual({ finishing: [], parked: [] });
+});
 
 // ---------- Laden ----------
 
@@ -1440,17 +1443,23 @@ test('a read-only session has no draft and stays locked', async () => {
   expect(engine.writes).toEqual([]);
 });
 
-/** Eine Seite im Entwurf, deren Lesen scheitert, wird verlassen: Ihr Entwurf `strokes` liegt danach geparkt bereit. */
+/**
+ * Eine Seite im Entwurf, deren Lesen scheitert, wird verlassen: Ihr Entwurf `strokes` liegt danach geparkt bereit. Nach dem
+ * Schließen meldet ihre Sitzung nichts mehr und wartet auf keinen Anlass.
+ */
 async function leaveUnloaded(engine: ReturnType<typeof fakeEngine>, ...strokes: Stroke[]) {
   engine.readError = new Error('GitHub 500');
   const surface = fakeSurface();
-  const { session } = open(engine, surface, { draft: true });
+  const cues = fakeCues();
+  const { session, phases } = open(engine, surface, { draft: true, cues });
   const loading = session.reload();
   surface.page = pageOf(...strokes);
   session.changed(surface.page);
   session.close();
   await loading;
   await settle();
+  expect(phases).toEqual([]);
+  expect(cues.listening).toBe(0);
   engine.readError = undefined;
 }
 
@@ -1470,6 +1479,7 @@ test('a draft page that could not be loaded parks its draft as soon as it is lef
   expect(a.phases).toEqual(['nichtGeladen']);
   a.session.close();
   await settle();
+  expect(a.phases).toEqual(['nichtGeladen']); // nach dem Schließen meldet sie nichts mehr
   expect(cues.listening).toBe(0);
   expect(engine.reads).toBe(1);
   expect(engine.writes).toEqual([]);
@@ -1485,8 +1495,9 @@ test('a draft page that could not be loaded parks its draft as soon as it is lef
 test('the draft of a left page whose file is broken is given up, also for the next session', async () => {
   const engine = fakeEngine(BROKEN);
   const first = fakeSurface();
+  const cues = fakeCues();
   const read = engine.holdRead();
-  const { session } = open(engine, first, { draft: true });
+  const { session, phases } = open(engine, first, { draft: true, cues });
   const loading = session.reload();
   await read.reached;
   first.page = pageOf(stroke('neu', 3000));
@@ -1495,6 +1506,8 @@ test('the draft of a left page whose file is broken is given up, also for the ne
   read.release();
   await loading;
   await settle();
+  expect(phases).toEqual([]); // nach dem Schließen meldet sie nichts mehr
+  expect(cues.listening).toBe(0);
   expect(engine.writes).toEqual([]);
 
   engine.text = svgOf(stroke('a', 1000)); // ein anderes Gerät hat die Seite repariert
@@ -1554,6 +1567,27 @@ test('a parked draft waits for a session that writes: one that only views leaves
   await settle();
   expect(ids(second.page)).toEqual(['alt']);
   expect(engine.writes.map(ids)).toEqual([['alt']]);
+});
+
+test('a parked draft goes to one session only: what that session erased does not come back with the next one', async () => {
+  const engine = fakeEngine(null);
+  await leaveUnloaded(engine, stroke('alt', 3000));
+
+  const second = fakeSurface();
+  const b = open(engine, second);
+  await b.session.reload();
+  expect(ids(second.page)).toEqual(['alt']);
+  second.page = pageOf(); // dort wieder radiert
+  b.session.changed(second.page);
+  b.session.close();
+  await settle();
+  expect(engine.writes.map(ids)).toEqual([['alt'], []]);
+
+  const third = fakeSurface();
+  await open(engine, third).session.reload();
+  await settle();
+  expect(third.page.strokes).toEqual([]);
+  expect(engine.writes).toHaveLength(2); // die dritte Sitzung schreibt nichts
 });
 
 test('a draft page left before anyone asked it to read is read and saved all the same', async () => {
