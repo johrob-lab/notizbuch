@@ -93,9 +93,10 @@ type Props = PageProps & {
    */
   overlay?: ComponentChildren;
   /**
-   * SVG nur für den Bildschirm, über dem Hintergrund und der Markierung für heute: die Termine und Prioritäten in Woche und
-   * Monat. Es kommt nie in die Datei. Ändert es sich, zeigt die Fläche es, ohne neu zu entstehen: Striche, Rückgängig, Ansicht
-   * und ein Strich, der gerade entsteht, bleiben. Seiten mit Kopfdaten zeigen ihren eigenen Hintergrund und kein `marks`.
+   * SVG nur für den Bildschirm, über dem Hintergrund und der Markierung für heute: die Geburtstage, Termine und Prioritäten in
+   * Woche und Monat und die Geburtstage in der Kopfzeile der Tagesseite. Es kommt nie in die Datei. Ändert es sich, zeigt die
+   * Fläche es, ohne neu zu entstehen: Striche, Rückgängig, Ansicht und ein Strich, der gerade entsteht, bleiben. Seiten mit
+   * Kopfdaten zeigen ihren eigenen Hintergrund und kein `marks`.
    */
   marks?: string;
   /** Zusatz zum Namen eines Tages in der Liste „Tage dieser Seite“, zum Beispiel `2 Termine, 1 Priorität`. Leer heißt: keiner. */
@@ -259,8 +260,9 @@ export function PageView(p: Props) {
     };
   }, [engine, layout, path, days, shown, readOnly, locked, sigma, prediction, palm]);
 
-  // Neue Termine und Prioritäten zeigt die Fläche an Ort und Stelle. Darum steht `marks` nicht im Effekt oben: Eine neue Fläche
-  // verlöre den Strich, der gerade entsteht, und den Verlauf für Rückgängig. Dieser Effekt läuft nach jenem, die Fläche ist da.
+  // Neue Geburtstage, Termine und Prioritäten (Woche, Monat) und neue Geburtstage im Kopf der Tagesseite zeigt die Fläche an Ort
+  // und Stelle. Darum steht `marks` nicht im Effekt oben: Eine neue Fläche verlöre den Strich, der gerade entsteht, und den Verlauf
+  // für Rückgängig. Dieser Effekt läuft nach jenem, die Fläche ist da.
   useEffect(() => {
     marksRef.current = marks;
     if (!kopfRef.current) surface.current?.showBackground(shown + marks);

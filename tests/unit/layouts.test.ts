@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { mergePages, parsePage, serializePage } from '../../src/ink/svg';
 import { MM, PAGE_H, PAGE_W, type Page } from '../../src/ink/types';
 import { monthGrid, weekDays } from '../../src/lib/dates';
+import type { Geburtstag } from '../../src/lib/geburtstage';
 import type { Termin } from '../../src/lib/termine';
+import { textWidth } from '../../src/pages/agenda';
 import {
   agendaMarks,
   besprechungLayout,
@@ -565,7 +567,78 @@ describe('agendaMarks', () => {
     expect(svg).toMatch(/x+…/);
   });
 
-  test('days without data and day pages give nothing', () => {
+  const geb = (name: string, date = '2026-10-28', art: 'Geburtstag' | 'Jahrestag' = 'Geburtstag'): Geburtstag => ({ date, name, art });
+  const lines = (svg: string) => [...svg.matchAll(/<text [^>]*>(.*?)<\/text>/g)].map((m) => m[1]);
+
+  test('birthdays and anniversaries come first in line 1 of the week, in the holiday colour', () => {
+    const svg = agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: [geb('Max Beispiel'), geb('Anna und Ben Beispiel', '2026-10-28', 'Jahrestag')], termine: [termin('Abstimmung')], prioritaeten: prio }));
+    const [first, second] = lines(svg);
+    expect(first).toBe(
+      '<tspan fill="#a8674f">🎂 Max Beispiel</tspan><tspan fill="#55657a"> · </tspan><tspan fill="#a8674f">♥ Anna und Ben Beispiel</tspan>' +
+        '<tspan fill="#55657a"> · </tspan><tspan fill="#55657a">Abstimmung</tspan>',
+    );
+    expect(second).toContain('▸ Angebot prüfen');
+  });
+
+  test('with only birthdays the week gives them both lines', () => {
+    const many = ['Max Beispiel', 'Erika Muster', 'Paul Beispiel', 'Anna Beispiel', 'Ben Beispiel', 'Lena Muster'].map((n) => geb(n));
+    const out = lines(agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: many, termine: [], prioritaeten: [] })));
+    expect(out).toHaveLength(2);
+    expect(out[0].startsWith('<tspan fill="#a8674f">🎂 Max Beispiel</tspan>')).toBe(true);
+  });
+
+  test('the rest after a line that starts with a birthday has the colour of the appointments', () => {
+    const out = lines(agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: [geb('Max Beispiel')], termine: lang(12), prioritaeten: prio })));
+    expect(out[0].startsWith('<tspan fill="#a8674f">🎂 Max Beispiel</tspan>')).toBe(true);
+    expect(out[0]).toMatch(/<tspan fill="#55657a"> \+\d+<\/tspan>$/);
+  });
+
+  test('a birthday on a holiday ends before the holiday name in the week', () => {
+    const woche = wocheLayout('2026-W44');
+    const withHoliday = clips(agendaMarks(woche, only('2026-10-26', { geburtstage: [geb('Max Beispiel', '2026-10-26')], termine: [], prioritaeten: [] })))[0].rect;
+    const without = clips(agendaMarks(woche, only('2026-10-28', { geburtstage: [geb('Max Beispiel')], termine: [], prioritaeten: [] })))[0].rect;
+    expect(withHoliday[2]).toBeLessThan(without[2]);
+  });
+
+  test('the month puts birthdays first, then the appointments', () => {
+    const out = lines(agendaMarks(monatLayout('2026-10'), only('2026-10-28', { geburtstage: [geb('Max Beispiel')], termine: [termin('Abstimmung')], prioritaeten: prio })));
+    expect(out).toEqual(['<tspan fill="#a8674f">🎂 Max Beispiel</tspan>', '<tspan fill="#55657a">Abstimmung</tspan>']);
+  });
+
+  test('the day page shows its birthdays right aligned in the line of the subtitle, nothing else', () => {
+    const svg = agendaMarks(tagLayout('2026-10-29'), (d) => ({ geburtstage: d === '2026-10-29' ? [geb('Max Beispiel', d)] : [], termine: [termin('A', '2026-10-29')], prioritaeten: prio }));
+    expect(clips(svg)).toEqual([{ id: 'agenda-2026-10-29', rect: [340, 88, 732, 26] }]);
+    const [line] = texts(svg);
+    expect([line.x, line.y]).toEqual([1072, 106]);
+    expect(line.attrs).toContain('text-anchor="end"');
+    expect(line.attrs).toContain('font-size="16"');
+    expect(lines(svg)).toEqual(['<tspan fill="#a8674f">🎂 Max Beispiel</tspan>']);
+    // Die Fläche beginnt rechts vom Untertitel „KW 44 / 2026 · Tagesseite“ (geschätzte Breite).
+    expect(340).toBeGreaterThan(48 + 16 + textWidth('KW 44 / 2026 · Tagesseite', 16));
+  });
+
+  test('on a holiday the day page keeps the birthdays below the holiday name', () => {
+    const svg = agendaMarks(tagLayout('2026-10-26'), () => ({ geburtstage: [geb('Max Beispiel', '2026-10-26')], termine: [], prioritaeten: [] }));
+    expect(texts(svg)[0].y).toBe(106);
+  });
+
+  test('too many long birthday names on the day page end in a rest in the colour of the appointments', () => {
+    const names = ['Maximilian Beispielmann-Musterfrau', 'Wilhelmine Musterfrau-Beispielmann', 'Bartholomaeus Beispielhuber-Muster', 'Konstantin Musterberger-Beispiel'];
+    const svg = agendaMarks(tagLayout('2026-10-29'), (d) => ({ geburtstage: names.map((n) => geb(n, d)), termine: [], prioritaeten: [] }));
+    const out = lines(svg);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatch(/<tspan fill="#55657a"> \+\d+<\/tspan>$/);
+    const plain = out[0].replace(/<[^>]*>/g, '');
+    expect(textWidth(plain, 16)).toBeLessThanOrEqual(732);
+  });
+
+  test('names with special characters stay valid SVG', () => {
+    const svg = agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: [geb('Anna & Ben <Beispiel> "B"')], termine: [], prioritaeten: [] }));
+    expect(xmlProblem(`<svg xmlns="http://www.w3.org/2000/svg">${svg}</svg>`)).toBeNull();
+    expect(svg).toContain('🎂 Anna &amp; Ben &lt;Beispiel&gt;');
+  });
+
+  test('days without data, and day pages without birthdays, give nothing', () => {
     expect(agendaMarks(tagLayout('2026-10-29'), () => ({ termine: [termin('A', '2026-10-29')], prioritaeten: prio }))).toBe('');
     expect(agendaMarks(besprechungLayout(MEETING), () => ({ termine: [termin('A')], prioritaeten: prio }))).toBe('');
     expect(agendaMarks(wocheLayout('2026-W44'), () => ({ termine: [], prioritaeten: [] }))).toBe('');
