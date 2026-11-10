@@ -19,6 +19,10 @@ declare global {
       liveStats(): { events: number; ptsMax: number };
       /** Was die Fläche gerade als Hintergrund zeigt (SVG-Text), mit allem, was nur auf dem Bildschirm steht. */
       screenBackground(): string;
+      /** Wie viele Striche die Vorschau der Nachbarseite darüber und darunter zeigt, `null` ohne Nachbarn. */
+      neighbors(): { above: number | null; below: number | null };
+      /** Der Hintergrund, den die Vorschau des Nachbarn zeigt (SVG-Text, mit Terminen und Geburtstagen), `null` ohne ihn. */
+      neighborBackground(side: 'above' | 'below'): string | null;
     };
   }
 }

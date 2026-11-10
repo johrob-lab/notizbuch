@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { normalizePath } from '../sync/paths';
 import type { SyncEngine } from '../sync/engine';
+import { askingFor, lastAnswer, listFrom } from './lastAnswers';
 
 /**
  * Die Einträge einer Datei des Vaults (zum Beispiel `Termine.md`), solange die Seite offen ist. `parse` macht aus dem Text die
@@ -9,9 +10,12 @@ import type { SyncEngine } from '../sync/engine';
  * leer. `parse` darf bei jedem Zeichnen neu entstehen (zum Beispiel als Pfeilfunktion im Aufruf): Eine neue Funktion gilt ab
  * dem nächsten Lesen, sie löst kein Lesen aus. `path` darf in jeder Unicode-Form kommen (auch mit zerlegten Umlauten): Gelesen,
  * verglichen und gemeldet wird mit der NFC-Form.
+ *
+ * Bis die eigene Anfrage antwortet, gilt die letzte Antwort, die die Engine für diese Datei gab, auch einer Seite davor (siehe
+ * `lastAnswers.ts`). Ohne frühere Antwort beginnt die Liste leer.
  */
 export function useVaultList<T>(engine: SyncEngine, path: string, parse: (text: string) => T[]): T[] {
-  const [list, setList] = useState<T[]>([]);
+  const [list, setList] = useState<T[]>(() => listFrom(lastAnswer(engine, normalizePath(path)), parse));
   const parseRef = useRef(parse);
   parseRef.current = parse;
 
@@ -22,10 +26,20 @@ export function useVaultList<T>(engine: SyncEngine, path: string, parse: (text: 
     let latest = 0;
     const load = () => {
       const mine = ++latest;
+      const keep = askingFor(engine, nfc);
       // Eine fehlgeschlagene Anfrage und ein `parse`, das wirft, enden beide im zweiten Schritt: leere Liste.
       engine
         .read(nfc)
-        .then((text) => (text === null ? [] : parseRef.current(text)))
+        .then(
+          (text) => {
+            keep(text);
+            return text === null ? [] : parseRef.current(text);
+          },
+          (error: unknown) => {
+            keep(null);
+            throw error;
+          },
+        )
         .then(
           (items) => current && mine === latest && setList(items),
           () => current && mine === latest && setList([]),

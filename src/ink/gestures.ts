@@ -126,12 +126,18 @@ const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
  * Begrenzt, wohin die Seite auf dem Bildschirm (`size`) geschoben werden kann. Waagrecht: Ist die Seite samt Rand von
  * `SIDE_MARGIN_PX` links und rechts nicht breiter als der Bildschirm (normale Größe oder kleiner), steht sie in der Mitte und
  * bewegt sich nur auf und ab. Erst hineingezoomt geht sie seitwärts, und nur so weit, dass neben ihrem Rand höchstens dieser
- * Rand frei wird. Senkrecht bleiben mindestens 60 px von ihr auf dem Bildschirm.
+ * Rand frei wird. Senkrecht bleiben mindestens 60 px von ihr auf dem Bildschirm. Mit `span` (so weit reicht die Kette der
+ * Seiten nach oben und unten, in Seiteneinheiten, siehe `chain.ts`) bleiben stattdessen 60 px von der Kette auf dem Bildschirm.
  */
-export function clampView(v: View, size: { w: number; h: number }, page: { w: number; h: number }): View {
+export function clampView(
+  v: View,
+  size: { w: number; h: number },
+  page: { w: number; h: number },
+  span: { top: number; bottom: number } = { top: 0, bottom: page.h },
+): View {
   const width = page.w * v.s;
   const x = width + 2 * SIDE_MARGIN_PX <= size.w ? (size.w - width) / 2 : clamp(v.x, size.w - width - SIDE_MARGIN_PX, SIDE_MARGIN_PX);
-  return { s: v.s, x, y: clamp(v.y, KEEP_VISIBLE_PX - page.h * v.s, size.h - KEEP_VISIBLE_PX) };
+  return { s: v.s, x, y: clamp(v.y, KEEP_VISIBLE_PX - span.bottom * v.s, size.h - KEEP_VISIBLE_PX - span.top * v.s) };
 }
 
 /** Zoomt um den Bildschirmpunkt `at`: Die Stelle der Seite darunter bleibt dort. Der Maßstab bleibt in den Grenzen. */

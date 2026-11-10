@@ -5,6 +5,7 @@ import { geburtstageAm } from '../lib/geburtstage';
 import { termineAm } from '../lib/termine';
 import { agendaInfo, type AgendaDay } from '../pages/agenda';
 import { agendaMarks, monatLayout } from '../pages/layouts';
+import { neighborsOf, withMarks } from './neighbors';
 import { PageView, type PageProps } from './PageView';
 import { useGeburtstage } from './useGeburtstage';
 import { useTermine } from './useTermine';
@@ -25,5 +26,10 @@ export function MonatPage({ month, ...rest }: PageProps & { month: string }) {
   );
   const marks = useMemo(() => agendaMarks(layout, dayData), [layout, dayData]);
   const dayInfo = (day: Day) => agendaInfo(dayData(day));
-  return <PageView layout={layout} path={monatPagePath(month)} {...rest} marks={marks} dayInfo={dayInfo} />;
+  // Darüber der Monat davor, darunter der Monat danach. Ihre Vorschau zeigt Geburtstage und Termine wie diese Seite.
+  const neighbors = useMemo(
+    () => withMarks(neighborsOf({ view: 'monat', key: month }), (l) => agendaMarks(l, dayData)),
+    [month, dayData],
+  );
+  return <PageView layout={layout} path={monatPagePath(month)} {...rest} marks={marks} dayInfo={dayInfo} neighbors={neighbors} />;
 }

@@ -1,4 +1,5 @@
 import { boundsOf, emptyBox, growBox, lineWidth, type Box } from './bounds';
+import { chainSpan, enteredSide, neighborOffset, settledSide, sideAt, SIDES, type Present, type Side } from './chain';
 import { cutStroke, ERASER_PX, ERASER_STEP_PX, hitIndexes, pointsAlong, takeOut, takeOutIds } from './erase';
 import { clampView, GestureFilter, gestureView, isFingerTap, isTwoFingerTap, SIDE_MARGIN_PX, zoomAround, type FingerEvent, type Pt2, type View, type ZoomLimits } from './gestures';
 import { GRAIN, GRAIN_MIN_PX, grainMask } from './grain';
@@ -59,7 +60,26 @@ export type SurfaceOptions = {
    * Karte. Ein Strich, der hineinläuft, endet am Rand, und einer, der darin beginnt, beginnt erst beim Verlassen. Radieren geht überall.
    */
   noInk?: readonly (readonly [x: number, y: number, w: number, h: number])[];
+  /**
+   * Weiterscrollen: Die Nachbarseite `side` (siehe `setNeighbors`) soll die offene Seite werden. Das kommt, wenn ein Zug mit
+   * Fingern oder der Maus zu Ende ist oder das Mausrad `WHEEL_SETTLE_MS` lang stillsteht und die Mitte des Bildschirms dabei in
+   * sie hineingekommen ist (`enteredSide`). Es kommt auch, wenn der Stift auf ihr oder im Spalt davor aufsetzt oder ein Finger oder
+   * die Maus dort tippt (`sideAt`): Dann schreibt der Stift nichts, und der Tipp gilt nicht der Seite (`onTap`). `view` ist die
+   * Ansicht in diesem Moment, gerechnet in Einheiten dieser Seite. Ohne Nachbarn kommt es nie.
+   */
+  onNeighbor?: (side: Side, view: View) => void;
+  /**
+   * Die Ansicht beim ersten Messen der Fläche statt der ganzen Seitenbreite oben, zum Beispiel dort, wo die Seite eben noch als
+   * Nachbarin stand. Sie wird wie jede Ansicht in ihre Grenzen geklemmt.
+   */
+  initialView?: View;
 };
+
+/** Eine Nachbarseite für die Vorschau: ihre Striche und ihr Hintergrund als fertiges SVG (wie bei `setPage`). */
+export type NeighborPage = { strokes: Stroke[]; background: string };
+
+/** Eine Nachbarseite, wie die Fläche sie zeigt. `image` ist ihr Hintergrund `svg` als Bild, sobald eines geladen ist. */
+type Neighbor = { strokes: Stroke[]; svg: string; image: HTMLImageElement | null };
 
 /**
  * Ein Strich, der entsteht, mit Stift und Farbe des Strichs. `drawn` sagt, was schon fest auf der Live-Ebene steht: bei Linien das erste Segment, das
@@ -89,13 +109,19 @@ type Erasing = {
   origin: Map<string, string>;
   last: Pt2;
 };
-type Gesture = { revert: View; ref: View; from: Pt2[]; moved: boolean; snapView: View | null };
+/** Eine Geste der Finger oder der Maus. `middleFrom`: welcher Nachbar bei ihrem Beginn die Mitte bedeckte (`settledSide`). */
+type Gesture = { revert: View; ref: View; from: Pt2[]; moved: boolean; snapView: View | null; middleFrom: Side | null };
 
 /** Ab so vielen Punkten auf der Seite zoomt eine Geste nur das Bild und zeichnet erst am Ende neu. */
 const HEAVY_POINTS = 8000;
 /** Zoom als Vielfaches der normalen Größe (`fit`, die Seite füllt die Breite): kleiner als normal wird die Seite nie. */
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 10;
+/**
+ * So lange (ms) muss das Mausrad stillstehen, bis die Ansicht zur Ruhe kommt wie nach dem Loslassen eines Zugs: Bedeckt dann ein
+ * Nachbar die Mitte, wird er die offene Seite (`onNeighbor`). Jedes Rad-Ereignis, auch Zoomen mit Strg, beginnt die Zeit neu.
+ */
+export const WHEEL_SETTLE_MS = 250;
 /** Die Spitze beim Schweben ist auf dem Bildschirm mindestens so lang (Punkte), sonst wäre sie in normaler Größe kaum zu sehen. */
 const TIP_MIN_PX = 8;
 /** So lange (ms) bleibt die Spitze nach der letzten Schwebe-Meldung stehen. */
@@ -125,6 +151,39 @@ function context(canvas: HTMLCanvasElement, settings?: CanvasRenderingContext2DS
   const ctx = canvas.getContext('2d', settings);
   if (!ctx) throw new Error('Dieser Browser kann keine Schreibfläche zeichnen.');
   return ctx;
+}
+
+/** Ein Hintergrund (fertiges SVG für eine ganze Seite) als Quelle für ein Bild. */
+function backgroundSrc(svg: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${PAGE_W}" height="${PAGE_H}" viewBox="0 0 ${PAGE_W} ${PAGE_H}">${svg}</svg>`,
+  )}`;
+}
+
+/**
+ * Hintergründe, die schon als Bild geladen sind, nach ihrem SVG-Text, der zuletzt gebrauchte zuletzt. Eine neue Fläche zeigt so
+ * sofort, was die vorige eben noch zeigte: Beim Weiterscrollen wird die Vorschau des Nachbarn zum Hintergrund der neuen Seite
+ * und die bisherige Seite zu ihrem Nachbarn. Müsste das Bild erst laden, stünde die Seite einen Augenblick ohne Linien und
+ * Schrift da. Wenige genügen: die Seite und ihre zwei Nachbarn, dazu die der Fläche davor.
+ */
+const loadedBackgrounds = new Map<string, HTMLImageElement>();
+const KEEP_BACKGROUNDS = 6;
+
+/** Das schon geladene Bild zu einem Hintergrund, sonst `null`. */
+function loadedBackground(svg: string): HTMLImageElement | null {
+  const img = loadedBackgrounds.get(svg);
+  if (img) keepBackground(svg, img);
+  return img ?? null;
+}
+
+/** Merkt sich ein geladenes Bild als zuletzt gebraucht. Das am längsten nicht gebrauchte geht, wenn es zu viele sind. */
+function keepBackground(svg: string, img: HTMLImageElement): void {
+  loadedBackgrounds.delete(svg);
+  loadedBackgrounds.set(svg, img);
+  for (const oldest of loadedBackgrounds.keys()) {
+    if (loadedBackgrounds.size <= KEEP_BACKGROUNDS) break;
+    loadedBackgrounds.delete(oldest);
+  }
 }
 
 /** Was von einem neuen Strich auf der Live-Ebene steht, bevor etwas gezeichnet ist (siehe `Drawing.drawn`). */
@@ -207,6 +266,8 @@ export class InkSurface {
   private strokes: Stroke[] = [];
   private background: HTMLImageElement | null = null;
   private backgroundSvg = '';
+  /** Die Nachbarseiten über und unter der Seite, nur zum Ansehen (siehe `setNeighbors`). */
+  private neighbors: Record<Side, Neighbor | null> = { above: null, below: null };
 
   // Werkzeug
   private readOnly: boolean;
@@ -247,10 +308,18 @@ export class InkSurface {
   private fingerLog: FingerEvent[] = [];
   /** Dasselbe für Finger und Maus, für den Tipp mit einem Zeiger. */
   private tapLog: FingerEvent[] = [];
+  /** Der Stift, von dem das Tor gegen Handballen weiß, dass er aufliegt (`pointerId`), bis er abhebt. */
+  private penKnown: number | null = null;
+  /** Der Stift, den die Fläche erst unterwegs bemerkt hat (siehe `noticePen`), und wie sie aufhört, auf sein Ende zu hören. */
+  private noticed: { id: number; stop: () => void } | null = null;
   private gesture: Gesture | null = null;
   private liveArea: Box | null = null;
   private predArea: Box | null = null;
   private predTimer = 0;
+  /** Läuft ab, wenn das Mausrad `WHEEL_SETTLE_MS` lang stillsteht (siehe `onWheel`). */
+  private wheelTimer = 0;
+  /** Welcher Nachbar die Mitte bedeckte, als das Rad zu drehen begann (`settledSide`), siehe `wheelSettled`. */
+  private wheelFrom: Side | null = null;
   /** Messung der Schreibverzögerung, siehe `meter.ts`. */
   readonly meter = new InkMeter();
   private liveEvents = 0;
@@ -351,6 +420,33 @@ export class InkSurface {
   /** Der Hintergrund, den die Fläche zeigt, als SVG-Text: der zuletzt gesetzte, auch solange sein Bild noch lädt. */
   get shownBackground(): string {
     return this.backgroundSvg;
+  }
+
+  /**
+   * Zeigt die Nachbarseiten über (`above`) und unter (`below`) der Seite, je `PAGE_GAP` von ihr entfernt (siehe `chain.ts`),
+   * nur zum Ansehen: Papier, Hintergrund und Striche. Ersetzt beide, `null` nimmt einen weg. Die Ansicht lässt sich dann bis in
+   * die Nachbarn schieben, und wer nach einem Zug loslässt, während einer die Mitte bedeckt, meldet ihn mit `onNeighbor`. Jeder
+   * Nachbar hat ein eigenes Bild für den Hintergrund. Gleicher Text lädt nicht neu, und bis ein neues Bild geladen ist, bleibt
+   * das bisherige stehen.
+   */
+  setNeighbors(n: { above: NeighborPage | null; below: NeighborPage | null }): void {
+    if (this.destroyed) return;
+    for (const side of SIDES) this.neighbors[side] = this.neighborFrom(side, n[side]);
+    this.clampView();
+    this.render();
+  }
+
+  /** Wie viele Striche die Vorschau der Nachbarn zeigt, `null` für einen, den es nicht gibt. */
+  get neighborStrokes(): { above: number | null; below: number | null } {
+    return { above: this.neighbors.above?.strokes.length ?? null, below: this.neighbors.below?.strokes.length ?? null };
+  }
+
+  /**
+   * Der Hintergrund, den die Vorschau des Nachbarn `side` zeigt, als SVG-Text: der zuletzt gesetzte, auch solange sein Bild noch
+   * lädt. `null` ohne diesen Nachbarn.
+   */
+  neighborBackground(side: Side): string | null {
+    return this.neighbors[side]?.svg ?? null;
   }
 
   /** Die Seite, wie sie jetzt ist: eine Momentaufnahme, spätere Änderungen verändern sie nicht. */
@@ -476,9 +572,12 @@ export class InkSurface {
     cancelAnimationFrame(this.raf);
     this.stopMeter();
     clearTimeout(this.predTimer);
+    clearTimeout(this.wheelTimer);
+    this.forgetNoticedPen();
     clearTimeout(this.flashTimer);
     this.flashEl?.remove();
     this.hideTip();
+    this.neighbors = { above: null, below: null }; // ihre Bilder gehen mit (die zuletzt gebrauchten hält `loadedBackgrounds`)
     for (const c of [this.base, this.live, this.pred, this.snap]) {
       c.remove();
       // Safari gibt den Speicher einer Zeichenfläche erst frei, wenn sie nichts mehr zu halten hat, und deckelt alle zusammen.
@@ -523,7 +622,9 @@ export class InkSurface {
     this.fit = Math.max(0.2, Math.min((this.vw - 2 * SIDE_MARGIN_PX) / PAGE_W, 1.6));
     if (!had) {
       this.hasView = true;
-      this.view = { s: this.fit, x: (this.vw - PAGE_W * this.fit) / 2, y: 16 };
+      const start = this.opts.initialView;
+      const { min, max } = this.zoomLimits();
+      this.view = start ? { ...start, s: clamp(start.s, min, max) } : { s: this.fit, x: (this.vw - PAGE_W * this.fit) / 2, y: 16 };
     } else {
       // Die Mitte des Bildschirms bleibt bei derselben Stelle der Seite, der Zoom behält sein Verhältnis zur Seitenbreite.
       this.view.s = (this.view.s / oldFit) * this.fit;
@@ -674,33 +775,98 @@ export class InkSurface {
   }
 
   /**
-   * Hintergrund als SVG-Bild, damit er bei jedem Zoom scharf bleibt. Gleicher Text: nichts neu laden. Mit `keepOld` bleibt das
-   * bisherige Bild stehen, bis das neue geladen ist: Bei jeder Eingabe im Kopf einer Besprechung ändert sich der Hintergrund,
-   * und eine Zeichnung zwischendurch zeigte kurz leeres Papier.
+   * Hintergrund als SVG-Bild, damit er bei jedem Zoom scharf bleibt. Gleicher Text: nichts neu laden. Ein Bild, das schon
+   * geladen ist (siehe `loadedBackgrounds`), gilt sofort. Mit `keepOld` bleibt das bisherige Bild stehen, bis das neue geladen
+   * ist: Bei jeder Eingabe im Kopf einer Besprechung ändert sich der Hintergrund, und eine Zeichnung zwischendurch zeigte kurz
+   * leeres Papier.
    */
   private setBackground(svg: string, keepOld = false): void {
     if (svg === this.backgroundSvg) return;
     this.backgroundSvg = svg;
+    const ready = svg ? loadedBackground(svg) : null;
+    if (ready) {
+      this.background = ready;
+      this.scheduleRender();
+      return;
+    }
     if (!keepOld) this.background = null;
     if (!svg) return;
     const img = new Image();
     img.onload = () => {
+      img.onload = null; // das Bild bleibt vielleicht in `loadedBackgrounds`: Es soll die Fläche dann nicht festhalten
+      keepBackground(svg, img);
       if (this.destroyed || svg !== this.backgroundSvg) return;
       this.background = img;
       this.scheduleRender();
     };
-    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${PAGE_W}" height="${PAGE_H}" viewBox="0 0 ${PAGE_W} ${PAGE_H}">${svg}</svg>`,
-    )}`;
+    img.src = backgroundSrc(svg);
   }
 
-  private drawPaper(ctx: CanvasRenderingContext2D): void {
+  /**
+   * Der Nachbar `side`, wie die Fläche ihn zeigen soll: mit den Strichen von `next` und dessen Hintergrund. Ein neuer
+   * Hintergrund lädt als Bild, bis dahin bleibt das bisherige (wie `showBackground`).
+   */
+  private neighborFrom(side: Side, next: NeighborPage | null): Neighbor | null {
+    if (!next) return null;
+    const before = this.neighbors[side];
+    const svg = next.background;
+    const changed = svg !== '' && svg !== before?.svg;
+    // Ein Bild, das schon geladen ist (siehe `loadedBackgrounds`), gilt sofort.
+    const ready = changed ? loadedBackground(svg) : null;
+    if (changed && !ready) this.loadNeighborImage(side, svg);
+    return { strokes: next.strokes.slice(), svg, image: ready ?? (svg ? (before?.image ?? null) : null) };
+  }
+
+  /** Lädt den Hintergrund eines Nachbarn als Bild. Es gilt nur, wenn der Nachbar dann noch genau diesen Hintergrund hat. */
+  private loadNeighborImage(side: Side, svg: string): void {
+    const img = new Image();
+    img.onload = () => {
+      img.onload = null; // wie bei `setBackground`: Das Bild im Speicher hält die Fläche nicht fest
+      keepBackground(svg, img);
+      const n = this.neighbors[side];
+      if (this.destroyed || !n || n.svg !== svg) return;
+      n.image = img;
+      this.scheduleRender();
+    };
+    img.src = backgroundSrc(svg);
+  }
+
+  /** Papier mit Schatten und darauf den Hintergrund `image` (fehlt er noch, nur das Papier), dort, wohin `ctx` gerade zeichnet. */
+  private drawPaper(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null): void {
     const px = 1 / this.view.s; // ein Bildschirmpunkt in Seiteneinheiten
     ctx.fillStyle = 'rgba(22, 32, 48, 0.10)';
     ctx.fillRect(2 * px, 3 * px, PAGE_W, PAGE_H);
     ctx.fillStyle = PAPER;
     ctx.fillRect(0, 0, PAGE_W, PAGE_H);
-    if (this.background) ctx.drawImage(this.background, 0, 0, PAGE_W, PAGE_H);
+    if (image) ctx.drawImage(image, 0, 0, PAGE_W, PAGE_H);
+  }
+
+  /** Die Striche, die im Bild liegen (`seen`: links, oben, rechts, unten in Seiteneinheiten), die anderen spart es sich. */
+  private drawStrokes(ctx: CanvasRenderingContext2D, strokes: readonly Stroke[], seen: Box): void {
+    const [x0, y0, x1, y1] = seen;
+    for (const s of strokes) {
+      const { box, maxW } = boundsOf(s);
+      const m = Math.max(maxW, this.lineW(s));
+      if (box[2] + m < x0 || box[0] - m > x1 || box[3] + m < y0 || box[1] - m > y1) continue;
+      this.drawStroke(ctx, s);
+    }
+  }
+
+  /**
+   * Ein Nachbar an seinem Platz über oder unter der Seite, wie die Seite selbst: Papier mit Schatten, Hintergrund und die Striche
+   * im Bild (`seen` in Einheiten der Seite). Liegt er ganz außerhalb des Bilds, zeichnet es nichts.
+   */
+  private drawNeighbor(ctx: CanvasRenderingContext2D, side: Side, seen: Box): void {
+    const n = this.neighbors[side];
+    if (!n) return;
+    const dy = neighborOffset(side);
+    const shadow = 3 / this.view.s; // so weit reicht der Schatten unter das Papier
+    if (dy + PAGE_H + shadow < seen[1] || dy > seen[3]) return;
+    ctx.save();
+    ctx.translate(0, dy);
+    this.drawPaper(ctx, n.image);
+    this.drawStrokes(ctx, n.strokes, [seen[0], seen[1] - dy, seen[2], seen[3] - dy]);
+    ctx.restore();
   }
 
   private scheduleRender(): void {
@@ -711,7 +877,7 @@ export class InkSurface {
     });
   }
 
-  /** Die Grundebene ganz neu: Papier und alle Striche, die im Bild liegen. */
+  /** Die Grundebene ganz neu: Papier und alle Striche, die im Bild liegen, und ebenso die Nachbarn, soweit sie zu sehen sind. */
   private render(): void {
     if (this.destroyed || !this.hasView) return;
     this.reportView();
@@ -726,17 +892,13 @@ export class InkSurface {
       bctx.drawImage(this.snap, 0, 0);
     } else {
       this.setView(bctx);
-      this.drawPaper(bctx);
       const x0 = -view.x / view.s;
       const y0 = -view.y / view.s;
-      const x1 = x0 + this.vw / view.s;
-      const y1 = y0 + this.vh / view.s;
-      for (const s of this.strokes) {
-        const { box, maxW } = boundsOf(s);
-        const m = Math.max(maxW, this.lineW(s));
-        if (box[2] + m < x0 || box[0] - m > x1 || box[3] + m < y0 || box[1] - m > y1) continue;
-        this.drawStroke(bctx, s);
-      }
+      const seen: Box = [x0, y0, x0 + this.vw / view.s, y0 + this.vh / view.s];
+      // Erst die Nachbarn, dann die Seite darüber: Ein Strich der Seite, der über ihren Rand hinausreicht, bleibt zu sehen.
+      for (const side of SIDES) this.drawNeighbor(bctx, side, seen);
+      this.drawPaper(bctx, this.background);
+      this.drawStrokes(bctx, this.strokes, seen);
     }
     if (this.drawing) {
       this.clearPred();
@@ -1228,13 +1390,41 @@ export class InkSurface {
     return { min: this.fit * MIN_ZOOM, max: this.fit * MAX_ZOOM };
   }
 
+  /** Hält die Ansicht in ihren Grenzen. Mit Nachbarn reicht sie bis in sie hinein (siehe `chainSpan`). */
   private clampView(): void {
-    this.view = clampView(this.view, { w: this.vw, h: this.vh }, { w: PAGE_W, h: PAGE_H });
+    this.view = clampView(this.view, { w: this.vw, h: this.vh }, { w: PAGE_W, h: PAGE_H }, chainSpan(this.present()));
+  }
+
+  /** Welche Nachbarn da sind. */
+  private present(): Present {
+    return { above: this.neighbors.above !== null, below: this.neighbors.below !== null };
+  }
+
+  /** Welcher Nachbar die Mitte des Bildschirms bedeckt (`settledSide`), `null` auf der Seite selbst und ohne Nachbarn. */
+  private middleSide(): Side | null {
+    return settledSide(this.view, { w: this.vw, h: this.vh }, this.present());
+  }
+
+  /** Der Nachbar an einem Ort der Fläche (Bildschirmpunkte), auch im Spalt vor ihm (`sideAt`). Auf der Seite selbst `null`. */
+  private neighborAt(at: Pt2): Side | null {
+    return sideAt(this.toPage(at.x, at.y).y, this.present());
+  }
+
+  /** Macht den Nachbarn `side` zur offenen Seite (siehe `onNeighbor`), mit der Ansicht, wie sie jetzt ist. */
+  private openNeighbor(side: Side): void {
+    this.opts.onNeighbor?.(side, { ...this.view });
   }
 
   /** Eine Geste beginnt oder die Zahl der Finger ändert sich: Ab jetzt zählt, was die Finger von hier aus tun. */
   private rebaseGesture(): void {
-    const g = (this.gesture ??= { revert: { ...this.view }, ref: this.view, from: [], moved: false, snapView: null });
+    const g = (this.gesture ??= {
+      revert: { ...this.view },
+      ref: this.view,
+      from: [],
+      moved: false,
+      snapView: null,
+      middleFrom: this.middleSide(),
+    });
     g.ref = { ...this.view };
     g.from = [...this.touches.values()].map((p) => ({ ...p }));
   }
@@ -1249,12 +1439,17 @@ export class InkSurface {
     this.scheduleRender();
   }
 
-  /** Auf einer vollen Seite würde jedes Bild alle Striche neu zeichnen: Dann zeigt die Geste nur ein Bild der Grundebene. */
+  /**
+   * Auf einer vollen Seite würde jedes Bild alle Striche neu zeichnen: Dann zeigt die Geste nur ein Bild der Grundebene. Die
+   * Striche der Nachbarn zählen mit, auch sie zeichnet jedes Bild neu.
+   */
   private startMoving(g: Gesture): void {
     if (g.moved) return;
     g.moved = true;
     let points = 0;
-    for (const s of this.strokes) points += s.pts.length;
+    for (const list of [this.strokes, ...SIDES.map((side) => this.neighbors[side]?.strokes ?? [])]) {
+      for (const s of list) points += s.pts.length;
+    }
     if (points <= HEAVY_POINTS) return;
     this.snap.width = this.base.width;
     this.snap.height = this.base.height;
@@ -1262,15 +1457,24 @@ export class InkSurface {
     g.snapView = { ...this.view };
   }
 
-  /** Alle Finger sind weg. Mit `revert` gilt die Ansicht von vor der Geste: Der Stift kam, das war die Hand. */
-  private endGesture(revert: boolean): void {
+  /**
+   * Alle Finger sind weg. Mit `revert` gilt die Ansicht von vor der Geste: Der Stift kam, das war die Hand. Sonst wird nach einem
+   * Zug die Nachbarseite gemeldet, die jetzt die Mitte des Bildschirms bedeckt (`onNeighbor`), wenn die Mitte erst in diesem Zug
+   * in sie hineinkam (`enteredSide`). Gibt zurück, ob das geschah.
+   */
+  private endGesture(revert: boolean): boolean {
     const g = this.gesture;
-    if (!g) return;
+    if (!g) return false;
     this.gesture = null;
     if (revert && g.moved) this.view = g.revert;
     this.snap.width = 0;
     this.snap.height = 0;
-    if (g.moved) this.render();
+    if (!g.moved) return false;
+    this.render();
+    const side = revert ? null : enteredSide(g.middleFrom, this.view, { w: this.vw, h: this.vh }, this.present());
+    if (!side || !this.opts.onNeighbor) return false;
+    this.openNeighbor(side);
+    return true;
   }
 
   // ---------- Spitze beim Schweben ----------
@@ -1278,9 +1482,16 @@ export class InkSurface {
   /**
    * Der Stift schwebt über der Seite, ohne sie zu berühren. Mit der Füllfeder auf einer Seite, die man beschreiben kann, zeigt
    * die Spitze, wo er aufsetzen würde: die Form der Feder bei mittlerem Druck (`nibShape`), gedreht wie beim letzten Strich.
+   * Über einem Nachbarn und dem Spalt davor schreibt er nicht (er öffnet ihn), dort steht keine Spitze.
    */
   private hover(e: PointerEvent): void {
     if (this.readOnly || this.tool !== 'pen' || this.pen !== 'fueller' || this.drawing) {
+      this.hideTip();
+      return;
+    }
+    // Ob er über einem Nachbarn schwebt, sagt die Lage der Fläche, wie sie zuletzt gemessen war: Auch dafür wird nicht bei jeder
+    // Meldung neu gemessen.
+    if (this.neighborAt(this.local(e))) {
       this.hideTip();
       return;
     }
@@ -1356,11 +1567,19 @@ export class InkSurface {
     this.refreshRect();
     if (e.pointerType === 'pen') {
       this.filter.penDown(e.timeStamp);
+      this.penKnown = e.pointerId;
       this.endGesture(true); // die Hand lag schon auf dem Bildschirm: was die Finger eben verschoben haben, war sie
       this.touches.clear();
       this.forgetTaps();
       if (this.drawing) this.finishDraw(true);
       if (this.erasing) this.finishErase();
+      // Auf einer Nachbarseite oder im Spalt davor schreibt und radiert der Stift nicht, gleich welches Werkzeug gilt: Sein
+      // Aufsetzen macht sie zur offenen Seite. Erst der nächste Kontakt schreibt, dann auf ihr.
+      const side = this.neighborAt(this.local(e));
+      if (side) {
+        this.openNeighbor(side);
+        return;
+      }
       if (this.readOnly) return;
       this.capture(e);
       this.beginDraw(e);
@@ -1400,15 +1619,64 @@ export class InkSurface {
       this.touches.set(e.pointerId, this.local(e));
       this.logFinger(e, 'move');
       this.moveGesture();
-    } else if (e.pointerType === 'pen' && e.buttons === 0) this.hover(e);
+    } else if (e.pointerType === 'pen') {
+      // Auf liegt der Stift nur, wenn die Spitze berührt (Taste 1). Mit gedrückter Taste am Schaft oder Radiertaste schwebt er nur.
+      if ((e.buttons & 1) !== 0) {
+        if (this.penKnown !== e.pointerId) this.noticePen(e);
+        return;
+      }
+      // Schwebt ein bemerkter Stift, hat er abgehoben, auch wenn sein Abheben nirgends ankam: Das Tor geht wieder auf.
+      if (this.noticed?.id === e.pointerId) this.releaseNoticedPen(e.timeStamp);
+      if (e.buttons === 0) this.hover(e);
+    }
   };
+
+  /**
+   * Ein Stift liegt auf, aber sein Aufsetzen kam bei der Seite davor an, die dann zu dieser wechselte (er setzte auf ihrem Nachbarn
+   * auf). Das Tor gegen Handballen erfährt es einmal: Sonst nähme es die Hand, die noch aufliegt, als Finger. Sein Ende hört das
+   * Fenster, denn er kann auch über der Leiste oder einer Karte abheben, wo es nie bei der Fläche ankäme (wie bei den Karten). Kommt
+   * es gar nicht, geht das Tor auf, sobald er wieder schwebt (`onMove`): So bleibt es nie zu.
+   */
+  private noticePen(e: PointerEvent): void {
+    const id = e.pointerId;
+    this.forgetNoticedPen();
+    this.penKnown = id;
+    this.filter.penDown(e.timeStamp);
+    const end = (ev: PointerEvent): void => {
+      if (ev.pointerId === id) this.releaseNoticedPen(ev.timeStamp);
+    };
+    window.addEventListener('pointerup', end, true);
+    window.addEventListener('pointercancel', end, true);
+    const stop = (): void => {
+      window.removeEventListener('pointerup', end, true);
+      window.removeEventListener('pointercancel', end, true);
+    };
+    this.noticed = { id, stop };
+  }
+
+  /** Der bemerkte Stift hat abgehoben (zur Zeit `at`): Das Tor geht wieder auf, und die Fläche hört nicht mehr auf sein Ende. */
+  private releaseNoticedPen(at: number): void {
+    const n = this.noticed;
+    if (!n) return;
+    this.forgetNoticedPen();
+    if (this.penKnown === n.id) this.penKnown = null;
+    this.filter.penUp(at);
+  }
+
+  private forgetNoticedPen(): void {
+    this.noticed?.stop();
+    this.noticed = null;
+  }
 
   private onUp = (e: PointerEvent): void => {
     const { drawing: d, erasing: er } = this;
     // Mit der Zeit des Abhebens: Ruhte der Stift davor, ohne noch Punkte zu schicken, endet die Füllfeder trotzdem langsam.
     if (d && e.pointerId === d.id) this.finishDraw(true, e.timeStamp);
     else if (er && e.pointerId === er.id) this.finishErase();
-    if (e.pointerType === 'pen') this.filter.penUp(e.timeStamp);
+    if (e.pointerType === 'pen') {
+      this.filter.penUp(e.timeStamp);
+      this.penKnown = null;
+    }
     if (!this.touches.delete(e.pointerId)) return;
     if (e.type === 'pointercancel') this.forgetTaps(); // eine abgebrochene Berührung ist kein Tipp
     else this.logFinger(e, 'up');
@@ -1416,21 +1684,39 @@ export class InkSurface {
       this.rebaseGesture();
       return;
     }
-    this.endGesture(false);
+    if (this.endGesture(false)) {
+      this.forgetTaps(); // die Nachbarseite wird die offene: Hier zählt der Zug weder als Tipp noch als Rückgängig
+      return;
+    }
+    // Zwei Finger machen auf der offenen Seite rückgängig, auch wenn sie auf einem Nachbarn tippen.
     if (isTwoFingerTap(this.fingerLog)) this.undo();
-    else if (isFingerTap(this.tapLog)) this.opts.onTap?.(this.toPage(this.tapLog[0].x, this.tapLog[0].y));
+    else if (isFingerTap(this.tapLog)) this.tapAt(this.tapLog[0]);
     this.forgetTaps();
   };
+
+  /**
+   * Ein Finger oder die Maus hat an diesem Ort der Fläche getippt: Auf einem Nachbarn (oder im Spalt davor) wird er die offene
+   * Seite, sonst gilt der Tipp der Seite (`onTap`).
+   */
+  private tapAt(at: Pt2): void {
+    const side = this.neighborAt(at);
+    if (side) this.openNeighbor(side);
+    else this.opts.onTap?.(this.toPage(at.x, at.y));
+  }
 
   /** Der Stift verlässt die Fläche: Die Spitze beim Schweben geht mit. */
   private onLeave = (e: PointerEvent): void => {
     if (e.pointerType === 'pen') this.hideTip();
   };
 
-  /** Mausrad: blättern, mit Strg (oder Cmd, so meldet das Trackpad Zwei-Finger-Zoomen) zoomen. */
+  /**
+   * Mausrad: blättern, mit Strg (oder Cmd, so meldet das Trackpad Zwei-Finger-Zoomen) zoomen. Beides kann die Mitte in einen
+   * Nachbarn bringen: Steht das Rad danach `WHEEL_SETTLE_MS` lang still, gilt das wie das Loslassen eines Zugs (`wheelSettled`).
+   */
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
     this.refreshRect();
+    if (!this.wheelTimer) this.wheelFrom = this.middleSide(); // das Rad beginnt zu drehen
     const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.vh : 1;
     if (e.ctrlKey || e.metaKey) {
       this.view = zoomAround(this.view, this.local(e), Math.exp(-e.deltaY * unit * 0.0025), this.zoomLimits());
@@ -1439,5 +1725,28 @@ export class InkSurface {
     }
     this.clampView();
     this.scheduleRender();
+    this.awaitWheelRest();
+  };
+
+  /** Beginnt die Zeit bis zur Ruhe des Rads neu. */
+  private awaitWheelRest(): void {
+    clearTimeout(this.wheelTimer);
+    this.wheelTimer = window.setTimeout(this.wheelSettled, WHEEL_SETTLE_MS);
+  }
+
+  /**
+   * Das Rad steht still: Ist die Mitte beim Drehen in einen Nachbarn gekommen (`enteredSide`), wird er die offene Seite. Liegt noch
+   * ein Finger, die Maus oder der Stift auf, wartet das, bis alles losgelassen ist: Ein Zug, der gerade läuft, soll nicht mitten
+   * drin auf einer anderen Seite landen.
+   */
+  private wheelSettled = (): void => {
+    this.wheelTimer = 0;
+    if (this.destroyed) return;
+    if (this.touches.size > 0 || this.drawing || this.erasing) {
+      this.awaitWheelRest();
+      return;
+    }
+    const side = enteredSide(this.wheelFrom, this.view, { w: this.vw, h: this.vh }, this.present());
+    if (side) this.openNeighbor(side);
   };
 }

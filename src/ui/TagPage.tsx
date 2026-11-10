@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'preact/hooks';
+import { useCallback, useMemo, useState } from 'preact/hooks';
 import { todayVienna, type Day } from '../lib/dates';
 import { tagPagePath } from '../lib/filenames';
 import { geburtstageAm } from '../lib/geburtstage';
@@ -7,6 +7,7 @@ import type { ListDir } from '../sync/github';
 import { BriefingCard } from './BriefingCard';
 import { MeetingsCard } from './MeetingsCard';
 import { MiniCalendar } from './MiniCalendar';
+import { neighborsOf, withMarks } from './neighbors';
 import { PageView, type PageProps } from './PageView';
 import { useGeburtstage } from './useGeburtstage';
 import { useTermine } from './useTermine';
@@ -26,13 +27,18 @@ export function TagPage({ day, listDir, ...rest }: PageProps & { day: Day; listD
   const termine = useTermine(rest.engine);
   const geburtstage = useGeburtstage(rest.engine);
   // Im Kopf nur die Geburtstage und Jahrestage: Termine stehen schon in der Karte Besprechungen, Prioritäten im eigenen Feld.
-  const marks = useMemo(
-    () => agendaMarks(layout, (d) => ({ geburtstage: geburtstageAm(geburtstage, d), termine: [], prioritaeten: [] })),
-    [layout, geburtstage],
+  // Ebenso im Kopf der Nachbarn, die über und unter der Seite hängen.
+  const headMarks = useCallback(
+    (l: Layout) => agendaMarks(l, (d) => ({ geburtstage: geburtstageAm(geburtstage, d), termine: [], prioritaeten: [] })),
+    [geburtstage],
   );
+  const marks = useMemo(() => headMarks(layout), [layout, headMarks]);
   const briefing = rectOf(layout, 'briefing');
   const calendar = rectOf(layout, 'kalender');
   const meetings = rectOf(layout, 'besprechungen');
+  // Darüber der Tag davor, darunter der Tag danach. Ihre Vorschau zeigt wie diese Seite die Geburtstage im Kopf, die Karten aber
+  // erst, wenn sie offen sind.
+  const neighbors = useMemo(() => withMarks(neighborsOf({ view: 'tag', key: day }), headMarks), [day, headMarks]);
 
   return (
     <PageView
@@ -40,6 +46,7 @@ export function TagPage({ day, listDir, ...rest }: PageProps & { day: Day; listD
       path={tagPagePath(day)}
       {...rest}
       marks={marks}
+      neighbors={neighbors}
       overlay={
         <>
           {briefing && <BriefingCard engine={rest.engine} day={day} rect={briefing} />}

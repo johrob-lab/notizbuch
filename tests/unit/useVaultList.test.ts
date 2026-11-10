@@ -96,3 +96,82 @@ test('eine Änderung zur NFC-Form eines zerlegt gegebenen Pfads liest die Datei 
   expect(engine.read).toHaveBeenLastCalledWith(nfc);
   expect(host.querySelector('#liste')!.textContent).toBe('a');
 });
+
+/** Eine Antwort der Engine, die erst kommt, wenn der Test sie gibt. */
+function later() {
+  let answer!: (text: string | null) => void;
+  let fail!: (error: Error) => void;
+  const promise = new Promise<string | null>((resolve, reject) => {
+    answer = resolve;
+    fail = reject;
+  });
+  return { promise, answer, fail };
+}
+
+const text = (host: HTMLElement) => host.querySelector('#liste')!.textContent;
+const asList = (t: string) => [t];
+
+test('eine Liste, die später aufgeht, zeigt sofort die letzte Antwort der Engine und dann ihre eigene', async () => {
+  const { engine, as } = fakeEngine('a');
+  mount({ engine: as, path: 'Kalender/Liste.md', parse: asList });
+  await settle();
+  const next = later();
+  engine.read.mockImplementationOnce(() => next.promise);
+  // Beim Weiterscrollen zeigt die neue Seite so von Anfang an dieselben Einträge wie eben die Vorschau.
+  const host = mount({ engine: as, path: 'Kalender/Liste.md', parse: asList });
+  expect(text(host)).toBe('a');
+  next.answer('b');
+  await settle();
+  expect(text(host)).toBe('b');
+});
+
+test('eine andere Engine und eine andere Datei beginnen leer', async () => {
+  const first = fakeEngine('a');
+  mount({ engine: first.as, path: 'Kalender/Liste.md', parse: asList });
+  await settle();
+  const other = fakeEngine('x');
+  other.engine.read.mockImplementation(() => later().promise);
+  expect(text(mount({ engine: other.as, path: 'Kalender/Liste.md', parse: asList }))).toBe('');
+  first.engine.read.mockImplementation(() => later().promise);
+  expect(text(mount({ engine: first.as, path: 'Kalender/Andere.md', parse: asList }))).toBe('');
+});
+
+test('eine ältere Antwort ersetzt nicht, was eine neuere schon gebracht hat', async () => {
+  const { engine, as } = fakeEngine('a');
+  const slow = later();
+  const fast = later();
+  engine.read.mockImplementationOnce(() => slow.promise).mockImplementationOnce(() => fast.promise);
+  const first = mount({ engine: as, path: 'Kalender/Liste.md', parse: asList });
+  const second = mount({ engine: as, path: 'Kalender/Liste.md', parse: asList });
+  fast.answer('neu');
+  await settle();
+  slow.answer('alt');
+  await settle();
+  expect(text(first)).toBe('alt'); // jede Liste zeigt die Antwort auf ihre eigene Anfrage
+  expect(text(second)).toBe('neu');
+  engine.read.mockImplementation(() => later().promise);
+  expect(text(mount({ engine: as, path: 'Kalender/Liste.md', parse: asList }))).toBe('neu');
+});
+
+test('nach einer Datei, die fehlt, kaputt ist oder sich nicht lesen ließ, beginnt die nächste Liste leer', async () => {
+  const { engine, as } = fakeEngine('a');
+  mount({ engine: as, path: 'Kalender/Liste.md', parse: asList });
+  await settle();
+  engine.read.mockImplementation(() => later().promise);
+  // Was die Engine lieferte, lässt sich nicht lesen: Auch die nächste Liste ist leer, ohne Fehler.
+  const broken = mount({
+    engine: as,
+    path: 'Kalender/Liste.md',
+    parse: () => {
+      throw new Error('kaputt');
+    },
+  });
+  expect(text(broken)).toBe('');
+
+  const failing = later();
+  engine.read.mockImplementationOnce(() => failing.promise);
+  mount({ engine: as, path: 'Kalender/Liste.md', parse: asList });
+  failing.fail(new Error('kein Netz'));
+  await settle();
+  expect(text(mount({ engine: as, path: 'Kalender/Liste.md', parse: asList }))).toBe('');
+});
