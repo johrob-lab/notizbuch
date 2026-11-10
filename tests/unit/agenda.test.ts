@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { agendaInfo, fitLines, geburtstagItems, moreLabel, SEPARATOR, prioItems, terminItems, textWidth, type AgendaItem } from '../../src/pages/agenda';
+import { agendaInfo, fitLines, geburtstagItem, moreLabel, SEPARATOR, prioItems, terminItems, textWidth, withHead, type AgendaItem } from '../../src/pages/agenda';
 import type { Geburtstag } from '../../src/lib/geburtstage';
 import type { Termin } from '../../src/lib/termine';
 import { wocheLayout } from '../../src/pages/layouts';
@@ -138,11 +138,76 @@ const geb = (name: string, art: 'Geburtstag' | 'Jahrestag' = 'Geburtstag'): Gebu
 const t = (title: string): Termin => ({ date: '2026-10-28', allDay: true, title });
 const p = (text: string) => ({ text, done: false });
 
-test('birthdays get a cake, anniversaries a heart, in their own tone', () => {
-  expect(geburtstagItems([geb('Max Beispiel'), geb('Anna und Ben Beispiel', 'Jahrestag')])).toEqual([
-    { text: '🎂 Max Beispiel', tone: 'geburtstag' },
-    { text: '♥ Anna und Ben Beispiel', tone: 'geburtstag' },
-  ]);
+test('all birthdays of a day stand in one entry behind one cake, anniversaries behind one heart', () => {
+  const g = (name: string, art: 'Geburtstag' | 'Jahrestag' = 'Geburtstag') => ({ date: '2026-10-29', name, art });
+  expect(geburtstagItem([])).toBeUndefined();
+  expect(geburtstagItem([g('Max Beispiel')])).toEqual({ text: '🎂 Max Beispiel', tone: 'geburtstag' });
+  expect(geburtstagItem([g('Max Beispiel'), g('Paul Beispiel')], 11)).toEqual({ text: '🎂 Max Beispiel, Paul Beispiel', tone: 'geburtstag', size: 11 });
+  expect(geburtstagItem([g('Anna und Ben Beispiel', 'Jahrestag'), g('Max Beispiel')])?.text).toBe('🎂 Max Beispiel ♥ Anna und Ben Beispiel');
+  expect(geburtstagItem([g('Anna und Ben Beispiel', 'Jahrestag')])?.text).toBe('♥ Anna und Ben Beispiel');
+});
+
+test('fitLines takes a width per line, the last one repeats', () => {
+  const items = ['Eins', 'Zwei', 'Drei'].map((text) => ({ text, tone: 'termin' as const }));
+  const lines = fitLines(items, 3, [textWidth('Eins', 13) + 1, 1000], 13);
+  expect(lines.map((l) => l.items.map((i) => i.text))).toEqual([['Eins'], ['Zwei', 'Drei']]);
+});
+
+test('an entry with its own size is measured with that size', () => {
+  const head = { text: '🎂 Max Beispiel', tone: 'geburtstag' as const, size: 11 };
+  const termin = { text: '08:00 Schulung', tone: 'termin' as const };
+  const exact = textWidth(head.text, 11) + textWidth(SEPARATOR, 13) + textWidth(termin.text, 13);
+  expect(fitLines([head, termin], 1, exact, 13)[0].items).toHaveLength(2);
+  expect(fitLines([head, termin], 1, exact - 1, 13)[0].more).toBe(1);
+});
+
+test('with appointments the birthdays get at most 40 % of line 1 and the first appointment stands next to them', () => {
+  const head = { text: '🎂 Max Beispiel, Paul Beispiel, Erika Muster, Hans Beispiel', tone: 'geburtstag' as const, size: 11 };
+  const rest = ['08:00 Schulung Beispiel mit sehr langem Titel', '10:00 Abnahme Brücke'].map((text) => ({ text, tone: 'termin' as const }));
+  const [line] = withHead(head, rest, 1, 300, 13);
+  expect(line.items[0].text.endsWith('…')).toBe(true);
+  expect(textWidth(line.items[0].text, 11)).toBeLessThanOrEqual(0.4 * 300);
+  expect(line.items[1].tone).toBe('termin');
+  expect(line.items[1].text.startsWith('08:00')).toBe(true);
+  expect(line.more).toBe(1);
+});
+
+test('without appointments the birthdays may use the whole width, without birthdays withHead is fitLines', () => {
+  const head = { text: '🎂 Max Beispiel, Paul Beispiel, Erika Muster', tone: 'geburtstag' as const, size: 11 };
+  expect(textWidth(head.text, 11)).toBeGreaterThan(0.4 * 300);
+  expect(withHead(head, [], 2, 300, 13)).toEqual([{ items: [head], more: 0 }]);
+  const rest = ['08:00 Schulung', '10:00 Abnahme'].map((text) => ({ text, tone: 'termin' as const }));
+  expect(withHead(undefined, rest, 2, 300, 13)).toEqual(fitLines(rest, 2, 300, 13));
+});
+
+test('with two lines the appointments continue in line 2 in full width', () => {
+  const head = { text: '🎂 Max Beispiel, Paul Beispiel, Erika Muster, Hans Beispiel', tone: 'geburtstag' as const, size: 11 };
+  const rest = ['08:00 Schulung Beispiel mit sehr langem Titel', '10:00 Abnahme Brücke', '12:00 Mittag'].map((text) => ({ text, tone: 'termin' as const }));
+  const lines = withHead(head, rest, 2, 300, 13);
+  expect(lines).toHaveLength(2);
+  expect(lines[0].items[1].text.startsWith('08:00')).toBe(true);
+  expect(lines[0].more).toBe(0);
+  expect(lines[1].items.map((i) => i.text)).toEqual(['10:00 Abnahme Brücke', '12:00 Mittag']);
+  expect(textWidth(lines[1].items.map((i) => i.text).join(SEPARATOR), 13)).toBeLessThanOrEqual(300);
+});
+
+test('only an anniversary and appointments: the entry starts with a heart and takes at most 40 %', () => {
+  const head = geburtstagItem([{ date: '2026-10-29', name: 'Anna und Ben Beispiel mit einem sehr langen Namen und noch mehr', art: 'Jahrestag' }], 11)!;
+  const rest = [{ text: '08:00 Schulung', tone: 'termin' as const }];
+  const [line] = withHead(head, rest, 1, 300, 13);
+  expect(line.items[0].text.startsWith('♥')).toBe(true);
+  expect(textWidth(line.items[0].text, 11)).toBeLessThanOrEqual(0.4 * 300);
+  expect(line.items[1].text).toBe('08:00 Schulung');
+});
+
+test('when line 1 next to the birthdays has no room for an ellipse the appointments start in line 2', () => {
+  const head = { text: 'a', tone: 'geburtstag' as const, size: 9 };
+  const rest = [{ text: '08:00 Schulung', tone: 'termin' as const }];
+  const lines = withHead(head, rest, 2, 14, 10.5);
+  expect(lines[0]).toEqual({ items: [head], more: 0 });
+  expect(lines[1].items[0].tone).toBe('termin');
+  // Mit nur einer Zeile zählt `more` den Rest.
+  expect(withHead(head, rest, 1, 14, 10.5)).toEqual([{ items: [head], more: 1 }]);
 });
 
 test('the day list names birthdays, anniversaries, appointments and priorities, leaving out what is 0', () => {

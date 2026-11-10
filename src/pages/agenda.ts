@@ -6,8 +6,11 @@ import type { Termin } from '../lib/termine';
 // nur die Geburtstage und Jahrestage). Reine Rechnung ohne DOM:
 // Die Breite wird geschätzt (`textWidth`), gezeichnet wird in `agendaMarks` (layouts.ts).
 
-/** Ein Eintrag einer Zeile. `tone` bestimmt die Farbe: Geburtstag oder Jahrestag, Termin, Priorität oder erledigte Priorität. */
-export type AgendaItem = { text: string; tone: 'geburtstag' | 'termin' | 'prio' | 'erledigt' };
+/**
+ * Ein Eintrag einer Zeile. `tone` bestimmt die Farbe: Geburtstag oder Jahrestag, Termin, Priorität oder erledigte Priorität.
+ * `size` ist die Schriftgröße dieses Eintrags; fehlt sie, gilt die der Zeile.
+ */
+export type AgendaItem = { text: string; tone: 'geburtstag' | 'termin' | 'prio' | 'erledigt'; size?: number };
 
 /** Alles, was ein Tag auf dem Bildschirm zeigt, so wie `agendaMarks` es braucht (Termine schon auf den Tag gefiltert und sortiert). Fehlt `geburtstage`, gibt es keine. */
 export type AgendaDay = { geburtstage?: Geburtstag[]; termine: Termin[]; prioritaeten: Prioritaet[] };
@@ -38,9 +41,17 @@ export function prioItems(list: Prioritaet[]): AgendaItem[] {
   return list.map((p) => (p.done ? { text: `✓ ${p.text}`, tone: 'erledigt' } : { text: `▸ ${p.text}`, tone: 'prio' }));
 }
 
-/** Geburtstage mit Kuchen, Jahrestage mit Herz, in der Reihenfolge der Eingabe. */
-export function geburtstagItems(list: Geburtstag[]): AgendaItem[] {
-  return list.map((g) => ({ text: `${g.art === 'Jahrestag' ? '♥' : '🎂'} ${g.name}`, tone: 'geburtstag' }));
+/**
+ * Alle Geburtstage eines Tages als ein Eintrag: Geburtstage hinter einem Kuchen, Jahrestage dahinter hinter einem Herz,
+ * jeweils durch Komma getrennt, in der Reihenfolge der Eingabe. Ohne Einträge `undefined`. `size` wird nur gesetzt, wenn übergeben.
+ */
+export function geburtstagItem(list: Geburtstag[], size?: number): AgendaItem | undefined {
+  const names = (art: Geburtstag['art']) => list.filter((g) => g.art === art).map((g) => g.name).join(', ');
+  const geburtstage = names('Geburtstag');
+  const jahrestage = names('Jahrestag');
+  const parts = [geburtstage ? `🎂 ${geburtstage}` : '', jahrestage ? `♥ ${jahrestage}` : ''].filter((x) => x !== '');
+  if (parts.length === 0) return undefined;
+  return { text: parts.join(' '), tone: 'geburtstag', ...(size !== undefined ? { size } : {}) };
 }
 
 /** Zusatz für die Liste „Tage dieser Seite“: zum Beispiel `1 Geburtstag, 2 Termine, 1 Priorität`. Was 0 ist, fehlt; ohne alles ist er leer. */
@@ -74,7 +85,9 @@ export function textWidth(s: string, size: number): number {
   return sum * size;
 }
 
-const joined = (list: AgendaItem[]): string => list.map((i) => i.text).join(SEPARATOR);
+/** Breite einer Reihe von Einträgen mit Trennern: jeder Eintrag mit seiner eigenen Größe, der Trenner mit der der Zeile. */
+const rowWidth = (list: AgendaItem[], size: number): number =>
+  list.reduce((sum, i, k) => sum + textWidth(i.text, i.size ?? size) + (k > 0 ? textWidth(SEPARATOR, size) : 0), 0);
 
 /**
  * Der Text mit Ellipse am Ende (ohne Leerraum davor), so dass er höchstens `width` breit ist. Passt nicht einmal die
@@ -89,31 +102,34 @@ function shorten(s: string, size: number, width: number): string | undefined {
 }
 
 /**
- * Verteilt die Einträge auf höchstens `lines` Zeilen der Breite `width`. Ein Eintrag kommt in die laufende Zeile,
+ * Verteilt die Einträge auf höchstens `lines` Zeilen. `width` ist die Breite einer Zeile oder eine Liste mit der Breite
+ * je Zeile (ist sie kürzer als `lines`, gilt ihr letzter Wert weiter). Ein Eintrag kommt in die laufende Zeile,
  * wenn er mit Trenner passt, sonst beginnt die nächste Zeile. Ein Eintrag, der allein nicht passt, wird mit Ellipse
  * gekürzt. Was nach der letzten Zeile übrig bleibt, steht als `more` in der letzten Zeile; dort muss " +N" mitpassen,
- * notfalls fällt der letzte Eintrag der Zeile weg.
+ * notfalls fällt der letzte Eintrag der Zeile weg. Jeder Eintrag wird mit seiner eigenen Größe gemessen, sonst mit `size`.
  */
-export function fitLines(items: AgendaItem[], lines: number, width: number, size: number): AgendaLine[] {
+export function fitLines(items: AgendaItem[], lines: number, width: number | number[], size: number): AgendaLine[] {
+  const widths = Array.isArray(width) ? width : [width];
   const out: AgendaLine[] = [];
   let next = 0;
   let row = 0;
   while (row < lines && next < items.length) {
     const last = row === lines - 1;
+    const w = widths[Math.min(row, widths.length - 1)];
     let taken = 0;
-    while (next + taken < items.length && textWidth(joined(items.slice(next, next + taken + 1)), size) <= width) taken++;
+    while (next + taken < items.length && rowWidth(items.slice(next, next + taken + 1), size) <= w) taken++;
     let more = 0;
     if (last) {
       // " +N" muss mitpassen: so lange den letzten Eintrag weglassen, bis es stimmt.
       const rest = (k: number) => items.length - next - k;
-      while (taken > 0 && rest(taken) > 0 && textWidth(joined(items.slice(next, next + taken)) + moreLabel(rest(taken)), size) > width) taken--;
+      while (taken > 0 && rest(taken) > 0 && rowWidth(items.slice(next, next + taken), size) + textWidth(moreLabel(rest(taken)), size) > w) taken--;
       more = rest(Math.max(taken, 1));
     }
     if (taken === 0) {
       // Der erste Eintrag passt allein nicht (in der letzten Zeile samt " +N"): kürzen. Reicht der Platz nicht einmal
       // für die Ellipse, wird er nicht gezeichnet: in der letzten Zeile endet damit alles, sonst zählt die Zeile neu.
-      const room = width - (more > 0 ? textWidth(moreLabel(more), size) : 0);
-      const text = shorten(items[next].text, size, room);
+      const room = w - (more > 0 ? textWidth(moreLabel(more), size) : 0);
+      const text = shorten(items[next].text, items[next].size ?? size, room);
       if (text === undefined) {
         if (last) break;
         next++;
@@ -128,4 +144,31 @@ export function fitLines(items: AgendaItem[], lines: number, width: number, size
     row++;
   }
   return out;
+}
+
+/** Höchster Anteil der Zeile 1, den die Geburtstage einnehmen, wenn Termine folgen. */
+export const HEAD_SHARE = 0.4;
+
+/**
+ * Die Geburtstage (`head`) als erster Eintrag der Zeile 1, dahinter die übrigen Einträge (`rest`, meist Termine).
+ * Ohne `head` wie `fitLines`, ohne `rest` darf `head` die ganze Breite nehmen. Sonst wird `head` mit Ellipse auf
+ * höchstens `HEAD_SHARE * width` gekürzt und `rest` fließt in den Rest von Zeile 1 und dann in die Zeilen darunter in
+ * voller Breite. Reicht der Rest von Zeile 1 nicht einmal für eine Ellipse, steht `head` allein und `rest` beginnt in
+ * Zeile 2 (gibt es nur eine Zeile, zählt `more` die Einträge von `rest`). `more` zählt nur `rest`.
+ */
+export function withHead(head: AgendaItem | undefined, rest: AgendaItem[], lines: number, width: number, size: number): AgendaLine[] {
+  if (!head) return fitLines(rest, lines, width, size);
+  if (rest.length === 0) return fitLines([head], lines, width, size);
+  const headSize = head.size ?? size;
+  const text = shorten(head.text, headSize, HEAD_SHARE * width);
+  if (text === undefined) return fitLines(rest, lines, width, size);
+  const shown: AgendaItem = { ...head, text };
+  const avail = width - textWidth(text, headSize) - textWidth(SEPARATOR, size);
+  const first = fitLines(rest, lines, [avail, width], size);
+  if (first.length === 0 || (lines > 1 && textWidth(ELLIPSIS, size) > avail)) {
+    // Neben `head` ist kein Platz für einen Eintrag: `head` steht allein, `rest` beginnt in Zeile 2.
+    const below = lines > 1 ? fitLines(rest, lines - 1, width, size) : [];
+    return [{ items: [shown], more: lines > 1 ? 0 : rest.length }, ...below];
+  }
+  return [{ items: [shown, ...first[0].items], more: first[0].more }, ...first.slice(1)];
 }

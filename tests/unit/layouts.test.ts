@@ -570,26 +570,38 @@ describe('agendaMarks', () => {
   const geb = (name: string, date = '2026-10-28', art: 'Geburtstag' | 'Jahrestag' = 'Geburtstag'): Geburtstag => ({ date, name, art });
   const lines = (svg: string) => [...svg.matchAll(/<text [^>]*>(.*?)<\/text>/g)].map((m) => m[1]);
 
-  test('birthdays and anniversaries come first in line 1 of the week, in the holiday colour', () => {
-    const svg = agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: [geb('Max Beispiel'), geb('Anna und Ben Beispiel', '2026-10-28', 'Jahrestag')], termine: [termin('Abstimmung')], prioritaeten: prio }));
-    const [first, second] = lines(svg);
-    expect(first).toBe(
-      '<tspan fill="#a8674f">🎂 Max Beispiel</tspan><tspan fill="#55657a"> · </tspan><tspan fill="#a8674f">♥ Anna und Ben Beispiel</tspan>' +
-        '<tspan fill="#55657a"> · </tspan><tspan fill="#55657a">Abstimmung</tspan>',
-    );
+  const plain = (html: string) => html.replace(/<[^>]*>/g, '').replace(/&amp;/g, '&');
+  const LONG = ['Maximilian Beispielmann', 'Wilhelmine Musterfrau'];
+
+  test('all birthdays and anniversaries of a week day are one small entry in line 1, the first appointment next to it, priorities in line 2', () => {
+    const data = { geburtstage: [...LONG.map((n) => geb(n)), geb('Anna und Ben Beispiel', '2026-10-28', 'Jahrestag')], termine: lang(2), prioritaeten: prio };
+    const [first, second] = lines(agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', data)));
+    expect(first.match(/<tspan[^>]*>🎂/g)).toHaveLength(1);
+    expect(first.startsWith('<tspan fill="#a8674f" font-size="11">🎂 Maximilian')).toBe(true);
+    expect(first).toContain('<tspan fill="#55657a"> · </tspan><tspan fill="#55657a">08:00 Besprechung');
+    expect(first.match(/font-size="/g)).toHaveLength(1);
     expect(second).toContain('▸ Angebot prüfen');
   });
 
-  test('with only birthdays the week gives them both lines', () => {
-    const many = ['Max Beispiel', 'Erika Muster', 'Paul Beispiel', 'Anna Beispiel', 'Ben Beispiel', 'Lena Muster'].map((n) => geb(n));
-    const out = lines(agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: many, termine: [], prioritaeten: [] })));
+  test('on a holiday the 40 % of the birthdays count from the narrower area', () => {
+    const svg = agendaMarks(wocheLayout('2026-W44'), only('2026-10-26', { geburtstage: LONG.map((n) => geb(n, '2026-10-26')), termine: lang(2), prioritaeten: [] }));
+    const area = clips(svg)[0].rect;
+    const head = plain(lines(svg)[0].match(/<tspan[^>]*font-size="11">(.*?)<\/tspan>/)![1]);
+    expect(head.endsWith('…')).toBe(true);
+    expect(textWidth(head, 11)).toBeLessThanOrEqual(0.4 * area[2]);
+    expect(lines(svg)[0]).toContain('08:00 Besprechung');
+  });
+
+  test('with a birthday and a priority but no appointments the week shows the whole entry in line 1 and the priority in line 2', () => {
+    const out = lines(agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: LONG.map((n) => geb(n)), termine: [], prioritaeten: prio })));
     expect(out).toHaveLength(2);
-    expect(out[0].startsWith('<tspan fill="#a8674f">🎂 Max Beispiel</tspan>')).toBe(true);
+    expect(plain(out[0])).toBe('🎂 Maximilian Beispielmann, Wilhelmine Musterfrau');
+    expect(out[1]).toContain('▸ Angebot prüfen');
   });
 
   test('the rest after a line that starts with a birthday has the colour of the appointments', () => {
     const out = lines(agendaMarks(wocheLayout('2026-W44'), only('2026-10-28', { geburtstage: [geb('Max Beispiel')], termine: lang(12), prioritaeten: prio })));
-    expect(out[0].startsWith('<tspan fill="#a8674f">🎂 Max Beispiel</tspan>')).toBe(true);
+    expect(out[0].startsWith('<tspan fill="#a8674f" font-size="11">🎂 Max Beispiel</tspan>')).toBe(true);
     expect(out[0]).toMatch(/<tspan fill="#55657a"> \+\d+<\/tspan>$/);
   });
 
@@ -600,9 +612,10 @@ describe('agendaMarks', () => {
     expect(withHoliday[2]).toBeLessThan(without[2]);
   });
 
-  test('the month puts birthdays first, then the appointments', () => {
+  test('the month puts the small birthday entry first, the first appointment in the same line or in line 2', () => {
     const out = lines(agendaMarks(monatLayout('2026-10'), only('2026-10-28', { geburtstage: [geb('Max Beispiel')], termine: [termin('Abstimmung')], prioritaeten: prio })));
-    expect(out).toEqual(['<tspan fill="#a8674f">🎂 Max Beispiel</tspan>', '<tspan fill="#55657a">Abstimmung</tspan>']);
+    expect(out[0]).toMatch(/^<tspan fill="#a8674f" font-size="9">🎂 /);
+    expect(out.join('')).toMatch(/<tspan fill="#55657a">Abs/);
   });
 
   test('the day page shows its birthdays right aligned in the line of the subtitle, nothing else', () => {
@@ -613,6 +626,7 @@ describe('agendaMarks', () => {
     expect(line.attrs).toContain('text-anchor="end"');
     expect(line.attrs).toContain('font-size="16"');
     expect(lines(svg)).toEqual(['<tspan fill="#a8674f">🎂 Max Beispiel</tspan>']);
+    expect(lines(svg)[0]).not.toContain('font-size');
     // Die Fläche beginnt rechts vom Untertitel „KW 44 / 2026 · Tagesseite“ (geschätzte Breite).
     expect(340).toBeGreaterThan(48 + 16 + textWidth('KW 44 / 2026 · Tagesseite', 16));
   });
@@ -622,14 +636,18 @@ describe('agendaMarks', () => {
     expect(texts(svg)[0].y).toBe(106);
   });
 
-  test('too many long birthday names on the day page end in a rest in the colour of the appointments', () => {
+  test('two birthdays on the day page are one entry', () => {
+    const svg = agendaMarks(tagLayout('2026-10-29'), (d) => ({ geburtstage: ['Max Beispiel', 'Paul Beispiel'].map((n) => geb(n, d)), termine: [], prioritaeten: [] }));
+    expect(lines(svg)).toEqual(['<tspan fill="#a8674f">🎂 Max Beispiel, Paul Beispiel</tspan>']);
+  });
+
+  test('too many long birthday names on the day page end in an ellipsis inside the area', () => {
     const names = ['Maximilian Beispielmann-Musterfrau', 'Wilhelmine Musterfrau-Beispielmann', 'Bartholomaeus Beispielhuber-Muster', 'Konstantin Musterberger-Beispiel'];
     const svg = agendaMarks(tagLayout('2026-10-29'), (d) => ({ geburtstage: names.map((n) => geb(n, d)), termine: [], prioritaeten: [] }));
     const out = lines(svg);
     expect(out).toHaveLength(1);
-    expect(out[0]).toMatch(/<tspan fill="#55657a"> \+\d+<\/tspan>$/);
-    const plain = out[0].replace(/<[^>]*>/g, '');
-    expect(textWidth(plain, 16)).toBeLessThanOrEqual(732);
+    expect(plain(out[0]).endsWith('…')).toBe(true);
+    expect(textWidth(plain(out[0]), 16)).toBeLessThanOrEqual(732);
   });
 
   test('names with special characters stay valid SVG', () => {
