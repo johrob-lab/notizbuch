@@ -2,7 +2,16 @@ import { afterEach, expect, test } from 'vitest';
 import { parsePage, serializePage } from '../../src/ink/svg';
 import type { FieldBox, Page, Stroke } from '../../src/ink/types';
 import { PathNotAllowedError } from '../../src/sync/paths';
-import { forgetDraftsForTests, PageSession, type PageSurface, type Phase, type SessionEngine } from '../../src/ui/pageSession';
+import {
+  draftsSettled,
+  forgetDraftsForTests,
+  holdsDrafts,
+  PageSession,
+  parkedDrafts,
+  type PageSurface,
+  type Phase,
+  type SessionEngine,
+} from '../../src/ui/pageSession';
 
 // Die Sitzung einer Seite: lesen, speichern, fremde Änderungen übernehmen. Engine und Fläche sind Fakes, die Seiten
 // sind echte SVG-Texte. Alles hier ist erfunden.
@@ -1444,16 +1453,16 @@ test('a read-only session has no draft and stays locked', async () => {
 });
 
 /**
- * Eine Seite im Entwurf, deren Lesen scheitert, wird verlassen: Ihr Entwurf `strokes` liegt danach geparkt bereit. Nach dem
- * Schließen meldet ihre Sitzung nichts mehr und wartet auf keinen Anlass.
+ * Eine Seite im Entwurf, deren Lesen scheitert, wird verlassen: Ihr Entwurf (der Strich `draft`) liegt danach geparkt bereit.
+ * Nach dem Schließen meldet ihre Sitzung nichts mehr und wartet auf keinen Anlass. Ohne `path` ist es die Seite `PATH`.
  */
-async function leaveUnloaded(engine: ReturnType<typeof fakeEngine>, ...strokes: Stroke[]) {
+async function leaveUnloaded(engine: ReturnType<typeof fakeEngine>, draft: Stroke, path = PATH) {
   engine.readError = new Error('GitHub 500');
   const surface = fakeSurface();
   const cues = fakeCues();
-  const { session, phases } = open(engine, surface, { draft: true, cues });
+  const { session, phases } = open(engine, surface, { draft: true, cues, path });
   const loading = session.reload();
-  surface.page = pageOf(...strokes);
+  surface.page = pageOf(draft);
   session.changed(surface.page);
   session.close();
   await loading;
@@ -1599,4 +1608,316 @@ test('a draft page left before anyone asked it to read is read and saved all the
   session.close();
   await settle();
   expect(ids(engine.writes.at(-1)!).sort()).toEqual(['d', 'neu']);
+});
+
+// ---------- Entwürfe gehören zu ihrer Engine (Wechsel des Repositorys) ----------
+// Der Pfad eines Tages ist in jedem Repository derselbe. Was eine verlassene Seite hinterlässt, bekommt darum nur eine Sitzung
+// derselben Engine: Nach einem Wechsel des Repositorys arbeitet die App mit einer neuen.
+
+/** Die Datei des nächsten Tages, für Tests mit zwei Seiten in einer Engine. */
+const NEXT_PATH = '07 Anhänge/Notizbuch/2026/2026-10-30 Tag.svg';
+
+test('a parked draft stays out of the page of another engine and goes to the next session of its own', async () => {
+  const engine = fakeEngine(null);
+  await leaveUnloaded(engine, stroke('alt', 3000));
+
+  // Das Repository wird gewechselt: In der neuen Engine hat dieselbe Datei einen eigenen Strich.
+  const other = fakeEngine(svgOf(stroke('fremd', 1000)));
+  const there = fakeSurface();
+  const b = open(other, there);
+  await b.session.reload();
+  await settle();
+  expect(ids(there.page)).toEqual(['fremd']);
+  expect(other.writes).toEqual([]);
+  there.page = pageOf(stroke('fremd', 1000), stroke('neu', 5000));
+  b.session.changed(there.page);
+  expect(other.writes.map(ids)).toEqual([['fremd', 'neu']]);
+
+  // In der Engine, zu der er gehört, kommt er beim nächsten Öffnen der Seite dazu.
+  const back = fakeSurface();
+  await open(engine, back).session.reload();
+  await settle();
+  expect(ids(back.page)).toEqual(['alt']);
+  expect(engine.writes.map(ids)).toEqual([['alt']]);
+});
+
+test('a session of another engine reads at once and does not wait for a page left in this one', async () => {
+  const engine = fakeEngine(null);
+  const read = engine.holdRead();
+  const first = fakeSurface();
+  const a = open(engine, first, { draft: true });
+  const loadingA = a.session.reload();
+  await read.reached;
+  first.page = pageOf(stroke('alt', 3000));
+  a.session.changed(first.page);
+  a.session.close();
+
+  const other = fakeEngine(svgOf(stroke('fremd', 1000)));
+  const there = fakeSurface();
+  const b = open(other, there);
+  const loadingB = b.session.reload();
+  await settle();
+  expect(other.reads).toBe(1); // die verlassene Seite gehört zur anderen Engine
+  await loadingB;
+  expect(ids(there.page)).toEqual(['fremd']);
+
+  read.release();
+  await loadingA;
+  await settle();
+  expect(engine.writes.map(ids)).toEqual([['alt']]);
+  expect(other.writes).toEqual([]);
+});
+
+test('each engine keeps its own parked draft of a file: the two are not united', async () => {
+  const engine = fakeEngine(null);
+  const other = fakeEngine(null);
+  await leaveUnloaded(engine, stroke('hier', 3000));
+  await leaveUnloaded(other, stroke('dort', 4000));
+
+  const one = fakeSurface();
+  await open(other, one).session.reload();
+  await settle();
+  expect(ids(one.page)).toEqual(['dort']);
+  expect(other.writes.map(ids)).toEqual([['dort']]);
+
+  const two = fakeSurface();
+  await open(engine, two).session.reload();
+  await settle();
+  expect(ids(two.page)).toEqual(['hier']);
+  expect(engine.writes.map(ids)).toEqual([['hier']]);
+});
+
+test('draftsSettled waits for every page left in its engine, also for one left while it waits, and for no other engine', async () => {
+  const engine = fakeEngine(null, { [NEXT_PATH]: null });
+  const other = fakeEngine(null);
+  await draftsSettled(engine); // keine verlassene Seite: gleich erfüllt
+
+  /** Eine Seite im Entwurf bekommt einen Strich und wird verlassen, solange ihr Lesen noch wartet. */
+  const leaveWhileReading = async (path: string, id: string) => {
+    const read = engine.holdRead();
+    const surface = fakeSurface();
+    const { session } = open(engine, surface, { draft: true, path });
+    void session.reload();
+    await read.reached;
+    surface.page = pageOf(stroke(id, 3000));
+    session.changed(surface.page);
+    session.close();
+    return read;
+  };
+  const first = await leaveWhileReading(PATH, 'eins');
+  let settled = false;
+  void draftsSettled(engine).then(() => (settled = true));
+  let otherSettled = false;
+  void draftsSettled(other).then(() => (otherSettled = true));
+  const second = await leaveWhileReading(NEXT_PATH, 'zwei');
+  await settle();
+  expect(otherSettled).toBe(true);
+  expect(settled).toBe(false);
+
+  first.release();
+  await settle();
+  expect(engine.writes.map(ids)).toEqual([['eins']]);
+  expect(settled).toBe(false); // die zweite Seite liest noch
+
+  second.release();
+  await settle();
+  expect(engine.writes.map(ids)).toEqual([['eins'], ['zwei']]);
+  expect(settled).toBe(true);
+});
+
+test('parkedDrafts counts the parked drafts of its engine, one per file, until a session takes them', async () => {
+  const engine = fakeEngine(null, { [NEXT_PATH]: null });
+  const other = fakeEngine(null);
+  expect(parkedDrafts(engine)).toBe(0);
+  await leaveUnloaded(engine, stroke('eins', 3000));
+  expect(parkedDrafts(engine)).toBe(1);
+  await leaveUnloaded(engine, stroke('zwei', 4000)); // dieselbe Datei: beide in einem Entwurf
+  expect(parkedDrafts(engine)).toBe(1);
+  await leaveUnloaded(engine, stroke('drei', 5000), NEXT_PATH);
+  expect(parkedDrafts(engine)).toBe(2);
+  expect(parkedDrafts(other)).toBe(0);
+
+  await open(engine, fakeSurface()).session.reload();
+  expect(parkedDrafts(engine)).toBe(1);
+  await open(engine, fakeSurface(), { path: NEXT_PATH }).session.reload();
+  expect(parkedDrafts(engine)).toBe(0);
+  await settle();
+  expect(engine.writes.map((text) => ids(text).sort())).toEqual([['eins', 'zwei'], ['drei']]);
+});
+
+// ---------- Ein verlassener Entwurf, der sich nicht speichern lässt ----------
+
+test('a left draft whose last save fails too is parked, and the next session of the page saves it', async () => {
+  const engine = fakeEngine(null);
+  const first = fakeSurface();
+  const read = engine.holdRead();
+  const a = open(engine, first, { draft: true });
+  const loading = a.session.reload();
+  await read.reached;
+  first.page = pageOf(stroke('alt', 3000));
+  a.session.changed(first.page);
+  a.session.close();
+  // Der Speicher des Geräts ist gestört: Das Speichern nach dem Lesen scheitert, der letzte Versuch beim Schließen auch.
+  engine.failWrites = 2;
+  read.release();
+  await loading;
+  await settle();
+  expect(engine.writes.map(ids)).toEqual([['alt'], ['alt']]);
+  expect(engine.text).toBeNull();
+  expect(a.saveFailed).toEqual([]); // die Seite ist verlassen, ihre Meldung sähe niemand
+
+  const second = fakeSurface();
+  await open(engine, second).session.reload();
+  await settle();
+  expect(ids(second.page)).toEqual(['alt']);
+  expect(engine.writes.map(ids)).toEqual([['alt'], ['alt'], ['alt']]);
+  expect(ids(engine.text!)).toEqual(['alt']);
+});
+
+test('a page left twice before it is read is saved in turn: the next session shows both drafts, and none wrote before reading', async () => {
+  // A: Weiterscrollen auf die Seite, das Lesen wartet noch auf GitHub, ein Strich, dann verlassen.
+  const engine = fakeEngine(null);
+  const readA = engine.holdRead();
+  const first = fakeSurface();
+  const a = open(engine, first, { draft: true });
+  void a.session.reload();
+  await readA.reached;
+  first.page = pageOf(stroke('a1', 1000));
+  a.session.changed(first.page);
+  a.session.close();
+
+  // B: wieder auf die Seite, die Vorschau zeigt den Strich aus der Übergabe. B wartet auf A, bekommt einen Strich und wird
+  // verlassen, noch während es wartet.
+  const second = fakeSurface(pageOf(stroke('a1', 1000)));
+  const b = open(engine, second, { draft: true });
+  void b.session.reload();
+  await settle();
+  second.page = pageOf(stroke('a1', 1000), stroke('b1', 2000));
+  b.session.changed(second.page);
+  b.session.close();
+
+  // C: die Seite noch einmal, ohne Entwurf.
+  const third = fakeSurface();
+  const c = open(engine, third);
+  const loadingC = c.session.reload();
+  await settle();
+  expect(engine.reads).toBe(1); // B und C warten
+
+  readA.release();
+  await loadingC;
+  await settle();
+  // Jede Sitzung liest, bevor sie schreibt, und erst nach der davor: A, dann B, dann C.
+  expect(engine.log).toEqual(['read', 'write', 'written', 'read', 'write', 'written', 'read']);
+  expect(engine.writes.map(ids)).toEqual([['a1'], ['a1', 'b1']]);
+  expect(ids(third.page)).toEqual(['a1', 'b1']);
+  expect(ids(engine.text!)).toEqual(['a1', 'b1']);
+});
+
+// ---------- Entwürfe, die nur im Arbeitsspeicher liegen (kein Neuladen von selbst) ----------
+
+test('an open draft page holds a draft from its first change until the page is read', async () => {
+  expect(holdsDrafts()).toBe(false);
+  const engine = fakeEngine(null);
+  const surface = fakeSurface();
+  const read = engine.holdRead();
+  const { session } = open(engine, surface, { draft: true });
+  const loading = session.reload();
+  await read.reached;
+  expect(holdsDrafts()).toBe(false); // ohne Änderung gibt es nichts, was verloren gehen könnte
+  surface.page = pageOf(stroke('neu', 3000));
+  session.changed(surface.page);
+  expect(holdsDrafts()).toBe(true);
+  read.release();
+  await loading;
+  expect(holdsDrafts()).toBe(false); // gelesen: Der Entwurf steht im Schreibauftrag
+  await settle();
+  expect(engine.writes.map(ids)).toEqual([['neu']]);
+});
+
+test('a draft page that could not be loaded holds its draft, also once it is left, until a session saves it', async () => {
+  const engine = fakeEngine(null);
+  engine.readError = new Error('GitHub 500');
+  const surface = fakeSurface();
+  const { session, phases } = open(engine, surface, { draft: true, cues: fakeCues() });
+  const loading = session.reload();
+  surface.page = pageOf(stroke('alt', 3000));
+  session.changed(surface.page);
+  await loading;
+  expect(phases).toEqual(['nichtGeladen']);
+  expect(holdsDrafts()).toBe(true);
+  session.close();
+  await settle();
+  expect(holdsDrafts()).toBe(true); // aufgehoben
+
+  engine.readError = undefined;
+  await open(engine, fakeSurface()).session.reload();
+  expect(holdsDrafts()).toBe(false);
+  await settle();
+  expect(engine.writes.map(ids)).toEqual([['alt']]);
+});
+
+test('a draft page left before it is read holds its draft until it is saved', async () => {
+  const engine = fakeEngine(null);
+  const surface = fakeSurface();
+  const read = engine.holdRead();
+  const { session } = open(engine, surface, { draft: true });
+  const loading = session.reload();
+  await read.reached;
+  surface.page = pageOf(stroke('neu', 3000));
+  session.changed(surface.page);
+  session.close();
+  expect(holdsDrafts()).toBe(true);
+  read.release();
+  await loading;
+  await settle();
+  expect(engine.writes.map(ids)).toEqual([['neu']]);
+  expect(holdsDrafts()).toBe(false);
+});
+
+for (const { kind, file, readError, phase } of [
+  { kind: 'broken', file: BROKEN, readError: undefined, phase: 'unlesbar' },
+  { kind: 'from a newer version', file: '<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="3" data-seite="tag"/>', readError: undefined, phase: 'zuNeu' },
+  { kind: 'refused by the path guard', file: null, readError: new PathNotAllowedError(PATH), phase: 'gesperrt' },
+] as const) {
+  test(`a draft on a page that is ${kind} is never saved and is not held, open or left`, async () => {
+    const engine = fakeEngine(file);
+    const surface = fakeSurface();
+    const read = engine.holdRead();
+    const { session, phases } = open(engine, surface, { draft: true });
+    const loading = session.reload();
+    await read.reached;
+    surface.page = pageOf(stroke('neu', 3000));
+    session.changed(surface.page);
+    expect(holdsDrafts()).toBe(true);
+    engine.readError = readError;
+    read.release();
+    await loading;
+    expect(phases).toEqual([phase]);
+    expect(holdsDrafts()).toBe(false);
+    session.close();
+    await settle();
+    expect(holdsDrafts()).toBe(false);
+    expect(engine.writes).toEqual([]);
+  });
+}
+
+test('a draft page that is being deleted holds no draft', async () => {
+  const engine = fakeEngine(null);
+  const surface = fakeSurface();
+  const read = engine.holdRead();
+  const { session } = open(engine, surface, { draft: true });
+  const loading = session.reload();
+  await read.reached;
+  surface.page = pageOf(stroke('weg', 3000));
+  session.changed(surface.page);
+  expect(holdsDrafts()).toBe(true);
+  const retiring = session.retire();
+  expect(holdsDrafts()).toBe(false);
+  read.release();
+  await loading;
+  await retiring;
+  session.close();
+  await settle();
+  expect(holdsDrafts()).toBe(false);
+  expect(engine.writes).toEqual([]);
 });

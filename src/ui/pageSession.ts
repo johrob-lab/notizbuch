@@ -91,30 +91,82 @@ function samePage(a: Page, b: Page): boolean {
 }
 
 // Die Sitzung einer Seite, die im Entwurf verlassen wird, bevor ihre Datei gelesen ist, macht ihn noch fertig (siehe `close`).
-// Die beiden Werte gelten für alle Sitzungen, Schlüssel ist der Pfad (`normalizePath`).
+// Was sie dabei hinterlässt, gilt für die nächsten Sitzungen derselben Datei, aber nur mit derselben Engine: Jeder Eintrag führt
+// die Engine seiner Sitzung mit, denn sie gehört zu einem Repository, und der Pfad eines Tages ist in jedem derselbe. Eine
+// Sitzung einer anderen Engine wartet nicht auf ihn, übernimmt nichts daraus und ändert ihn nicht. Pfade werden mit
+// `normalizePath` verglichen.
+
+/** Wozu ein Eintrag gehört: zur Datei `path` (mit `normalizePath`) in der Engine `engine`. */
+type Owner = { engine: SessionEngine; path: string };
 
 /**
- * Verlassene Sitzungen, die ihren Entwurf noch fertig machen. Erfüllt ist ihr Eintrag, wenn er geschrieben und der
- * Schreibauftrag beendet ist, oder wenn er geparkt oder aufgegeben ist. Eine neue Sitzung derselben Datei liest erst danach:
- * Sonst schrieben zwei Sitzungen dieselbe Datei, und die spätere überschriebe die frühere.
+ * Verlassene Sitzungen, die ihren Entwurf noch fertig machen. `done` ist erfüllt, wenn er geschrieben und der Schreibauftrag
+ * beendet ist, oder wenn er aufgehoben oder aufgegeben ist. Dann ist der Eintrag weg. Eine neue Sitzung derselben Datei und
+ * Engine liest erst danach: Sonst schrieben zwei Sitzungen dieselbe Datei, und die spätere überschriebe die frühere.
  */
-const finishing = new Map<string, Promise<void>>();
+const finishing: (Owner & { done: Promise<void> })[] = [];
 
 /**
- * Entwürfe verlassener Seiten, die sich nicht laden ließen. Die nächste Sitzung derselben Datei nimmt ihren beim ersten
- * gelungenen Lesen heraus. Sie liegen nur im Arbeitsspeicher: Wird die App vorher beendet, sind sie weg.
+ * Entwürfe verlassener Seiten, die sich nicht laden oder nicht speichern ließen, je Datei und Engine höchstens einer. Die
+ * nächste Sitzung derselben Datei und Engine, die schreibt, nimmt ihn beim ersten gelungenen Lesen heraus. Sie liegen nur im
+ * Arbeitsspeicher: Wird die App vorher beendet, sind sie weg.
  */
-const parked = new Map<string, Page>();
+const parked: (Owner & { page: Page })[] = [];
+
+/** Findet die Einträge der Datei `path` in der Engine `engine`. */
+const ownedBy =
+  (engine: SessionEngine, path: string) =>
+  (entry: Owner): boolean =>
+    entry.engine === engine && entry.path === path;
+
+/** Nimmt einen Eintrag aus seiner Liste, wenn er noch darin steht. */
+function remove<T>(list: T[], entry: T): void {
+  const at = list.indexOf(entry);
+  if (at !== -1) list.splice(at, 1);
+}
+
+/**
+ * Erfüllt, sobald keine verlassene Sitzung der Engine `engine` mehr ihren Entwurf fertig macht, auch keine, die erst während des
+ * Wartens dazukam. Dann steht jeder dieser Entwürfe in der Warteschlange der Engine, ist aufgehoben (siehe `parkedDrafts`) oder
+ * aufgegeben (eine kaputte Datei). Für den Wechsel des Repositorys. Wirft nie.
+ */
+export async function draftsSettled(engine: SessionEngine): Promise<void> {
+  let left = finishing.filter((entry) => entry.engine === engine);
+  while (left.length > 0) {
+    await Promise.all(left.map((entry) => entry.done));
+    left = finishing.filter((entry) => entry.engine === engine);
+  }
+}
+
+/** Wie viele Entwürfe verlassener Seiten der Engine `engine` aufgehoben sind, je Datei einer. Sie stehen in keiner Warteschlange. */
+export function parkedDrafts(engine: SessionEngine): number {
+  return parked.filter((entry) => entry.engine === engine).length;
+}
+
+/**
+ * Offene Sitzungen, die im Entwurf eine Änderung bekommen haben: je eine Abfrage, ob die Sitzung ihren Entwurf noch hält (siehe
+ * `holdsDrafts`). Beim Schließen trägt sich eine Sitzung aus, dann zählt ihr Eintrag in `finishing`.
+ */
+const holding = new Set<() => boolean>();
+
+/**
+ * Ob irgendwo ein Entwurf nur im Arbeitsspeicher liegt, der noch gespeichert werden kann: auf einer offenen Seite, die noch nicht
+ * gelesen ist oder sich nicht laden ließ, bei einer verlassenen Seite, die ihn noch fertig macht, oder aufgehoben. Ein Neuladen
+ * der App verwürfe ihn. Ein Entwurf, der nie gespeichert wird, zählt nicht: auf einer kaputten oder gesperrten Seite, auf einer
+ * aus einer neueren Version und auf einer, die gelöscht wird.
+ */
+export function holdsDrafts(): boolean {
+  return finishing.length > 0 || parked.length > 0 || [...holding].some((holds) => holds());
+}
 
 /**
  * Nur für Tests: Gibt zurück, was verlassene Seiten hinterlassen haben (die Pfade je Wert), und vergisst es. Nach einem Test
- * muss beides leer sein: Was dort liegen bleibt, bekäme die nächste Sitzung derselben Datei.
+ * muss beides leer sein: Was dort liegen bleibt, bekäme die nächste Sitzung derselben Datei. Offene Sitzungen eines Tests
+ * vergisst es ohne Meldung: Sie dürfen offen bleiben, sollen aber `holdsDrafts` im nächsten Test nicht beeinflussen.
  */
 export function forgetDraftsForTests(): { finishing: string[]; parked: string[] } {
-  const left = { finishing: [...finishing.keys()], parked: [...parked.keys()] };
-  finishing.clear();
-  parked.clear();
-  return left;
+  holding.clear();
+  return { finishing: finishing.splice(0).map((entry) => entry.path), parked: parked.splice(0).map((entry) => entry.path) };
 }
 
 export class PageSession {
@@ -149,12 +201,19 @@ export class PageSession {
   #draft: Page | null = null;
   /** Die Seite war schon einmal gelesen (`bereit`). */
   #loaded = false;
-  /** Worauf das erste Lesen wartet: eine verlassene Sitzung derselben Datei, die beim Anlegen noch ihren Entwurf fertig machte. */
+  /** Worauf das erste Lesen wartet: verlassene Sitzungen derselben Datei und Engine, die beim Anlegen noch ihren Entwurf fertig machten. */
   #before: Promise<void> | undefined;
+  /**
+   * Ob die Sitzung einen Entwurf hält, der noch gespeichert werden kann (siehe `holdsDrafts`): Die Seite ist noch nicht gelesen
+   * oder ließ sich nicht laden. Eine kaputte, gesperrte oder zu neue Seite wird nie geschrieben. Eine gelöschte hat keinen
+   * Entwurf mehr (siehe `retire`).
+   */
+  readonly #holdsDraft = (): boolean => this.#draft !== null && (this.#phase === 'laden' || this.#phase === 'nichtGeladen');
 
   constructor(o: Options) {
     this.#o = o;
-    this.#before = finishing.get(normalizePath(o.path));
+    const left = finishing.filter(ownedBy(o.engine, normalizePath(o.path)));
+    if (left.length > 0) this.#before = Promise.all(left.map((entry) => entry.done)).then(() => undefined);
     if (this.#drafting()) {
       // Ausgangspunkt für das Zusammenführen beim ersten Lesen ist die Seite, die die Fläche jetzt zeigt.
       this.#base = this.#serialize(o.surface.getPage());
@@ -172,7 +231,10 @@ export class PageSession {
   changed(page: Page): void {
     this.#version++;
     if (this.#writable()) this.#save(page);
-    else if (this.#drafting()) this.#draft = page;
+    else if (this.#drafting()) {
+      this.#draft = page;
+      holding.add(this.#holdsDraft);
+    }
   }
 
   /**
@@ -202,26 +264,32 @@ export class PageSession {
   /**
    * Die Seite wird verlassen: Was noch zu speichern ist, wird gespeichert. Hochladen macht die Engine nach ihrer Wartezeit oder
    * sofort, wenn die App in den Hintergrund geht. Ein Wechsel der Seite allein lädt nichts hoch. Ein Entwurf, dessen Seite
-   * noch nicht gelesen ist, wird noch fertig (siehe `#finishDraft`), ohne dass die Sitzung die Fläche noch anfasst.
+   * noch nicht gelesen ist, wird noch fertig (siehe `#finishDraft`), ohne dass die Sitzung die Fläche noch anfasst. Lässt er
+   * sich auch beim letzten Versuch nicht speichern, wird er aufgehoben (siehe `#park`).
    */
   close(): void {
     this.#closed = true;
     this.#stopListening();
     this.#stopWaitingForCue();
-    const draft = this.#draft !== null;
+    holding.delete(this.#holdsDraft); // ein Entwurf, den sie noch fertig macht, zählt in `finishing`
+    const hasDraft = this.#draft !== null;
     const done = (async () => {
-      if (draft) await this.#finishDraft();
+      if (hasDraft) await this.#finishDraft();
       await this.#idle();
       // Was sich nicht speichern ließ, bekommt einen letzten Versuch, bevor die Seite verschwindet.
       if (this.#next !== null) await this.#startWriting();
+      // Scheitert auch der bei einem Entwurf, wird er aufgehoben wie nach einem gescheiterten Lesen: Die Meldung, dass das
+      // Speichern scheiterte, kann eine Seite nie zeigen, die vor dem Lesen verlassen wurde.
+      if (hasDraft && this.#next !== null) {
+        this.#park(readPage(this.#next));
+        this.#next = null;
+      }
     })().catch(() => undefined);
-    if (!draft) return;
-    // Bis dahin wartet eine neue Sitzung derselben Datei mit dem Lesen.
-    const key = normalizePath(this.#o.path);
-    finishing.set(key, done);
-    void done.then(() => {
-      if (finishing.get(key) === done) finishing.delete(key);
-    });
+    if (!hasDraft) return;
+    // Bis dahin wartet eine neue Sitzung derselben Datei und Engine mit dem Lesen.
+    const entry = { engine: this.#o.engine, path: normalizePath(this.#o.path), done };
+    finishing.push(entry);
+    void done.then(() => remove(finishing, entry));
   }
 
   /**
@@ -342,7 +410,7 @@ export class PageSession {
 
   async #readAndShow(): Promise<void> {
     if (this.#stopped()) return;
-    // Macht eine verlassene Sitzung derselben Datei noch ihren Entwurf fertig, wird erst danach gelesen (siehe `finishing`).
+    // Macht eine verlassene Sitzung derselben Datei und Engine noch ihren Entwurf fertig, wird erst danach gelesen (siehe `finishing`).
     const before = this.#before;
     if (before) {
       this.#before = undefined;
@@ -369,14 +437,13 @@ export class PageSession {
     this.#base = text;
     // Einen Entwurf kennt die Engine so wenig wie einen Text, der nicht gespeichert werden konnte.
     const draft = this.#draft;
-    // Der Entwurf einer verlassenen Seite, die sich nicht laden ließ (siehe `#park`). Er kommt beim ersten gelungenen Lesen
-    // dazu, aber nur in eine Seite, die geschrieben wird.
-    const key = normalizePath(this.#o.path);
-    const parkedDraft = this.#loaded || !this.#writer() ? undefined : parked.get(key);
+    // Der aufgehobene Entwurf einer verlassenen Seite (siehe `#parkedEntry`). Er gehört zur gelesenen Seite wie Striche, die
+    // dieses Gerät noch nicht gespeichert hat: vereint, ohne Ausgangspunkt.
+    const waiting = this.#parkedEntry();
+    const parkedDraft = waiting?.page;
     let page: Page;
     let united = false;
     try {
-      // Er gehört zur gelesenen Seite wie Striche, die dieses Gerät noch nicht gespeichert hat: vereint, ohne Ausgangspunkt.
       let theirs = text;
       if (parkedDraft) theirs = text === null ? this.#serialize(parkedDraft) : mergePages(this.#serialize(parkedDraft), text);
       page = theirs === null ? this.#o.emptyPage() : readPage(theirs);
@@ -395,7 +462,7 @@ export class PageSession {
       this.#lock(error instanceof PageTooNewError ? 'zuNeu' : 'unlesbar');
       return;
     }
-    if (parkedDraft) parked.delete(key);
+    if (waiting) remove(parked, waiting);
     this.#phase = 'bereit';
     this.#loaded = true;
     this.#stopWaitingForCue();
@@ -422,10 +489,10 @@ export class PageSession {
     // in der Engine steht. Gelingt das Lesen wieder, kommt zusammen, was beide haben, und nichts gilt als radiert.
     this.#base = null;
     // Eine verlassene Seite im Entwurf: Ließ sie sich nicht laden, wartet der Entwurf auf die nächste Sitzung derselben Datei
-    // (siehe `#park`), in eine kaputte oder gesperrte Datei kommt er nie. So oder so hört die Sitzung auf und wartet auf
-    // keinen Anlass.
+    // und Engine (siehe `#park`), in eine kaputte oder gesperrte Datei kommt er nie. So oder so hört die Sitzung auf und wartet
+    // auf keinen Anlass.
     if (this.#closed) {
-      if (phase === 'nichtGeladen') this.#park();
+      if (phase === 'nichtGeladen') this.#parkDraft();
       else this.#draft = null;
       return;
     }
@@ -442,22 +509,40 @@ export class PageSession {
    */
   async #finishDraft(): Promise<void> {
     if (this.#reloading || this.#phase === 'laden') await (this.#reloading ?? this.reload());
-    else if (this.#phase === 'nichtGeladen') this.#park();
+    else if (this.#phase === 'nichtGeladen') this.#parkDraft();
     else this.#draft = null;
   }
 
-  /**
-   * Hebt den Entwurf für die nächste Sitzung derselben Datei auf (siehe `parked`). Liegt dort schon einer (auch die nächste
-   * Sitzung konnte die Seite nicht laden), kommen beide zusammen: alle Striche, die einer von beiden hat.
-   */
-  #park(): void {
+  /** Hebt den Entwurf auf (siehe `#park`), wenn es einen gibt. Die Sitzung hat ihn danach nicht mehr. */
+  #parkDraft(): void {
     const draft = this.#draft;
     this.#draft = null;
-    if (!draft) return;
-    const key = normalizePath(this.#o.path);
-    const waiting = parked.get(key);
+    if (draft) this.#park(draft);
+  }
+
+  /**
+   * Hebt `draft` für die nächste Sitzung derselben Datei und Engine auf (siehe `parked`). Liegt dort schon einer derselben
+   * Engine (auch die nächste Sitzung konnte die Seite nicht laden), kommen beide zusammen: alle Striche, die einer von beiden hat.
+   */
+  #park(draft: Page): void {
+    const engine = this.#o.engine;
+    const path = normalizePath(this.#o.path);
+    const waiting = parked.find(ownedBy(engine, path));
+    if (!waiting) {
+      parked.push({ engine, path, page: draft });
+      return;
+    }
     const mine = new Set(draft.strokes.map((s) => s.id));
-    parked.set(key, waiting ? { ...draft, strokes: [...draft.strokes, ...waiting.strokes.filter((s) => !mine.has(s.id))] } : draft);
+    waiting.page = { ...draft, strokes: [...draft.strokes, ...waiting.page.strokes.filter((s) => !mine.has(s.id))] };
+  }
+
+  /**
+   * Der aufgehobene Entwurf einer verlassenen Seite derselben Datei und Engine (siehe `#park`), der beim ersten gelungenen Lesen
+   * dazukommt, oder `undefined`. Nur eine Sitzung, die schreibt, nimmt ihn: Eine, die nur ansieht, ließe ihn sonst fallen.
+   */
+  #parkedEntry(): (Owner & { page: Page }) | undefined {
+    if (this.#loaded || !this.#writer()) return undefined;
+    return parked.find(ownedBy(this.#o.engine, normalizePath(this.#o.path)));
   }
 
   #waitForCue(): void {

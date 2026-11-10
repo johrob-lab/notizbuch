@@ -1,6 +1,7 @@
 import { render } from 'preact';
 import { startAppUpdate } from './lib/appUpdate';
 import { flushInkPrefs } from './ui/inkPrefs';
+import { holdsDrafts } from './ui/pageSession';
 import { App } from './ui/App';
 
 // Die App registriert den Service Worker selbst und lädt eine neue Version in einem ruhigen Moment (siehe appUpdate.ts).
@@ -10,7 +11,10 @@ if (import.meta.env.PROD) {
       sw: navigator.serviceWorker,
       target: window,
       doc: document,
+      // Wie bei einem Textfeld mit Fokus: Striche, die nur im Arbeitsspeicher liegen (der Entwurf einer Seite, deren Datei noch
+      // nicht gelesen ist), lassen sich vor dem Neuladen nicht speichern, also lädt die App nicht von selbst neu.
       editing: () => {
+        if (holdsDrafts()) return true;
         const el = document.activeElement as HTMLElement | null;
         return !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
       },

@@ -13,6 +13,7 @@ import type { AccessValues } from './AccessForm';
 import { BesprechungPage } from './BesprechungPage';
 import { MonatPage } from './MonatPage';
 import { MonthTabs } from './MonthTabs';
+import { draftsSettled, parkedDrafts } from './pageSession';
 import type { PageProps } from './PageView';
 import { parseRoute, routeHash, shownMonth, STEP_LABELS, stepTargets, type Route, type Steps } from './router';
 import { SettingsPage } from './Settings';
@@ -296,8 +297,10 @@ export function App() {
 
   /**
    * Ein neuer Zugang. Bei einem anderen Repository wird zuerst gesichert, was noch wartet (zum alten Repository, mit dem alten
-   * Zugang), und dem neuen wird nichts geschickt, solange etwas wartet. Dann beendet die App die alte Engine und leert in einem
-   * Zug mit dem Speichern der Einstellungen alles, was zum alten Repository gehört: So kann nichts davon ins neue gelangen.
+   * Zugang), und dem neuen wird nichts geschickt, solange etwas wartet. Dazu gehören Striche verlassener Seiten, die nur im
+   * Arbeitsspeicher liegen (siehe `PageSession`): Die App wartet, bis ihre Sitzungen sie gespeichert oder aufgehoben haben, und
+   * ein aufgehobener Entwurf zählt wie eine wartende Änderung. Dann beendet die App die alte Engine und leert in einem Zug mit
+   * dem Speichern der Einstellungen alles, was zum alten Repository gehört: So kann nichts davon ins neue gelangen.
    * Bei gleichem Repository gilt der neue Token für die laufende Engine, und Dateien und Warteschlange bleiben, wie sie sind.
    * Nach jedem Warten gilt noch, dass die App offen ist und die Engine dieselbe: Sonst endet die Änderung, ohne etwas zu tun.
    */
@@ -306,9 +309,12 @@ export function App() {
     const abandoned = () => live.current.gone || live.current.engine !== engine;
 
     if (switching) {
+      // Danach steht jeder fertige Entwurf in der Warteschlange.
+      await draftsSettled(engine);
+      if (abandoned()) return FAILED;
       await engine.flush();
       if (abandoned()) return FAILED;
-      const waiting = await store.count('outbox');
+      const waiting = (await store.count('outbox')) + parkedDrafts(engine);
       if (abandoned()) return FAILED;
       if (waiting > 0) return waitingText(waiting);
     }

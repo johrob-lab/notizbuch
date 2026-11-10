@@ -3,7 +3,17 @@ import { PAGE_GAP } from '../../src/ink/chain';
 import { serializePage } from '../../src/ink/svg';
 import { PAGE_H, type Stroke } from '../../src/ink/types';
 import { dailyNotePath, GEBURTSTAGE_PATH, TERMINE_PATH, wochePagePath } from '../../src/lib/filenames';
-import { addRepo, bringToForeground, changeStoredSettings, lastHead, openSeeded, queued, sendToBackground, type RepoMock } from './helpers/app';
+import {
+  addRepo,
+  bringToForeground,
+  changeStoredSettings,
+  lastHead,
+  openSeeded,
+  queued,
+  savedSettings,
+  sendToBackground,
+  type RepoMock,
+} from './helpers/app';
 import { centerOf, inkNear, mouse, pen, pinch, touch, twoFingerTap, viewOf } from './helpers/pointer';
 
 /**
@@ -924,6 +934,67 @@ test('there, back and there again before the file is read, the stroke stays', as
   await sendToBackground(page);
   await expect.poll(() => repo.puts.map((put) => put.path)).toEqual([file]);
   expect(strokesIn(repo.puts[0].text)).toBe(1);
+});
+
+/** Der Hinweis einer Seite, die sich nicht laden ließ (`NOT_LOADED` in PageView.tsx). */
+const NOT_LOADED = 'Diese Seite konnte nicht geladen werden. Neuer Versuch, sobald das Netz da ist.';
+/** Ein Repository aus der Liste der Einstellungen, in das gewechselt wird, und ein erfundener Token dafür. */
+const SWITCH_REPO = 'johrob-lab/2-gehirn-test';
+const SWITCH_TOKEN = 'test-zugang-wechsel-0123456789';
+
+/** Öffnet die Einstellungen und wechselt dort das Repository (Zugang ändern, neuer Token, anderes Repository, Prüfen und speichern). */
+async function switchRepository(page: Page, repo: string) {
+  await page.getByRole('link', { name: 'Einstellungen', exact: true }).click();
+  await page.getByRole('button', { name: 'Zugang ändern' }).click();
+  await page.getByLabel('Token', { exact: true }).fill(SWITCH_TOKEN);
+  await page.getByLabel('Repository', { exact: true }).selectOption(repo);
+  await page.getByRole('button', { name: 'Prüfen und speichern' }).click();
+}
+
+test('the repository does not change while a stroke waits on a day that could not be loaded', async ({ page }) => {
+  const { repo, release, file } = await writeOnNextDayWhileItLoads(page);
+  const other = await addRepo(page, SWITCH_REPO);
+
+  // GitHub antwortet auf das Lesen des 30.10. mit einem Fehler: Er lässt sich nicht laden, der Strich bleibt zu sehen.
+  repo.failReads = true;
+  release();
+  await expect(page.getByText(NOT_LOADED)).toBeVisible();
+  repo.failReads = false;
+
+  // In die Einstellungen, der 30.10. wird verlassen: Sein Strich wartet nur im Arbeitsspeicher, bis der Tag wieder offen ist.
+  // Darum wechselt das Repository nicht, und das neue hört nicht einmal eine Frage.
+  await switchRepository(page, SWITCH_REPO);
+  await expect(page.getByRole('alert').filter({ hasText: /\S/ })).toHaveText('Erst sichern: Es wartet noch 1 Änderung.');
+  expect(await savedSettings(page)).toMatchObject({ repo: repo.name });
+  expect(other.requests).toEqual([]);
+
+  // Wieder auf dem 30.10.: Jetzt lässt er sich laden, und der Strich kommt in seine Datei. Danach geht der Wechsel, und der
+  // Strich steht im Repository, zu dem er gehört.
+  await goTo(page, '#/tag/2026-10-30');
+  await waitForPageOf(page, 'tag', '2026-10-30');
+  expect(await strokeCount(page)).toBe(1);
+  await expect.poll(async () => Object.keys(await queued(page))).toEqual([file]);
+  await switchRepository(page, SWITCH_REPO);
+  await expect.poll(async () => (await savedSettings(page))?.repo).toBe(SWITCH_REPO);
+  expect(repo.puts.map((put) => put.path)).toEqual([file]);
+  expect(strokesIn(repo.puts[0].text)).toBe(1);
+  expect(other.puts).toEqual([]);
+});
+
+test('a change of the repository waits until a day left before its file was read has saved its stroke', async ({ page }) => {
+  const { repo, release, file } = await writeOnNextDayWhileItLoads(page);
+  const other = await addRepo(page, SWITCH_REPO);
+
+  // In die Einstellungen, solange GitHub zum 30.10. noch nicht geantwortet hat: Seine Sitzung liest noch zu Ende und speichert
+  // den Strich. So lange wartet der Wechsel und fragt das neue Repository nichts (ohne Warten hätte er es hier schon gefragt).
+  await switchRepository(page, SWITCH_REPO);
+  await page.waitForTimeout(300);
+  expect(other.requests).toEqual([]);
+  release();
+  await expect.poll(async () => (await savedSettings(page))?.repo).toBe(SWITCH_REPO);
+  expect(repo.puts.map((put) => put.path)).toEqual([file]);
+  expect(strokesIn(repo.puts[0].text)).toBe(1);
+  expect(other.puts).toEqual([]);
 });
 
 test('the pen on the neighbour opens it and writes nothing', async ({ page }) => {

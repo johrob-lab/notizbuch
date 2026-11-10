@@ -19,7 +19,10 @@ export type UpdateEnv = {
   /** Hier kommen die Eingaben an (Zeiger und Tasten). */
   target: { addEventListener(type: string, fn: (e: Event) => void, o?: AddEventListenerOptions): void };
   doc: { readonly visibilityState: string; addEventListener(type: 'visibilitychange', fn: () => void): void };
-  /** Ein Textfeld hat den Fokus: Ein Entwurf darin lässt sich nicht speichern, also lädt die App nicht von selbst neu. */
+  /**
+   * Ein Textfeld hat den Fokus, oder Striche liegen nur im Arbeitsspeicher (der Entwurf einer Seite, deren Datei noch nicht
+   * gelesen ist): Ein Entwurf dort lässt sich nicht speichern, also lädt die App nicht von selbst neu.
+   */
   editing(): boolean;
   reload(): void;
   /** Speichert, was noch aussteht, bevor die Seite neu lädt. */
