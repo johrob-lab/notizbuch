@@ -36,6 +36,11 @@ type Options = {
   emptyPage: () => Page;
   /** Nur ansehen: Die Fläche bleibt gesperrt, es wird nie geschrieben. */
   readOnly: boolean;
+  /**
+   * Die Fläche zeigt beim Anlegen schon einen gelesenen Stand der Seite (die Vorschau beim Weiterscrollen). Dann ist sie
+   * sofort frei (Entwurf), geschrieben wird aber erst nach dem ersten gelungenen Lesen. Gilt nicht mit `readOnly`.
+   */
+  draft?: boolean;
   /** Felder und Hintergrund der Seite, so wie sie in die Datei geschrieben wird (siehe `serializePage`). Jede Seite hat ihre eigenen. */
   fields: FieldBox[];
   background: string;
@@ -85,6 +90,28 @@ function samePage(a: Page, b: Page): boolean {
   );
 }
 
+// Die Sitzung einer Seite, die im Entwurf verlassen wird, bevor ihre Datei gelesen ist, macht ihn noch fertig (siehe `close`).
+// Die beiden Werte gelten für alle Sitzungen, Schlüssel ist der Pfad (`normalizePath`).
+
+/**
+ * Verlassene Sitzungen, die ihren Entwurf noch fertig machen. Erfüllt ist ihr Eintrag, wenn er geschrieben und der
+ * Schreibauftrag beendet ist, oder wenn er geparkt oder aufgegeben ist. Eine neue Sitzung derselben Datei liest erst danach:
+ * Sonst schrieben zwei Sitzungen dieselbe Datei, und die spätere überschriebe die frühere.
+ */
+const finishing = new Map<string, Promise<void>>();
+
+/**
+ * Entwürfe verlassener Seiten, die sich nicht laden ließen. Die nächste Sitzung derselben Datei nimmt ihren beim ersten
+ * gelungenen Lesen heraus. Sie liegen nur im Arbeitsspeicher: Wird die App vorher beendet, sind sie weg.
+ */
+const parked = new Map<string, Page>();
+
+/** Nur für Tests: Vergisst, was verlassene Seiten hinterlassen haben, damit ein Test ohne Reste eines anderen beginnt. */
+export function forgetDraftsForTests(): void {
+  finishing.clear();
+  parked.clear();
+}
+
 export class PageSession {
   readonly #o: Options;
   readonly #stopListening: () => void;
@@ -106,22 +133,41 @@ export class PageSession {
    * Der Text, den die Sitzung zuletzt von der Engine gelesen oder dorthin geschrieben hat, und von dem aus die Fläche
    * weiterentwickelt wurde. Beim Zusammenführen ist er der gemeinsame Ausgangspunkt: Daran sieht `mergePages`, was hier
    * und was anderswo geändert wurde. Ein Speichern, das scheiterte, rückt ihn nicht weiter. `null`, solange es ihn nicht
-   * gibt und solange die Seite gesperrt ist.
+   * gibt und solange die Seite gesperrt ist. Im Entwurf ist er bis zum ersten Lesen die Seite, die die Fläche beim Anlegen
+   * zeigte.
    */
   #base: string | null = null;
+  /**
+   * Die letzte Änderung im Entwurf, solange die Seite noch nicht gelesen ist. Die Engine kennt sie nicht: Beim ersten
+   * gelungenen Lesen kommt sie zur Seite dazu und wird gespeichert.
+   */
+  #draft: Page | null = null;
+  /** Die Seite war schon einmal gelesen (`bereit`). */
+  #loaded = false;
+  /** Worauf das erste Lesen wartet: eine verlassene Sitzung derselben Datei, die beim Anlegen noch ihren Entwurf fertig machte. */
+  #before: Promise<void> | undefined;
 
   constructor(o: Options) {
     this.#o = o;
-    o.surface.setReadOnly(true);
+    this.#before = finishing.get(normalizePath(o.path));
+    if (this.#drafting()) {
+      // Ausgangspunkt für das Zusammenführen beim ersten Lesen ist die Seite, die die Fläche jetzt zeigt.
+      this.#base = this.#serialize(o.surface.getPage());
+      o.surface.setReadOnly(false);
+    } else o.surface.setReadOnly(true);
     this.#stopListening = o.engine.addRemoteChangeListener((paths) => {
       if (paths.some((changed) => normalizePath(changed) === normalizePath(o.path))) void this.reload();
     });
   }
 
-  /** Die Fläche meldet eine Änderung. Sie geht sofort an die Engine, noch im Ereignis des Stifts. */
+  /**
+   * Die Fläche meldet eine Änderung. Sie geht sofort an die Engine, noch im Ereignis des Stifts. Im Entwurf merkt sich die
+   * Sitzung die Seite, bis sie gelesen ist.
+   */
   changed(page: Page): void {
     this.#version++;
     if (this.#writable()) this.#save(page);
+    else if (this.#drafting()) this.#draft = page;
   }
 
   /**
@@ -150,39 +196,65 @@ export class PageSession {
 
   /**
    * Die Seite wird verlassen: Was noch zu speichern ist, wird gespeichert. Hochladen macht die Engine nach ihrer Wartezeit oder
-   * sofort, wenn die App in den Hintergrund geht. Ein Wechsel der Seite allein lädt nichts hoch.
+   * sofort, wenn die App in den Hintergrund geht. Ein Wechsel der Seite allein lädt nichts hoch. Ein Entwurf, dessen Seite
+   * noch nicht gelesen ist, wird noch fertig (siehe `#finishDraft`), ohne dass die Sitzung die Fläche noch anfasst.
    */
   close(): void {
     this.#closed = true;
     this.#stopListening();
     this.#stopWaitingForCue();
-    void (async () => {
+    const draft = this.#draft !== null;
+    const done = (async () => {
+      if (draft) await this.#finishDraft();
       await this.#idle();
       // Was sich nicht speichern ließ, bekommt einen letzten Versuch, bevor die Seite verschwindet.
       if (this.#next !== null) await this.#startWriting();
     })().catch(() => undefined);
+    if (!draft) return;
+    // Bis dahin wartet eine neue Sitzung derselben Datei mit dem Lesen.
+    const key = normalizePath(this.#o.path);
+    finishing.set(key, done);
+    void done.then(() => {
+      if (finishing.get(key) === done) finishing.delete(key);
+    });
   }
 
   /**
    * Die Seite wird gelöscht. Von jetzt an schreibt die Sitzung nichts mehr, auch nicht, was noch auf einen neuen Versuch
-   * wartete, und sie liest nicht mehr. Der Aufruf endet, wenn kein Schreibauftrag mehr läuft: Erst danach darf die Datei
-   * gelöscht werden, sonst legte ihn der laufende Auftrag wieder an. Die Fläche bleibt gesperrt.
+   * wartete oder im Entwurf steht, und sie liest nicht mehr. Der Aufruf endet, wenn kein Schreibauftrag mehr läuft: Erst
+   * danach darf die Datei gelöscht werden, sonst legte ihn der laufende Auftrag wieder an. Die Fläche bleibt gesperrt.
    */
   async retire(): Promise<void> {
     this.#retired = true;
     this.#next = null;
+    this.#draft = null;
     this.#o.surface.setReadOnly(true);
     await this.#idle();
   }
 
-  /** Die Sitzung hat nichts mehr mit der Seite zu tun: Sie ist geschlossen oder die Seite wird gelöscht. */
+  /**
+   * Die Sitzung hat nichts mehr mit der Seite zu tun: Sie ist geschlossen und hat keinen Entwurf mehr fertig zu machen, oder
+   * die Seite wird gelöscht.
+   */
   #stopped(): boolean {
-    return this.#closed || this.#retired;
+    return this.#retired || (this.#closed && this.#draft === null);
+  }
+
+  /**
+   * Im Entwurf, bis die Seite zum ersten Mal gelesen ist: Änderungen werden nicht geschrieben, sondern gemerkt (`#draft`).
+   * Nach dem Schließen kommt keine mehr dazu.
+   */
+  #drafting(): boolean {
+    return this.#o.draft === true && !this.#o.readOnly && !this.#loaded && !this.#closed && !this.#retired;
+  }
+
+  /** Ob die Sitzung schreibt, sobald die Seite gelesen ist. Wo nur angesehen wird, schreibt sie höchstens Kopfdaten. */
+  #writer(): boolean {
+    return !this.#retired && (!this.#o.readOnly || this.#o.headerWritable === true);
   }
 
   #writable(): boolean {
-    if (this.#retired || this.#phase !== 'bereit') return false;
-    return !this.#o.readOnly || this.#o.headerWritable === true;
+    return this.#phase === 'bereit' && this.#writer();
   }
 
   // ---------- Speichern ----------
@@ -261,10 +333,17 @@ export class PageSession {
   // Was `engine.read` liefert, gilt für die Engine als der Stand der Seite: Es muss auf der Fläche landen. Wurde
   // währenddessen geschrieben, bleiben beide Fassungen erhalten: Zusammengeführt wird vom Text aus, den die Sitzung vor dem
   // Lesen zuletzt kannte (`#base`). Was hier geändert wurde, bleibt, was nur die Engine geändert hat, kommt dazu, und ein
-  // Strich, der auf einer Seite radiert wurde, bleibt weg.
+  // Strich, der auf einer Seite radiert wurde, bleibt weg. Ein Entwurf kommt beim ersten gelungenen Lesen ebenso dazu.
 
   async #readAndShow(): Promise<void> {
     if (this.#stopped()) return;
+    // Macht eine verlassene Sitzung derselben Datei noch ihren Entwurf fertig, wird erst danach gelesen (siehe `finishing`).
+    const before = this.#before;
+    if (before) {
+      this.#before = undefined;
+      await before;
+      if (this.#stopped()) return;
+    }
     const seen = this.#version;
     if (this.#next !== null) void this.#startWriting(); // ein Text, der nicht gespeichert werden konnte
     await this.#idle(); // alles, was schon geschrieben wurde, steht dann in der Engine
@@ -283,14 +362,26 @@ export class PageSession {
     }
     if (this.#stopped()) return;
     this.#base = text;
+    // Einen Entwurf kennt die Engine so wenig wie einen Text, der nicht gespeichert werden konnte.
+    const draft = this.#draft;
+    // Der Entwurf einer verlassenen Seite, die sich nicht laden ließ (siehe `#park`). Er kommt beim ersten gelungenen Lesen
+    // dazu, aber nur in eine Seite, die geschrieben wird.
+    const key = normalizePath(this.#o.path);
+    const parkedDraft = this.#loaded || !this.#writer() ? undefined : parked.get(key);
     let page: Page;
     let united = false;
     try {
-      page = text === null ? this.#o.emptyPage() : readPage(text);
-      if (this.#version !== seen || unsaved) {
-        if (text === null) page = this.#o.surface.getPage();
+      // Er gehört zur gelesenen Seite wie Striche, die dieses Gerät noch nicht gespeichert hat: vereint, ohne Ausgangspunkt.
+      let theirs = text;
+      if (parkedDraft) theirs = text === null ? this.#serialize(parkedDraft) : mergePages(this.#serialize(parkedDraft), text);
+      page = theirs === null ? this.#o.emptyPage() : readPage(theirs);
+      if (this.#version !== seen || unsaved || draft) {
+        // Unsere Fassung ist die Fläche. Eine geschlossene Sitzung kommt nur mit Entwurf bis hierher, und die Fläche gibt es
+        // dann nicht mehr: Dann ist es der Entwurf, das, was sie zuletzt gemeldet hat.
+        const ours = this.#closed && draft ? draft : this.#o.surface.getPage();
+        if (theirs === null) page = ours;
         else {
-          page = readPage(mergePages(this.#serialize(this.#o.surface.getPage()), text, this.#baseText(base)));
+          page = readPage(mergePages(this.#serialize(ours), theirs, this.#baseText(base)));
           united = true;
         }
       }
@@ -299,20 +390,25 @@ export class PageSession {
       this.#lock(error instanceof PageTooNewError ? 'zuNeu' : 'unlesbar');
       return;
     }
+    if (parkedDraft) parked.delete(key);
     this.#phase = 'bereit';
+    this.#loaded = true;
     this.#stopWaitingForCue();
-    // Hat sich nichts geändert, bleibt der Verlauf für Rückgängig erhalten.
-    if (!samePage(this.#o.surface.getPage(), page)) this.#o.surface.setPage(page);
-    this.#o.surface.setReadOnly(this.#o.readOnly);
-    if ((united || unsaved) && this.#writable()) this.#save(page);
-    this.#o.onPhase('bereit');
+    if (!this.#closed) {
+      // Hat sich nichts geändert, bleibt der Verlauf für Rückgängig erhalten.
+      if (!samePage(this.#o.surface.getPage(), page)) this.#o.surface.setPage(page);
+      this.#o.surface.setReadOnly(this.#o.readOnly);
+    }
+    if ((united || unsaved || draft || parkedDraft) && this.#writable()) this.#save(page);
+    this.#draft = null; // er steht jetzt im Schreibauftrag
+    if (!this.#closed) this.#o.onPhase('bereit');
   }
 
   /**
    * Die Seite ist nicht benutzbar. Sie bleibt gesperrt und wird nicht geschrieben. Was noch vorgemerkt war, geht nicht
-   * verloren: Es bleibt vorgemerkt und kommt zur Seite, sobald sie sich wieder lesen lässt (siehe `#readAndShow`).
-   * Ist die Datei kaputt, bleibt es gesperrt, bis ein anderes Gerät sie ändert. Lässt die Pfadsperre sie nicht zu, bleibt
-   * es für immer gesperrt. Ließ sie sich nur nicht laden, wird neu versucht, sobald es Sinn hat.
+   * verloren: Es bleibt vorgemerkt und kommt zur Seite, sobald sie sich wieder lesen lässt (siehe `#readAndShow`), ebenso
+   * ein Entwurf. Ist die Datei kaputt, bleibt es gesperrt, bis ein anderes Gerät sie ändert. Lässt die Pfadsperre sie nicht
+   * zu, bleibt es für immer gesperrt. Ließ sie sich nur nicht laden, wird neu versucht, sobald es Sinn hat.
    */
   #lock(phase: 'unlesbar' | 'zuNeu' | 'gesperrt' | 'nichtGeladen'): void {
     if (this.#stopped()) return;
@@ -320,10 +416,43 @@ export class PageSession {
     // Eine Seite, die sich nicht lesen lässt, hat keinen Ausgangspunkt: Was die Fläche zeigt, beruht nicht auf dem, was jetzt
     // in der Engine steht. Gelingt das Lesen wieder, kommt zusammen, was beide haben, und nichts gilt als radiert.
     this.#base = null;
+    // Eine verlassene Seite im Entwurf: Ließ sie sich nicht laden, wartet der Entwurf auf die nächste Sitzung derselben Datei
+    // (siehe `#park`), in eine kaputte oder gesperrte Datei kommt er nie. So oder so hört die Sitzung auf und wartet auf
+    // keinen Anlass.
+    if (this.#closed) {
+      if (phase === 'nichtGeladen') this.#park();
+      else this.#draft = null;
+      return;
+    }
     this.#o.surface.setReadOnly(true);
     if (phase === 'nichtGeladen') this.#waitForCue();
     else this.#stopWaitingForCue();
     this.#o.onPhase(phase);
+  }
+
+  /**
+   * Die Seite wird im Entwurf verlassen, bevor sie gelesen ist. Das Lesen, das läuft oder noch aussteht, macht ihn fertig:
+   * Gelingt es, wird zusammengeführt und gespeichert, sonst geparkt oder aufgegeben (siehe `#lock`). Ließ sich die Seite
+   * schon nicht laden, wird er gleich geparkt. Ist die Datei kaputt oder gesperrt, wird er nie geschrieben.
+   */
+  async #finishDraft(): Promise<void> {
+    if (this.#reloading || this.#phase === 'laden') await (this.#reloading ?? this.reload());
+    else if (this.#phase === 'nichtGeladen') this.#park();
+    else this.#draft = null;
+  }
+
+  /**
+   * Hebt den Entwurf für die nächste Sitzung derselben Datei auf (siehe `parked`). Liegt dort schon einer (auch die nächste
+   * Sitzung konnte die Seite nicht laden), kommen beide zusammen: alle Striche, die einer von beiden hat.
+   */
+  #park(): void {
+    const draft = this.#draft;
+    this.#draft = null;
+    if (!draft) return;
+    const key = normalizePath(this.#o.path);
+    const waiting = parked.get(key);
+    const mine = new Set(draft.strokes.map((s) => s.id));
+    parked.set(key, waiting ? { ...draft, strokes: [...draft.strokes, ...waiting.strokes.filter((s) => !mine.has(s.id))] } : draft);
   }
 
   #waitForCue(): void {
