@@ -1,6 +1,6 @@
 import { escAttr, escText } from '../ink/svg';
 import { MM, PAGE_H, PAGE_W, PAPER, type FieldBox, type PageKind } from '../ink/types';
-import { formatDayLong, isValidDay, isoWeekKey, monthGrid, MONTHS, weekDays, type Day } from '../lib/dates';
+import { formatDayLong, isValidDay, isoWeekKey, monthGrid, monthKey, MONTHS, weekDays, type Day } from '../lib/dates';
 import { besprechungBase } from '../lib/filenames';
 import { holidaysAT } from '../lib/holidays';
 import { fitLines, geburtstagItem, moreLabel, prioItems, SEPARATOR, terminItems, textWidth, withHead, type AgendaDay, type AgendaItem } from './agenda';
@@ -203,21 +203,70 @@ export function tagLayout(d: Day): Layout {
 // ---------- Woche ----------
 
 // Links sieben gleich hohe Tage, jeder mit Kopfzeile und vier Linien im Abstand von 6 mm (7 mm passen siebenmal nicht auf
-// die Seite), rechts daneben ein Feld für Wochenziele und Notizen, so hoch wie die Tage zusammen.
+// die Seite). Rechts daneben von oben nach unten: der gedruckte Monatskalender mit der Zeile dieser Woche, dann die
+// Rahmen für Wochenziele, Prioritäten und Aufgaben (mit Kreisen) und Notizen. Die vier Rahmen enden zusammen mit dem
+// letzten Tag bei 1550.
 const WEEK_COLUMN = 600;
 const WEEK_GAP = 8;
 const WEEK_ROWS = 4;
 const WEEK_LINE = 6 * MM;
 const WEEK_DAY = DAY_HEAD + WEEK_ROWS * WEEK_LINE;
+const SIDE_X = LEFT + WEEK_COLUMN + 24; // linker Rand der rechten Spalte
+const SIDE_W = WIDTH - WEEK_COLUMN - 24; // Breite der Rahmen rechts (416)
+const SIDE_GAP = 16; // Abstand zwischen den Rahmen rechts
+const CAL_HEIGHT = 320;
+const CAL_HEAD = 68; // Rahmenkopf mit Monatsname und die Kopfzeile der Wochentage
+const CAL_ROW = 40; // Höhe einer Zeile des Kalenders
+const CAL_WEEK_W = 42; // Spalte der Kalenderwochen
+const CAL_COL = 50; // Breite einer Tagesspalte
+const CAL_X = SIDE_X + INSET + CAL_WEEK_W; // linker Rand der Tagesspalten (726)
+const CAL_Y = TOP + CAL_HEAD; // oberer Rand der ersten Zeile (212)
+// Wochenziele (5 Zeilen, getönt), Prioritäten und Aufgaben (9), Notizen (7)
+const SIDE_FIELDS: { id: string; label: string; rows: number; fill: string; bullets: boolean }[] = [
+  { id: 'ziele', label: 'Wochenziele', rows: 5, fill: COLOR.soft, bullets: false },
+  { id: 'aufgaben', label: 'Prioritäten und Aufgaben', rows: 9, fill: 'none', bullets: true },
+  { id: 'notizen', label: 'Notizen', rows: 7, fill: 'none', bullets: false },
+];
+
+/** Ein Tag im gedruckten Kalender: Zelle, ob er zum Monat gehört, und sein Feiertag (nur bei Tagen des Monats). */
+export type CalendarDay = { day: Day; rect: Rect; inMonth: boolean; holiday?: string };
+
+/**
+ * Der gedruckte Monatskalender rechts oben auf der Wochenseite: der Monat des Donnerstags der Woche, 42 Tage in der
+ * Reihenfolge von `monthGrid`, und `weekRow`, die Zeile (0 bis 5), die mit dem Montag der Woche beginnt.
+ */
+export type WeekCalendar = { month: string; frame: Rect; days: CalendarDay[]; weekRow: number };
+
+export function weekCalendar(weekKey: string): WeekCalendar {
+  const week = weekDays(weekKey);
+  const month = monthKey(week[3]);
+  const holiday = holidayLookup();
+  const grid = monthGrid(month);
+  const days = grid.flatMap((row, r) =>
+    row.map((day, c): CalendarDay => {
+      const inMonth = monthKey(day) === month;
+      const name = inMonth ? holiday(day) : undefined;
+      return { day, rect: [CAL_X + c * CAL_COL, CAL_Y + r * CAL_ROW, CAL_COL, CAL_ROW], inMonth, ...(name ? { holiday: name } : {}) };
+    }),
+  );
+  return { month, frame: [SIDE_X, TOP, SIDE_W, CAL_HEIGHT], days, weekRow: grid.findIndex((row) => row[0] === week[0]) };
+}
 
 export function wocheLayout(weekKey: string): Layout {
   const days = weekDays(weekKey);
   const holiday = holidayLookup();
   const sections = days.map((_, i): Rect => [LEFT, TOP + i * (WEEK_DAY + WEEK_GAP), WEEK_COLUMN, WEEK_DAY]);
-  const goals: Rect = [LEFT + WEEK_COLUMN + 24, TOP, WIDTH - WEEK_COLUMN - 24, 7 * WEEK_DAY + 6 * WEEK_GAP];
+  const cal = weekCalendar(weekKey);
+  // Die Rahmen rechts untereinander: der erste beginnt unter dem Kalender, jeder so hoch wie Kopf, Zeilen und Fuß.
+  let top = TOP + CAL_HEIGHT + SIDE_GAP;
+  const side = SIDE_FIELDS.map((f) => {
+    const frameRect: Rect = [SIDE_X, top, SIDE_W, FRAME_HEAD + f.rows * LINE + FRAME_FOOT];
+    top += frameRect[3] + SIDE_GAP;
+    return { ...f, frame: frameRect, rect: fieldIn(frameRect) };
+  });
   const fields: Layout['fields'] = [
     ...days.map((day, i) => ({ id: `tag-${day}`, rect: sections[i], datum: day, label: `${WEEKDAYS[i]} ${dayNumber(day)}`, paper: 'liniert6' as const })),
-    { id: 'woche', rect: fieldIn(goals), datum: days[0], label: 'Wochenziele und Notizen', paper: 'liniert7' as const },
+    ...side.map((f) => ({ id: f.id, rect: f.rect, datum: days[0], label: f.label, paper: 'liniert7' as const })),
   ];
   return {
     kind: 'woche',
@@ -243,12 +292,30 @@ export function wocheLayout(weekKey: string): Layout {
           ruling(x + INSET, top + DAY_HEAD, w - 2 * INSET, WEEK_ROWS, name ? COLOR.holidayLine : COLOR.line, WEEK_LINE)
         );
       });
+      // Kalender: Rahmen, Band hinter der Zeile dieser Woche, Kopfzeile, Kalenderwochen, Tageszahlen
+      const weekdayHead = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+      const headMark = (x: number, s: string) => text(x, TOP + 62, s, { 'font-size': 12, 'font-weight': 700, 'text-anchor': 'middle', fill: COLOR.muted });
+      const calendarSvg =
+        frame(cal.frame, `${MONTHS[Number(cal.month.slice(5)) - 1]} ${cal.month.slice(0, 4)}`) +
+        rect([SIDE_X + INSET, CAL_Y + CAL_ROW * cal.weekRow, SIDE_W - 2 * INSET, CAL_ROW], { rx: 8, fill: COLOR.header }) +
+        headMark(CAL_X - CAL_WEEK_W / 2, 'KW') +
+        weekdayHead.map((s, c) => headMark(CAL_X + c * CAL_COL + CAL_COL / 2, s)).join('') +
+        Array.from({ length: 6 }, (_, r) =>
+          text(CAL_X - CAL_WEEK_W / 2, CAL_Y + r * CAL_ROW + 25, isoWeekKey(cal.days[r * 7].day).slice(6), { 'font-size': 12, 'text-anchor': 'middle', fill: COLOR.muted }),
+        ).join('') +
+        cal.days
+          .map((c) => {
+            const [x, y, w] = c.rect;
+            const ink = !c.inMonth ? COLOR.dim : c.holiday ? COLOR.holiday : COLOR.text;
+            return text(x + w / 2, y + 26, String(dayNumber(c.day)), { 'font-size': 16, 'font-weight': c.holiday ? 700 : 400, 'text-anchor': 'middle', fill: ink });
+          })
+          .join('');
       return (
         paper() +
         head(`Woche ${weekKey.slice(6)}`, `${from} bis ${to}`) +
         sectionsSvg.join('') +
-        frame(goals, 'Wochenziele und Notizen', COLOR.soft) +
-        ruledField(fieldIn(goals)) +
+        calendarSvg +
+        side.map((f) => frame(f.frame, f.label, f.fill) + ruledField(f.rect, f.bullets)).join('') +
         foot(`Wochenseite · KW ${weekKey.slice(6)} / ${weekKey.slice(0, 4)}`)
       );
     }),

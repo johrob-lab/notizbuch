@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { mergePages, parsePage, serializePage } from '../../src/ink/svg';
-import { MM, PAGE_H, PAGE_W, type Page } from '../../src/ink/types';
+import { MM, PAGE_H, PAGE_W, type Page, type Stroke } from '../../src/ink/types';
 import { monthGrid, weekDays } from '../../src/lib/dates';
 import type { Geburtstag } from '../../src/lib/geburtstage';
 import type { Termin } from '../../src/lib/termine';
@@ -13,9 +13,11 @@ import {
   tapTargetAt,
   tapTargets,
   todayMarks,
+  weekCalendar,
   wocheLayout,
   type AgendaDay,
   type Layout,
+  type WeekCalendar,
 } from '../../src/pages/layouts';
 
 afterEach(() => {
@@ -23,6 +25,12 @@ afterEach(() => {
 });
 
 const MEETING = { thema: 'Abstimmung Muster 2027', datum: '2026-10-29', zeit: '08:00', ort: 'Musterort', projekt: 'Beispielprojekt A', seitennr: '2' };
+
+/** Der Text, der genau an dieser Stelle steht: seine übrigen Attribute und sein Inhalt. */
+function textAt(bg: string, x: number, y: number): { attrs: string; body: string } | undefined {
+  const m = new RegExp(`<text x="${x}" y="${y}"([^>]*)>([^<]*)</text>`).exec(bg);
+  return m ? { attrs: m[1], body: m[2] } : undefined;
+}
 
 function allLayouts(): Layout[] {
   const months = Array.from({ length: 12 }, (_, i) => `2026-${String(i + 1).padStart(2, '0')}`);
@@ -93,7 +101,7 @@ test('field ids unique, inside the page, right dates', () => {
       expect(x >= 0 && y >= 0 && x + w <= 1192 && y + h <= 1590).toBe(true);
     }
   }
-  expect(wocheLayout('2026-W44').fields.find((f) => f.id === 'woche')!.datum).toBe('2026-10-26');
+  for (const id of ['ziele', 'aufgaben', 'notizen']) expect(wocheLayout('2026-W44').fields.find((f) => f.id === id)!.datum, id).toBe('2026-10-26');
   expect(monatLayout('2026-10').fields.find((f) => f.id === 'monat')!.datum).toBe('2026-10-01');
   expect(monatLayout('2026-10').fields.filter((f) => f.id.startsWith('tag-'))).toHaveLength(31);
 });
@@ -150,7 +158,7 @@ test('the day page has notes, priorities and tasks, and room for three cards: le
   expect(field('notizen')[3]).toBeGreaterThan(field('aufgaben')[3]);
 });
 
-test('the week has seven day fields Monday to Sunday and one for goals and notes', () => {
+test('the week has seven day fields on the left and goals, tasks and notes on the right', () => {
   const l = wocheLayout('2026-W44');
   expect(l.kind).toBe('woche');
   expect(l.key).toBe('2026-W44');
@@ -163,7 +171,9 @@ test('the week has seven day fields Monday to Sunday and one for goals and notes
     'tag-2026-10-30',
     'tag-2026-10-31',
     'tag-2026-11-01',
-    'woche',
+    'ziele',
+    'aufgaben',
+    'notizen',
   ]);
   expect(l.fields.slice(0, 7).map((f) => f.datum)).toEqual(l.fields.slice(0, 7).map((f) => f.id.slice(4)));
   // Von oben nach unten, alle sieben gleich hoch und gleich breit, jeder mit seiner Kopfzeile und vier Linien
@@ -179,12 +189,18 @@ test('the week has seven day fields Monday to Sunday and one for goals and notes
     expect(mine, day.id).toHaveLength(4);
     expect(mine[0].y - y, day.id).toBeGreaterThanOrEqual(80); // darüber die Kopfzeile mit Tageszahl und Wochentag
   }
-  // Die Zielspalte steht rechts daneben, als ein Feld, genau wie bisher
-  const goals = l.fields[7];
-  expect(goals.rect[0]).toBeGreaterThanOrEqual(days[0].rect[0] + days[0].rect[2]);
-  expect(goals.rect).toEqual([684, 188, 392, 1344]);
-  expect(goals.paper).toBe('liniert7');
-  expect(goals.label).toBe('Wochenziele und Notizen');
+  // Rechts daneben Wochenziele, Aufgaben und Notizen
+  const right = l.fields.slice(7);
+  expect(right.map((f) => f.rect)).toEqual([[684, 524, 392, 210], [684, 802, 392, 378], [684, 1248, 392, 294]]);
+  expect(right.map((f) => f.label)).toEqual(['Wochenziele', 'Prioritäten und Aufgaben', 'Notizen']);
+  expect(right.every((f) => f.paper === 'liniert7' && f.datum === '2026-10-26')).toBe(true);
+  // Die vier Rahmen rechts: Kalender, Ziele (getönt), Aufgaben, Notizen; der letzte endet bei 1550 wie die Tage
+  expect(rects(l.background()).filter((r) => r.x === '672').map((r) => [r.y, r.height, r.fill])).toEqual([
+    ['144', '320', 'none'],
+    ['480', '262', '#f5f7f5'],
+    ['758', '430', 'none'],
+    ['1204', '346', 'none'],
+  ]);
   // Die Tage füllen ihre Spalte so hoch wie der Rahmen der Zielspalte: von 144 bis 1550
   expect(days[0].rect[1]).toBe(144);
   expect(days[6].rect[1] + days[6].rect[3]).toBe(1550);
@@ -305,6 +321,8 @@ test('the background is well-formed SVG, covers the page with paper and names it
     expect(woche, name).toContain(name);
   }
   expect(woche).toContain('26. Oktober bis 1. November 2026');
+  for (const name of ['WOCHENZIELE', 'PRIORITÄTEN UND AUFGABEN', 'NOTIZEN', 'OKTOBER 2026']) expect(woche, name).toContain(name);
+  expect(woche.toUpperCase()).not.toContain('WOCHENZIELE UND NOTIZEN');
   // Die Tageszahl in der Kopfzeile eines Tages ist zweistellig, wie im Entwurf: „01 Sonntag“
   expect(woche).toMatch(/>01<\/text><text [^>]*>Sonntag<\/text>/);
   expect(woche).toMatch(/>26<\/text><text [^>]*>Montag<\/text>/);
@@ -353,8 +371,8 @@ test('holidays are marked with the planner colours: text #a8674f on #f8efea', ()
   expect(holidayText(feiertag, 'Nationalfeiertag')).toBe(true);
   expect(feiertag).toContain(HOLIDAY);
 
-  // Ohne Feiertag kommen die Farben nicht vor
-  for (const bg of [tagLayout('2026-10-29').background(), monatLayout('2026-09').background(), wocheLayout('2026-W40').background()]) {
+  // Ohne Feiertag kommen die Farben nicht vor (der Kalender von KW 40 zeigt den Oktober mit dem Nationalfeiertag, KW 38 den September)
+  for (const bg of [tagLayout('2026-10-29').background(), monatLayout('2026-09').background(), wocheLayout('2026-W38').background()]) {
     expect(bg).not.toContain('#a8674f');
     expect(bg).not.toContain(HOLIDAY);
   }
@@ -769,4 +787,74 @@ describe('agendaMarks', () => {
     expect(before).not.toContain('agenda');
     expect(before).not.toContain('Abstimmung');
   });
+});
+
+test('only the tasks of the week have a circle on every line', () => {
+  const circles = [...wocheLayout('2026-W44').background().matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="7.5"/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  expect(circles).toEqual(Array.from({ length: 9 }, (_, i) => [698, 823 + i * 42]));
+});
+
+test('the month calendar of a week shows the month of its Thursday, six rows, and the row of the week', () => {
+  const of = (cal: WeekCalendar, day: string) => cal.days.find((c) => c.day === day)!;
+  const w44 = weekCalendar('2026-W44');
+  expect([w44.month, w44.weekRow]).toEqual(['2026-10', 4]);
+  expect(w44.frame).toEqual([672, 144, 416, 320]);
+  expect(w44.days.map((c) => c.day)).toEqual(monthGrid('2026-10').flat());
+  expect(w44.days.slice(28, 35).map((c) => c.day)).toEqual(weekDays('2026-W44'));
+  expect(w44.days[0].rect).toEqual([726, 212, 50, 40]);
+  expect(of(w44, '2026-10-29').rect).toEqual([876, 372, 50, 40]);
+  expect(w44.days[41].rect).toEqual([1026, 412, 50, 40]);
+  expect(of(w44, '2026-10-26')).toMatchObject({ inMonth: true, holiday: 'Nationalfeiertag' });
+  expect(of(w44, '2026-11-01')).toMatchObject({ inMonth: false });
+  expect(of(w44, '2026-11-01').holiday).toBeUndefined(); // Allerheiligen gehört zum November
+  const w49 = weekCalendar('2026-W49'); // Montag im November, Donnerstag im Dezember
+  expect([w49.month, w49.weekRow]).toEqual(['2026-12', 0]);
+  expect(of(w49, '2026-11-30').inMonth).toBe(false);
+  expect(of(w49, '2026-12-08').holiday).toBe('Mariä Empfängnis');
+  const w53 = weekCalendar('2026-W53');
+  expect([w53.month, w53.weekRow]).toEqual(['2026-12', 4]);
+  expect(of(w53, '2027-01-01')).toMatchObject({ inMonth: false });
+  expect(of(w53, '2027-01-01').holiday).toBeUndefined();
+  const w01 = weekCalendar('2027-W01');
+  expect([w01.month, w01.weekRow]).toEqual(['2027-01', 1]);
+  expect(of(w01, '2027-01-01')).toMatchObject({ inMonth: true, holiday: 'Neujahr' });
+  const feb = weekCalendar('2027-W06'); // Februar 2027 beginnt an einem Montag: vier Zeilen eigene Tage
+  expect([feb.month, feb.weekRow]).toEqual(['2027-02', 1]);
+  expect(feb.days.slice(0, 28).every((c) => c.inMonth)).toBe(true);
+  expect(feb.days.slice(28).some((c) => c.inMonth)).toBe(false);
+  const nov = weekCalendar('2026-W46'); // November 2026 hat in allen sechs Zeilen eigene Tage
+  expect([nov.month, nov.weekRow]).toEqual(['2026-11', 2]);
+  for (let r = 0; r < 6; r++) expect(nov.days.slice(r * 7, r * 7 + 7).some((c) => c.inMonth), `Zeile ${r}`).toBe(true);
+});
+
+test('the month calendar is printed into the week: month, weekdays, week numbers, the band of the week and the days', () => {
+  const bg = wocheLayout('2026-W44').background();
+  expect(bg).toContain('OKTOBER 2026');
+  expect([705, 751, 801, 851, 901, 951, 1001, 1051].map((x) => textAt(bg, x, 206)?.body)).toEqual(['KW', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']);
+  expect([0, 1, 2, 3, 4, 5].map((r) => textAt(bg, 705, 237 + 40 * r)?.body)).toEqual(['40', '41', '42', '43', '44', '45']);
+  expect(fillAt(bg, [684, 372, 392, 40])).toBe('#e4ebe4'); // die Zeile der Woche 44
+  expect(rects(bg).filter((r) => r.fill === '#e4ebe4')).toHaveLength(1);
+  expect(textAt(bg, 751, 238)?.body).toBe('28'); // 28.9., oben links
+  expect(textAt(bg, 751, 238)?.attrs).toContain('fill="#a3aca5"');
+  expect(textAt(bg, 901, 398)?.body).toBe('29');
+  expect(textAt(bg, 901, 398)?.attrs).toContain('fill="#2e3630"');
+  const day26 = textAt(bg, 751, 398)!; // Nationalfeiertag
+  expect([day26.body, day26.attrs.includes('fill="#a8674f"'), day26.attrs.includes('font-weight="700"')]).toEqual(['26', true, true]);
+  const nov1 = textAt(bg, 1051, 398)!; // Allerheiligen, im Oktober aber blass und ohne Feiertagsfarbe
+  expect([nov1.body, nov1.attrs.includes('fill="#a3aca5"')]).toEqual(['1', true]);
+});
+
+test('strokes on the right of the week go to goals, tasks, notes or frei, and an old page keeps every stroke', () => {
+  const l = wocheLayout('2026-W44');
+  const at = (id: string, x: number, y: number): Stroke => ({ id, tool: 'kugel', color: 'schwarz', widthMm: 0.2, t: 1, w: 1.2, pts: [{ x, y, w: 1.2 }, { x: x + 20, y, w: 1.2 }] });
+  const page: Page = { kind: 'woche', key: '2026-W44', meta: {}, strokes: [at('a', 800, 620), at('b', 800, 990), at('c', 800, 1400), at('d', 880, 390)] };
+  const svg = serializePage(page, l.fields, l.background());
+  expect([...svg.matchAll(/<g data-feld="([^"]+)" data-datum="([^"]+)">/g)].map((m) => `${m[1]} ${m[2]}`)).toEqual([
+    'ziele 2026-10-26', 'aufgaben 2026-10-26', 'notizen 2026-10-26', 'frei 2026-10-26',
+  ]);
+  // Eine Seite aus der Zeit mit einem Feld rechts („woche“): Beim Speichern kommt jeder Strich nach seiner Lage in ein neues Feld oder in „frei“.
+  const old = serializePage({ ...page, strokes: [at('e', 800, 300), at('f', 800, 900)] }, [{ id: 'woche', rect: [684, 188, 392, 1344], datum: '2026-10-26' }], '');
+  const again = serializePage(parsePage(old), l.fields, l.background());
+  expect(parsePage(again).strokes.map((s) => s.id).sort()).toEqual(['e', 'f']);
+  expect([...again.matchAll(/<g data-feld="([^"]+)"/g)].map((m) => m[1])).toEqual(['aufgaben', 'frei']);
 });

@@ -540,3 +540,16 @@ test('a conflict copy is announced', async ({ page }) => {
   await button(page, 'Hinweis schließen').click();
   await expect(notice).toHaveCount(0);
 });
+
+test('the right column of the week writes goals, tasks and notes into their own fields', async ({ page }) => {
+  const repo = await openSeeded(page, WEEK);
+  const layout = wocheLayout('2026-W44');
+  for (const id of ['ziele', 'aufgaben', 'notizen']) {
+    const [x, y, w, h] = fieldOf(layout, id);
+    await pen(page).stroke([[x + w / 4, y + h / 2], [x + w / 2, y + h / 2 + 10], [x + (3 * w) / 4, y + h / 2]]);
+  }
+  await expect.poll(() => strokeCount(page)).toBe(3);
+  await sendToBackground(page);
+  await expect.poll(() => strokesPerField(repo.puts.at(-1)?.text ?? '')).toEqual({ ziele: 1, aufgaben: 1, notizen: 1 });
+  expect(repo.puts.at(-1)!.text).toContain('<g data-feld="aufgaben" data-datum="2026-10-26">');
+});

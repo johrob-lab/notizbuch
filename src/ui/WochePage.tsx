@@ -12,7 +12,8 @@ import { usePrioritaeten } from './usePrioritaeten';
 import { useTermine } from './useTermine';
 
 /**
- * Die Wochenseite: ein Feld je Tag von Montag bis Sonntag und die Wochenziele. `week` ist zum Beispiel `2026-W44`. In der
+ * Die Wochenseite: links ein Feld je Tag von Montag bis Sonntag, rechts der gedruckte Monatskalender, Wochenziele,
+ * Prioritäten und Aufgaben und Notizen. `week` ist zum Beispiel `2026-W44`. In der
  * Kopfzeile jedes Tages stehen seine Geburtstage, Jahrestage, Termine und Prioritäten (Geburtstage und Jahrestage vor den
  * Terminen), nur auf dem Bildschirm, nie in der Datei.
  */
