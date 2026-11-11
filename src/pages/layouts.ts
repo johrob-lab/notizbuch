@@ -3,7 +3,7 @@ import { MM, PAGE_H, PAGE_W, PAPER, type FieldBox, type PageKind } from '../ink/
 import { formatDayLong, isValidDay, isoWeekKey, monthGrid, MONTHS, weekDays, type Day } from '../lib/dates';
 import { besprechungBase } from '../lib/filenames';
 import { holidaysAT } from '../lib/holidays';
-import { fitLines, geburtstagItems, moreLabel, prioItems, SEPARATOR, terminItems, textWidth, type AgendaDay, type AgendaItem } from './agenda';
+import { fitLines, geburtstagItem, moreLabel, prioItems, SEPARATOR, terminItems, textWidth, withHead, type AgendaDay, type AgendaItem } from './agenda';
 
 export type { AgendaDay } from './agenda';
 
@@ -397,6 +397,11 @@ export function todayMarks(l: Layout, today: Day): string {
   );
 }
 
+// Schriftgröße des Eintrags der Geburtstage: kleiner als die Termine (Woche 13, Monat 10,5). In der Woche passen so mehr
+// Namen und ein Termin daneben, im Monat mehr Namen in die Zeile, die den Geburtstagen gehört.
+const WEEK_BIRTHDAY_SIZE = 11;
+const MONTH_BIRTHDAY_SIZE = 9;
+
 const AGENDA_COLOR = { geburtstag: COLOR.holiday, termin: '#55657a', prio: '#3d434d', erledigt: '#9aa1a9' };
 
 // Tagesseite: Die Geburtstage stehen rechts in der Zeile des Untertitels (Grundlinie 106), also unter dem Namen eines
@@ -407,19 +412,20 @@ const DAY_BIRTHDAY_BASELINE = 106;
 /**
  * Eine Zeile als `<text>` mit einem `<tspan>` je Eintrag. Der Trenner hat die Farbe der Termine, der Rest " +N" die der
  * Prioritäten, wenn die Zeile mit einer Priorität beginnt, sonst die der Termine. Mit `anchor` ist `x` das rechte Ende.
+ * Ein Eintrag mit eigener Größe (`size`) schreibt sie als `font-size` an seinen `<tspan>`.
  */
 function agendaLine(x: number, y: number, size: number, items: AgendaItem[], more: number, anchor?: 'end'): string {
-  const span = (s: string, color: string) => `<tspan fill="${color}">${escText(s)}</tspan>`;
-  const body = items.map((i) => span(i.text, AGENDA_COLOR[i.tone])).join(span(SEPARATOR, AGENDA_COLOR.termin));
+  const span = (s: string, color: string, own?: number) => `<tspan fill="${color}"${own !== undefined ? ` font-size="${own}"` : ''}>${escText(s)}</tspan>`;
+  const body = items.map((i) => span(i.text, AGENDA_COLOR[i.tone], i.size)).join(span(SEPARATOR, AGENDA_COLOR.termin));
   const prioFirst = items[0].tone === 'prio' || items[0].tone === 'erledigt';
   const rest = more > 0 ? span(moreLabel(more), prioFirst ? AGENDA_COLOR.prio : AGENDA_COLOR.termin) : '';
   return `<text x="${num(x)}" y="${num(y)}"${attrs({ 'font-family': FONT, 'font-size': size, ...(anchor ? { 'text-anchor': anchor } : {}) })}>${body}${rest}</text>`;
 }
 
-/** Tagesseite: die Geburtstage des Tages rechtsbündig in der Zeile des Untertitels, sonst leer. */
+/** Tagesseite: die Geburtstage des Tages als ein Eintrag rechtsbündig in der Zeile des Untertitels, sonst leer. */
 function dayHeadMarks(l: Layout, dayData: (day: Day) => AgendaDay): string {
-  const items = geburtstagItems(dayData(l.key).geburtstage ?? []);
-  const lines = fitLines(items, 1, DAY_BIRTHDAY_AREA[2], 16);
+  const head = geburtstagItem(dayData(l.key).geburtstage ?? []);
+  const lines = head ? fitLines([head], 1, DAY_BIRTHDAY_AREA[2], 16) : [];
   if (lines.length === 0) return '';
   const id = `agenda-${l.key}`;
   const [ax, , aw] = DAY_BIRTHDAY_AREA;
@@ -432,10 +438,16 @@ function dayHeadMarks(l: Layout, dayData: (day: Day) => AgendaDay): string {
 /**
  * Geburtstage, Termine und Prioritäten eines Tages als SVG-Text über dem Hintergrund, nur auf dem Bildschirm und nie
  * in der Datei (wie `todayMarks`). Woche: in der Kopfzeile des Tages rechts von Tageszahl und Wochentag, links vom
- * Feiertagsnamen, Zeile 1 Geburtstage und Termine (Geburtstage zuerst), Zeile 2 Prioritäten; gibt es nur eine Art,
- * bekommt sie beide Zeilen. Monat: nur Geburtstage und Termine, oben links in der Zelle, links von Tageszahl und Kreis
- * für heute. Tag: nur die Geburtstage, rechtsbündig in der Zeile des Untertitels. Jede Fläche hat ein Clip-Rechteck,
- * damit nie etwas darüber hinausläuft. Leer für die Besprechung und für Tage ohne Daten.
+ * Feiertagsnamen, Zeile 1 Geburtstage und Termine, Zeile 2 Prioritäten; gibt es nur eine Art, bekommt sie beide
+ * Zeilen. Alle Geburtstage eines Tages stehen in einem kleineren Eintrag vorn, daneben beginnt der erste Termin: Die
+ * Geburtstage werden nur so weit gekürzt, wie der erste Termin es braucht, aber nie unter 40 %. Ist Zeile 2 frei und
+ * passen Eintrag und erster Termin nicht nebeneinander, steht der Termin in Zeile 2, wenn beide untereinander ganz passen
+ * oder wenn es der einzige Termin ist (`withHead`). Ohne Termine bricht der Eintrag nach einem Namen in Zeile 2 um, wenn
+ * sie frei ist. Monat: nur Geburtstage und Termine, oben links in der Zelle, links von Tageszahl und Kreis für heute.
+ * Zeile 1 gehört den Geburtstagen (ganze Breite), Zeile 2 den Terminen (mindestens einer, weitere als „+N“); ohne
+ * Termine dürfen die Geburtstage beide Zeilen nutzen, ohne Geburtstage die Termine. Tag: nur die Geburtstage,
+ * rechtsbündig in der Zeile des Untertitels. Jede Fläche hat ein Clip-Rechteck, damit nie etwas darüber hinausläuft.
+ * Leer für die Besprechung und für Tage ohne Daten.
  */
 export function agendaMarks(l: Layout, dayData: (day: Day) => AgendaDay): string {
   if (l.kind === 'tag') return dayHeadMarks(l, dayData);
@@ -446,9 +458,11 @@ export function agendaMarks(l: Layout, dayData: (day: Day) => AgendaDay): string
     if (!f.id.startsWith('tag-')) continue;
     const day = f.id.slice(4);
     const { geburtstage, termine, prioritaeten } = dayData(day);
-    const gruppe = [...geburtstagItems(geburtstage ?? []), ...terminItems(termine)];
+    const head = geburtstagItem(geburtstage ?? [], l.kind === 'woche' ? WEEK_BIRTHDAY_SIZE : MONTH_BIRTHDAY_SIZE);
+    const items = terminItems(termine);
     const prios = l.kind === 'woche' ? prioItems(prioritaeten) : [];
-    if (gruppe.length === 0 && prios.length === 0) continue;
+    const hasGruppe = head !== undefined || items.length > 0;
+    if (!hasGruppe && prios.length === 0) continue;
     const [x, y, w] = f.rect;
     let area: Rect;
     let size: number;
@@ -461,15 +475,19 @@ export function agendaMarks(l: Layout, dayData: (day: Day) => AgendaDay): string
       area = [x + 190, y + 4, right - (x + 190), 42];
       size = 13;
       baselines = [y + 20, y + 38];
-      const both = gruppe.length > 0 && prios.length > 0;
+      const both = hasGruppe && prios.length > 0;
       rows = both
-        ? [fitLines(gruppe, 1, area[2], size), fitLines(prios, 1, area[2], size)]
-        : [fitLines(gruppe.length > 0 ? gruppe : prios, 2, area[2], size)];
+        ? [withHead(head, items, 1, area[2], size), fitLines(prios, 1, area[2], size)]
+        : [hasGruppe ? withHead(head, items, 2, area[2], size) : fitLines(prios, 2, area[2], size)];
     } else {
       area = [x + 8, y + 4, 92, 28];
       size = 10.5;
       baselines = [y + 15, y + 28];
-      rows = [fitLines(gruppe, 2, area[2], size)];
+      // Mit Geburtstagen und Terminen gehört Zeile 1 dem Eintrag der Geburtstage (ganze Breite) und Zeile 2 den Terminen
+      // (mindestens einer, weitere als „+N“): 40 % von 92 ließen nur „🎂 Max…“ übrig. `fitLines` macht genau das, weil der
+      // Eintrag als erster allein oder vorn in Zeile 1 steht und „+N“ nur Termine zählt; nur ein sehr kurzes Paar teilt sich
+      // Zeile 1. Sonst wie `withHead`: ohne Termine nutzen die Geburtstage beide Zeilen, ohne Geburtstage die Termine.
+      rows = [head && items.length > 0 ? fitLines([head, ...items], 2, area[2], size) : withHead(head, items, 2, area[2], size)];
     }
     const lines = rows.flat();
     if (area[2] <= 0 || lines.length === 0) continue;

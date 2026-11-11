@@ -54,13 +54,14 @@ const TERMINE_TEXT = [
   '',
 ].join('\n');
 
-/** Ein Geburtstag am Dienstag, 27.10., ein Geburtstag und ein Jahrestag heute und ein Geburtstag an Allerheiligen, 01.11. */
+/** Ein Geburtstag am Dienstag, 27.10., ein Geburtstag und ein Jahrestag heute und zwei Geburtstage an Allerheiligen, 01.11. (ohne Termine). */
 const GEBURTSTAGE_TEXT = [
   '# Geburtstage',
   '- 2026-10-27 | Erika Muster | Geburtstag | Google',
   '- 2026-10-29 | Max Beispiel | Geburtstag | Google',
   '- 2026-10-29 | Anna und Ben Beispiel | Jahrestag | Outlook',
   '- 2026-11-01 | Paul Beispiel | Geburtstag | Google',
+  '- 2026-11-01 | Lena Beispiel | Geburtstag | Outlook',
   '',
 ].join('\n');
 
@@ -119,17 +120,23 @@ test('the week shows birthdays first and counts them in the day list, only on th
   const repo = await openSeeded(page, WEEK, { files: FILES });
   await expect(dayLink(page, /29\.10\.2026, 1 Geburtstag, 1 Jahrestag, 2 Termine, 1 Priorität$/)).toHaveAttribute('href', '#/tag/2026-10-29');
   await expect(dayLink(page, /27\.10\.2026, 1 Geburtstag, 1 Termin$/)).toHaveAttribute('href', '#/tag/2026-10-27');
-  await expect(dayLink(page, /01\.11\.2026, Allerheiligen, 1 Geburtstag$/)).toHaveAttribute('href', '#/tag/2026-11-01');
+  await expect(dayLink(page, /01\.11\.2026, Allerheiligen, 2 Geburtstage$/)).toHaveAttribute('href', '#/tag/2026-11-01');
   // Termine und Geburtstage kommen aus zwei Dateien: Erst wenn beide gelesen sind, steht beides auf dem Bildschirm.
   await expect.poll(() => screenBackground(page)).toContain('Schulung Beispiel');
   await expect.poll(() => screenBackground(page)).toContain('🎂 Max Beispiel');
   const shown = await screenBackground(page);
-  expect(shown).toContain('♥ Anna und Ben Beispiel');
-  expect(shown).toContain('🎂 Paul Beispiel');
-  // Am 27.10. passen Geburtstag und Termin in die erste Zeile, der Geburtstag zuerst. Am 29.10. schiebt der Platz die Termine
-  // in „ +N“, dort lässt sich die Reihenfolge nicht sehen.
+  // Zwei Geburtstage am 01.11. (ohne Termine): ein Eintrag „🎂 Name, Name“.
+  expect(shown).toContain('🎂 Paul Beispiel, Lena Beispiel');
+  // Am 27.10. passen Geburtstag und Termin in die erste Zeile, der Geburtstag zuerst.
   expect(shown).toContain('🎂 Erika Muster');
   expect(shown.indexOf('🎂 Erika Muster')).toBeLessThan(shown.indexOf('Schulung Beispiel'));
+  // Am 29.10. (1 Geburtstag, 1 Jahrestag, 2 Termine, 1 Priorität) stehen Geburtstag und Jahrestag in einem Eintrag in Größe 11.
+  // Die Geburtstage werden nur so weit gekürzt, wie der erste Termin es braucht, aber nie unter 40 %; hier ist genug Platz, der
+  // Eintrag steht ganz da. Gleich dahinter steht in derselben Zeile der erste Termin (09:30 Zahnarzt), und nur der zweite Termin
+  // steht in „+1“ am Ende dieser Zeile.
+  expect(shown).toMatch(
+    /font-size="11">🎂 Max Beispiel ♥ Anna und Ben Beispiel<\/tspan><tspan[^>]*> · <\/tspan><tspan[^>]*>09:30 Zahnarzt<\/tspan><tspan[^>]*> \+1<\/tspan><\/text>/,
+  );
 
   // In die Datei kommt nur, was zur Seite gehört.
   await pen(page).stroke(strokeAcross(WOCHE, 'tag-2026-10-28'));
@@ -146,12 +153,14 @@ test('the week shows birthdays first and counts them in the day list, only on th
 test('the month shows birthdays first', async ({ page }) => {
   const repo = await openSeeded(page, MONTH, { files: FILES });
   await expect(dayLink(page, /29\.10\.2026, 1 Geburtstag, 1 Jahrestag, 2 Termine$/)).toHaveAttribute('href', '#/tag/2026-10-29');
-  await expect.poll(() => screenBackground(page)).toContain('🎂 Max Beispiel');
-  // Am 27.10. steht der Geburtstag in der ersten Zeile des Kästchens, der Termin (gekürzt) in der zweiten.
-  await expect.poll(() => screenBackground(page)).toContain('Schulung');
-  const shown = await screenBackground(page);
-  expect(shown).toContain('🎂 Erika Muster');
-  expect(shown.indexOf('🎂 Erika Muster')).toBeLessThan(shown.indexOf('Schulung'));
+  // Hat ein Tag Geburtstage und Termine, gehört Zeile 1 dem Eintrag der Geburtstage (Größe 9, ganze Breite des Kästchens) und
+  // Zeile 2 den Terminen. Am 29.10. steht in Zeile 1 nur der Eintrag, Zeile 2 beginnt mit dem ersten Termin (09:30), und der
+  // zweite (14:00) zählt in „+1“ am Ende. Wo gekürzt wird, prüft der Test nicht.
+  await expect
+    .poll(() => screenBackground(page))
+    .toMatch(/font-size="9">🎂 Max Beispiel[^<]*<\/tspan><\/text><text[^>]*><tspan fill="#55657a">09:30[^<]*<\/tspan><tspan[^>]*> \+1<\/tspan><\/text>/);
+  // Am 27.10. steht der Geburtstag ganz in Zeile 1, der ganztägige Termin beginnt Zeile 2.
+  await expect.poll(() => screenBackground(page)).toMatch(/font-size="9">🎂 Erika Muster<\/tspan><\/text><text[^>]*><tspan fill="#55657a">Schulung/);
   // Der Monat liest keine Tagesnotizen, auch nicht wegen der Geburtstage.
   expect(repo.requests.filter((request) => decodeURIComponent(request).includes('/05 Daily Notes/'))).toEqual([]);
 });
@@ -161,10 +170,12 @@ test('the day page shows the birthdays in its head and in the calendar card, onl
   // Im Kopf rechtsbündig, in der Zeile unter dem Datum.
   await expect.poll(() => screenBackground(page)).toContain('🎂 Max Beispiel');
   expect(await screenBackground(page)).toContain('text-anchor="end"');
+  // Geburtstag und Jahrestag in einem Eintrag, in der Größe der Zeile (16), ohne eigene Größe am Eintrag.
+  expect(await screenBackground(page)).toMatch(/font-size="16"[^>]*text-anchor="end"><tspan fill="#a8674f">🎂 Max Beispiel ♥ Anna und Ben Beispiel<\/tspan>/);
   // In der Karte „Kalender“ haben Tage mit Geburtstag einen Punkt (Klasse `geburtstag`), auch der Nachbartag 01.11. im Raster.
   const card = calendar(page);
   await expect(card.getByRole('link', { name: TODAY_IN_CALENDAR, exact: true })).toHaveClass(/geburtstag/);
-  await expect(card.getByRole('link', { name: 'So 01.11.2026, Geburtstag von Paul Beispiel', exact: true })).toHaveClass(/geburtstag/);
+  await expect(card.getByRole('link', { name: 'So 01.11.2026, Geburtstag von Paul Beispiel, Geburtstag von Lena Beispiel', exact: true })).toHaveClass(/geburtstag/);
   const plain = card.getByRole('link', { name: 'Mi 28.10.2026', exact: true });
   await expect(plain).toBeVisible();
   await expect(plain).not.toHaveClass(/geburtstag/);
