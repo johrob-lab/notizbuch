@@ -77,7 +77,13 @@ describe('sample pages', () => {
   });
 
   test('week and month page', () => {
-    expect(parsePage(find(samples, 'lauf1', wochePagePath('2026-W44')).svg)).toMatchObject({ kind: 'woche', key: '2026-W44' });
+    const week = find(samples, 'lauf1', wochePagePath('2026-W44')).svg;
+    expect(parsePage(week)).toMatchObject({ kind: 'woche', key: '2026-W44' });
+    const groups = Object.fromEntries([...week.matchAll(/<g data-feld="([^"]+)"[^>]*>([\s\S]*?)<\/g>/g)].map((m) => [m[1], m[2]]));
+    expect(Object.keys(groups)).toEqual(['tag-2026-10-27', 'tag-2026-10-30', 'ziele', 'aufgaben', 'notizen']);
+    expect(groups.aufgaben).toContain('data-farbe="gruen"');
+    expect(groups.aufgaben).toContain('data-farbe="schwarz"');
+    expect(groups.notizen).toContain('data-farbe="blau"');
     expect(parsePage(find(samples, 'monat', monatPagePath('2026-10')).svg)).toMatchObject({ kind: 'monat', key: '2026-10' });
   });
 
