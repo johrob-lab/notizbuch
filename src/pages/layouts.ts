@@ -444,6 +444,21 @@ export function tapTargets(l: Layout): TapTarget[] {
     });
 }
 
+/**
+ * Der Monatskalender rechts auf der Wochenseite: ein Ziel je Tag der 42 Zellen, auch für die blassen Tage der Nachbarmonate.
+ * Die Zellen sind am iPad etwa 35 mal 28 Punkte groß, also kleiner als 44. Das ist wie beim Kalender der Tagesseite eine
+ * gewollte Ausnahme. Geschrieben wird dort trotzdem: Der Stift tippt nie, er schreibt dort in die Gruppe `frei`.
+ * Auf den anderen Seiten gibt es keinen Kalender.
+ */
+export function calendarTargets(l: Layout): TapTarget[] {
+  if (l.kind !== 'woche') return [];
+  return weekCalendar(l.key).days.map((c) => ({
+    rect: c.rect,
+    day: c.day,
+    label: c.holiday ? `${formatDayLong(c.day)}, ${c.holiday}` : formatDayLong(c.day),
+  }));
+}
+
 /** Das Ziel an einer Stelle der Seite, falls dort eines liegt. Der untere und rechte Rand gehören nicht mehr dazu. */
 export function tapTargetAt(targets: TapTarget[], x: number, y: number): TapTarget | null {
   return targets.find(({ rect: [rx, ry, w, h] }) => x >= rx && x < rx + w && y >= ry && y < ry + h) ?? null;
@@ -454,10 +469,17 @@ export function tapTargetAt(targets: TapTarget[], x: number, y: number): TapTarg
  * damit eine Seite von gestern nicht für immer „heute“ zeigt. Leer, wenn die Seite den Tag nicht zeigt.
  */
 export function todayMarks(l: Layout, today: Day): string {
+  if (l.kind === 'woche') {
+    const f = l.fields.find((x) => x.id === `tag-${today}`);
+    const ring = f ? rect(f.rect, { rx: 12, fill: 'none', stroke: COLOR.ring, 'stroke-width': 2.5 }) : '';
+    // Im Kalender rechts gibt es den Kreis nur für einen Tag des Monats, nicht für die blassen Tage der Nachbarmonate.
+    const cell = weekCalendar(l.key).days.find((c) => c.day === today && c.inMonth);
+    const dot = cell ? circle(cell.rect[0] + 25, cell.rect[1] + 20, 16, { fill: 'none', stroke: COLOR.ring, 'stroke-width': 2 }) : '';
+    return ring + dot;
+  }
   const f = l.fields.find((x) => x.id === `tag-${today}`);
-  if (!f || (l.kind !== 'woche' && l.kind !== 'monat')) return '';
+  if (!f || l.kind !== 'monat') return '';
   const [x, y, w, h] = f.rect;
-  if (l.kind === 'woche') return rect(f.rect, { rx: 12, fill: 'none', stroke: COLOR.ring, 'stroke-width': 2.5 });
   return (
     rect([x + 1, y + 1, w - 2, h - 2], { fill: 'none', stroke: COLOR.ring, 'stroke-width': 2.5 }) +
     circle(x + w - 22, y + 22, 19, { fill: 'none', stroke: COLOR.ring, 'stroke-width': 1.5 })

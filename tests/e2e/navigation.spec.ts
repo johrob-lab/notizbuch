@@ -1,5 +1,5 @@
 import { expect, test as base, type Page, type Route } from '@playwright/test';
-import { monatLayout, tagLayout, tapTargets, todayMarks, wocheLayout, type Layout } from '../../src/pages/layouts';
+import { calendarTargets, monatLayout, tagLayout, tapTargets, todayMarks, wocheLayout, type Layout } from '../../src/pages/layouts';
 import { networkBack, openSeeded, queued, sendToBackground } from './helpers/app';
 import { colorAt, inkNear, mouse, palm, pen, touch, viewOf } from './helpers/pointer';
 
@@ -72,6 +72,14 @@ function fieldOf(layout: Layout, id: string): [number, number, number, number] {
 function dayPoint(layout: Layout, day: string): [number, number] {
   const target = tapTargets(layout).find((t) => t.day === day);
   if (!target) throw new Error(`Kein Tag ${day} auf dieser Seite.`);
+  const [x, y, w, h] = target.rect;
+  return [x + w / 2, y + h / 2];
+}
+
+/** Die Mitte eines Tages im Monatskalender der Woche (Seiteneinheiten). */
+function calendarPoint(layout: Layout, day: string): [number, number] {
+  const target = calendarTargets(layout).find((t) => t.day === day);
+  if (!target) throw new Error(`Kein Tag ${day} im Kalender dieser Seite.`);
   const [x, y, w, h] = target.rect;
   return [x + w / 2, y + h / 2];
 }
@@ -552,4 +560,60 @@ test('the right column of the week writes goals, tasks and notes into their own 
   await sendToBackground(page);
   await expect.poll(() => strokesPerField(repo.puts.at(-1)?.text ?? '')).toEqual({ ziele: 1, aufgaben: 1, notizen: 1 });
   expect(repo.puts.at(-1)!.text).toContain('<g data-feld="aufgaben" data-datum="2026-10-26">');
+});
+
+test('a finger on a day in the month calendar of the week opens that day, a pale one too', async ({ page }) => {
+  await openSeeded(page, WEEK);
+  const layout = wocheLayout('2026-W44');
+  await touch(page).tap(...calendarPoint(layout, '2026-10-14'));
+  await waitForPageOf(page, 'tag', '2026-10-14');
+  await go(page, WEEK);
+  await waitForPageOf(page, 'woche', '2026-W44');
+  await touch(page).tap(...calendarPoint(layout, '2026-11-05'));
+  await waitForPageOf(page, 'tag', '2026-11-05');
+});
+
+test('the pen writes on the month calendar of the week and never opens a day', async ({ page }) => {
+  const repo = await openSeeded(page, WEEK);
+  const [x, y] = calendarPoint(wocheLayout('2026-W44'), '2026-10-14');
+  await pen(page).stroke([[x - 15, y], [x, y + 8], [x + 15, y]]);
+  expect(await hash(page)).toBe(WEEK);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.length).toBe(1);
+  expect(strokesPerField(repo.puts[0].text)).toEqual({ frei: 1 });
+});
+
+test('on the office PC a mouse click on the month calendar of the week opens the day', async ({ page }) => {
+  await openSeeded(page, WEEK, { device: 'Firmen-PC' });
+  await mouse(page).tap(...calendarPoint(wocheLayout('2026-W44'), '2026-10-14'));
+  await waitForPageOf(page, 'tag', '2026-10-14');
+});
+
+test('the month calendar of the week is a list of links, too', async ({ page }) => {
+  await openSeeded(page, WEEK);
+  const list = page.getByRole('navigation', { name: 'Monatskalender' });
+  await expect(list.getByRole('link')).toHaveCount(42);
+  await expect(list.getByRole('link').first()).toHaveText('Mo 28.09.2026');
+  await expect(list.getByRole('link', { name: 'Mo 26.10.2026, Nationalfeiertag', exact: true })).toHaveAttribute('href', '#/tag/2026-10-26');
+  await expect(list.getByRole('link', { name: 'Do 29.10.2026', exact: true })).toHaveAttribute('aria-current', 'date');
+  await expect(page.getByRole('navigation', { name: 'Tage dieser Seite' }).getByRole('link')).toHaveCount(7);
+  await go(page, MONTH);
+  await waitForPageOf(page, 'monat', '2026-10');
+  await expect(page.getByRole('navigation', { name: 'Monatskalender' })).toHaveCount(0);
+});
+
+test('today is circled in the month calendar of the week, on the screen only', async ({ page }) => {
+  const repo = await openSeeded(page, WEEK);
+  const layout = wocheLayout('2026-W44');
+  const [x29, y29] = calendarPoint(layout, TODAY);
+  const [x28, y28] = calendarPoint(layout, '2026-10-28');
+  await expect.poll(() => inkNear(page, [x29 + 16, y29], 3)).toBeGreaterThan(0);
+  expect(await inkNear(page, [x28 + 16, y28], 3)).toBe(0);
+  const [x, y, w, h] = fieldOf(layout, 'notizen');
+  await pen(page).stroke([[x + w / 4, y + h / 2], [x + w / 2, y + h / 2 + 10], [x + (3 * w) / 4, y + h / 2]]);
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.length).toBe(1);
+  expect(repo.puts[0].text).toContain(layout.background());
+  expect(repo.puts[0].text).not.toContain('r="16"');
 });

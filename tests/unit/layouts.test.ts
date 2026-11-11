@@ -8,6 +8,7 @@ import { textWidth } from '../../src/pages/agenda';
 import {
   agendaMarks,
   besprechungLayout,
+  calendarTargets,
   monatLayout,
   tagLayout,
   tapTargetAt,
@@ -482,7 +483,9 @@ test('today is marked on the screen only, and only on a page that shows it', () 
   expect(mark).toContain(`x="${f.rect[0]}" y="${f.rect[1]}"`);
   expect(week.background()).not.toContain(mark);
   expect(todayMarks(week, '2026-11-02')).toBe('');
-  expect(todayMarks(week, '2026-10-25')).toBe('');
+  const sunday = todayMarks(week, '2026-10-25'); // ein Tag des Oktobers, aber nicht in dieser Woche: nur der Kreis im Kalender
+  expect(sunday).toContain('<circle cx="1051" cy="352" r="16"');
+  expect(sunday).not.toContain('<rect');
   const monat = monatLayout('2026-10');
   const monthMark = todayMarks(monat, '2026-10-29');
   expect(monthMark).not.toBe('');
@@ -494,6 +497,39 @@ test('today is marked on the screen only, and only on a page that shows it', () 
   expect(todayMarks(besprechungLayout(MEETING), '2026-10-29')).toBe('');
   // Die Marke für zwei verschiedene Tage ist verschieden
   expect(todayMarks(week, '2026-10-28')).not.toBe(mark);
+});
+
+test('today gets a circle in the month calendar of the week only on a day of that month, on the screen only', () => {
+  const week = wocheLayout('2026-W44');
+  const mark = todayMarks(week, '2026-10-29');
+  expect(mark).toContain('<circle cx="901" cy="392" r="16"');
+  expect(mark).toContain('stroke="#59695e"');
+  expect(xmlProblem(mark)).toBeNull();
+  expect(week.background()).not.toContain('r="16"');
+  const nov1 = todayMarks(week, '2026-11-01'); // in der Woche, im Kalender des Oktobers aber blass: Ring ja, Kreis nein
+  expect(nov1).toContain('<rect');
+  expect(nov1).not.toContain('<circle');
+  expect(todayMarks(wocheLayout('2026-W46'), '2026-10-29')).toBe('');
+});
+
+test('a finger can hit every day of the month calendar of the week, and nothing beside it', () => {
+  const week = wocheLayout('2026-W44');
+  const cal = calendarTargets(week);
+  expect(cal.map((t) => t.day)).toEqual(monthGrid('2026-10').flat());
+  expect(cal.map((t) => t.rect)).toEqual(weekCalendar('2026-W44').days.map((c) => c.rect));
+  expect(tapTargetAt(cal, 901, 392)?.day).toBe('2026-10-29');
+  expect(tapTargetAt(cal, 926, 380)?.day).toBe('2026-10-30'); // auf der Grenze gilt der rechte Tag
+  expect(tapTargetAt(cal, 925.5, 411.5)?.day).toBe('2026-10-29');
+  expect(tapTargetAt(cal, 900, 412)?.day).toBe('2026-11-05'); // auf der unteren Grenze gilt der Tag darunter
+  expect(tapTargetAt(cal, 705, 392)).toBeNull(); // Spalte KW
+  expect(tapTargetAt(cal, 751, 200)).toBeNull(); // Kopfzeile
+  expect(tapTargetAt(cal, 751, 455)).toBeNull(); // unter dem Raster
+  expect(tapTargetAt(cal, 1080, 392)).toBeNull(); // rechts neben dem Raster
+  expect(cal.find((t) => t.day === '2026-10-26')!.label).toBe('Mo 26.10.2026, Nationalfeiertag');
+  expect(cal.find((t) => t.day === '2026-11-01')!.label).toBe('So 01.11.2026');
+  for (const t of cal) for (const f of week.fields) expect(overlap(t.rect, f.rect), `${t.day} / ${f.id}`).toBe(false);
+  expect(tapTargets(week)).toHaveLength(7);
+  for (const l of [tagLayout('2026-10-29'), monatLayout('2026-10'), besprechungLayout(MEETING)]) expect(calendarTargets(l)).toEqual([]);
 });
 
 describe('agendaMarks', () => {
