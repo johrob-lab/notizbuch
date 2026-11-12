@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { formatDay } from '../lib/dates';
+import { formatDay, formatStand } from '../lib/dates';
 import { vollbildOf, type Settings } from '../lib/settings';
 import { AccessForm, type AccessValues } from './AccessForm';
 import { FAILED } from './texts';
@@ -161,6 +161,8 @@ export function SettingsPage({ settings, warning, passive, onChange, onAccess }:
           )}
         </section>
       </fieldset>
+      {/* Woran man am Gerät sieht, ob die neue Version schon läuft. */}
+      <p class="version">Version vom {formatStand(__STAND__)}</p>
     </section>
   );
 }

@@ -3,6 +3,7 @@ import {
   addDays,
   formatDay,
   formatDayLong,
+  formatStand,
   isValidDay,
   isoWeekKey,
   mondayOf,
@@ -252,4 +253,9 @@ test('nextFullHour always has the form HH:00', () => {
   for (let i = 0; i < 24 * 4 * 3; i++) {
     expect(nextFullHour(new Date(start + i * 15 * 60_000))).toMatch(/^(?:[01]\d|2[0-3]):00$/);
   }
+});
+
+test('formatStand shows the build time in Vienna, in winter and in summer', () => {
+  expect(formatStand('2026-11-12T13:50:00.000Z')).toBe('12.11.2026, 14:50');
+  expect(formatStand('2026-07-01T22:05:00.000Z')).toBe('02.07.2026, 00:05');
 });

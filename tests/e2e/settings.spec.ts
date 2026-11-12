@@ -852,3 +852,9 @@ test('a change of the access that finds another repository stored saves nothing,
   await expect(status(page)).toHaveText('Gesichert');
   expect(oldRepo.puts).toEqual([]);
 });
+
+test('the settings page shows when this version of the app was built', async ({ page }) => {
+  await open(page);
+  await toSettings(page);
+  await expect(page.getByText(/^Version vom \d{2}\.\d{2}\.\d{4}, \d{2}:\d{2}$/)).toBeVisible();
+});

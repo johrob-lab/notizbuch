@@ -4,6 +4,8 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   base: '/notizbuch/',
+  // Wann diese Version gebaut wurde: Die Einstellungen zeigen es, so sieht man am Gerät, ob die neue Version schon läuft.
+  define: { __STAND__: JSON.stringify(new Date().toISOString()) },
   plugins: [
     preact(),
     VitePWA({

@@ -228,12 +228,6 @@ body {
  * Oben: Blättern, Ansichten, Stand des Abgleichs, Einstellungen. Die Leiste hat immer dieselbe Höhe: Wird sie höher
  * (der Status bekommt einen längeren Text, eine Meldung kommt), springt die Seite darunter, auch unter dem Stift.
  * Darum bricht sie nicht um, nur der Text des Status darf umbrechen. Meldungen schweben darüber.
- *
- * Oben der Abstand unter der Statusleiste des iPads: iPadOS legt unter die Statusleiste einen weichen Glaseffekt, der
- * tiefer reicht als der sichere Rand (safe-area-inset-top), und Knöpfe darin wirken verschwommen. Darum rückt die Leiste
- * (und im Vollbild der Status) um den Zuschlag min(24px, safe-area-inset-top) tiefer. Ohne Statusleiste (Firmen-PC,
- * Safari-Tab) ist der sichere Rand 0 und damit auch der Zuschlag. env() steht direkt hier und nicht in einer eigenen
- * CSS-Variablen: Dort rechnet Safari es als 0 (siehe tests/unit/styles.test.ts).
  */
 .topbar {
   touch-action: manipulation;
@@ -242,9 +236,20 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: calc(max(6px, env(safe-area-inset-top)) + min(24px, env(safe-area-inset-top))) max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left));
+  padding: max(6px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left));
   background: var(--leiste);
   border-bottom: 1px solid var(--linie);
+}
+
+/*
+ * Als App vom Home-Bildschirm (Klasse `heimbildschirm`, siehe src/lib/homeScreen.ts) beginnt die Seite am iPad unter der
+ * Statusleiste, der sichere Rand oben ist dort 0. iPadOS legt an den oberen Rand der Seite einen weichen Glaseffekt, etwa
+ * 25 px hoch, und Knöpfe darin wirken verschwommen. Darum rücken dort die Leiste und im Vollbild der Status um 24 px
+ * tiefer. Im Browser (Firmen-PC, Safari-Tab) bleibt alles, wie es ist. Diese Regel steht vor `.vollbild .topbar`, damit die
+ * Leiste im Vollbild ohne Abstand bleibt.
+ */
+.heimbildschirm .topbar {
+  padding-top: calc(max(6px, env(safe-area-inset-top)) + 24px);
 }
 
 .schritte,
@@ -481,12 +486,17 @@ body {
 
 .vollbild .status {
   position: absolute;
-  top: calc(max(8px, env(safe-area-inset-top)) + min(24px, env(safe-area-inset-top)));
+  top: max(8px, env(safe-area-inset-top));
   right: max(12px, env(safe-area-inset-right));
   padding: 4px 10px;
   border-radius: 12px;
   background: rgb(255 255 255 / 0.9);
   box-shadow: 0 1px 4px rgb(0 0 0 / 0.15);
+}
+
+/* Unter den Glaseffekt wie die Leiste (siehe `.heimbildschirm .topbar`). Steht vor `.vollbild.mit-hinweis .status`. */
+.heimbildschirm .vollbild .status {
+  top: calc(max(8px, env(safe-area-inset-top)) + 24px);
 }
 
 .vollbild .status a {
@@ -626,6 +636,13 @@ body {
 /* Eine Zeile Erklärung unter einer Wahl. */
 .wahl-hinweis {
   margin: 6px 0 0;
+  font-size: 14px;
+  color: #4a5160;
+}
+
+/* Ganz unten in den Einstellungen: wann diese Version gebaut wurde. */
+.einstellungen .version {
+  margin: 28px 0 0;
   font-size: 14px;
   color: #4a5160;
 }

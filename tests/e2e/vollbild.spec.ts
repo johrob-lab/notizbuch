@@ -1,7 +1,7 @@
 import { expect, test as base, type Page } from '@playwright/test';
 import { serializePage } from '../../src/ink/svg';
 import { besprechungLayout } from '../../src/pages/layouts';
-import { openSeeded, savedSettings, shareRepos } from './helpers/app';
+import { openSeeded, savedSettings, shareRepos, type RepoMock } from './helpers/app';
 import { centerOf, mouse, palm, pen, touch, viewOf } from './helpers/pointer';
 
 // Das Vollbild: Ein Knopf blendet alle Leisten aus, die Seite füllt den Bildschirm. GitHub antwortet aus einem Repo im
@@ -720,4 +720,37 @@ test('a hand resting on the wheel while the pen wrote does not open the ring', a
   await expect(page.locator(SCHUTZ)).toHaveCount(0);
   await strokeTop(page, 'pen', LINE);
   await expect.poll(() => strokeCount(page)).toBe(2);
+});
+
+// Als App vom Home-Bildschirm beginnt die Seite am iPad unter der Statusleiste, der sichere Rand oben ist dort 0. iPadOS legt
+// an ihren oberen Rand einen weichen Glaseffekt, darum rücken Leiste und Status dort 24 px tiefer (siehe app.css).
+
+/** Vollbild an, ohne Netz und mit einem Strich: Dann zeigt sich der Status („Wartet auf Netz“), sonst ist er ausgeblendet. */
+async function showStatusInFullscreen(page: Page, repo: RepoMock): Promise<void> {
+  repo.offline = true;
+  await knopf(page).click();
+  await expect(page.locator('main#app')).toHaveClass(/vollbild/);
+  await pen(page).stroke(LINE);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect(status(page)).toHaveText('Wartet auf Netz · 1 Änderung');
+}
+
+test('as an app from the home screen the bar and the status sit 24 px lower, below the glass of iPadOS', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(Navigator.prototype, 'standalone', { get: () => true, configurable: true }));
+  const repo = await openSeeded(page, DAY);
+  await expect(page.locator('html')).toHaveClass(/heimbildschirm/);
+  await expect(page.locator('.topbar')).toHaveCSS('padding-top', '30px');
+  await showStatusInFullscreen(page, repo);
+  await expect(status(page)).toHaveCSS('top', '32px');
+});
+
+test('in a browser tab the bar and the status keep their small distance to the top', async ({ page }) => {
+  const repo = await openSeeded(page, DAY);
+  await expect(page.locator('html')).not.toHaveClass(/heimbildschirm/);
+  await expect(page.locator('.topbar')).toHaveCSS('padding-top', '6px');
+  await showStatusInFullscreen(page, repo);
+  await expect(status(page)).toHaveCSS('top', '8px');
 });

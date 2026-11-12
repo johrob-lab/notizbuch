@@ -115,6 +115,21 @@ export function formatDay(d: Day): string {
   return `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}`;
 }
 
+/** Wann diese Version der App gebaut wurde, in Wiener Zeit, zum Beispiel `12.11.2026, 14:50`. */
+export function formatStand(iso: string): string {
+  const parts = new Intl.DateTimeFormat('de-AT', {
+    timeZone: 'Europe/Vienna',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(iso));
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? '';
+  return `${part('day')}.${part('month')}.${part('year')}, ${part('hour')}:${part('minute')}`;
+}
+
 /** Zum Beispiel `Do 29.10.2026`. */
 export function formatDayLong(d: Day): string {
   return `${WEEKDAY_NAMES[weekdayIndex(d)]} ${formatDay(d)}`;
