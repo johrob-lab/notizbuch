@@ -270,8 +270,16 @@ function weekPage(): Built {
     s.text('Rezept holen', tue2.x, tue2.y, 'rot', 2.2);
     const fri = dayRow('tag-2026-10-30', 0);
     s.text('Homeoffice', fri.x, fri.y, 'blau', 2.2);
-    const goals = field(layout, 'woche');
+    const goals = field(layout, 'ziele');
     s.text('Ziel: Sperren fertig', goals[0] + 16, baselineOf(goals, 0), 'schwarz', 2.0);
+    // Aufgaben der Woche: offen schwarz, erledigt grün mit Haken im Kreis (Lage wie auf der Tagesseite)
+    const tasks = field(layout, 'aufgaben');
+    const tx = tasks[0] + 14 + 7.5 + 12;
+    s.text('Dienstplan Muster', tx, baselineOf(tasks, 0), 'schwarz', 1.9);
+    s.text('Bericht abgeben', tx, baselineOf(tasks, 1), 'gruen', 1.9);
+    s.check(tasks[0] + 14 + 2, tasks[1] + LINE + LINE / 2 + 6, 20, 'gruen');
+    const notes = field(layout, 'notizen');
+    s.text('Urlaub Beispiel ab 20.11.', notes[0] + 16, baselineOf(notes, 0), 'blau', 2.0);
     return { page: { kind: 'woche', key, meta: {}, strokes: s.strokes }, layout };
   });
 }

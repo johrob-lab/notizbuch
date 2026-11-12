@@ -11,7 +11,7 @@ import { InkSurface, type NeighborPage } from '../ink/surface';
 import type { FieldBox, Page, Stroke } from '../ink/types';
 import { todayVienna, type Day } from '../lib/dates';
 import type { VollbildWerkzeuge } from '../lib/settings';
-import { tapTargetAt, tapTargets, todayMarks, type Layout } from '../pages/layouts';
+import { calendarTargets, tapTargetAt, tapTargets, todayMarks, type Layout } from '../pages/layouts';
 import type { SyncEngine } from '../sync/engine';
 import { normalizePath } from '../sync/paths';
 import { watchCards } from './cardGestures';
@@ -173,6 +173,7 @@ export function PageView(p: Props) {
   // Heute, solange die Seite offen ist: Die Markierung und `aria-current` sollen sich nicht mitten im Schreiben ändern.
   const [today] = useState(() => todayVienna());
   const days = useMemo(() => tapTargets(layout), [layout]);
+  const calendar = useMemo(() => calendarTargets(layout), [layout]);
   // Was die Fläche ohne `marks` als Hintergrund zeigt: den Hintergrund der Seite (nur er kommt in die Datei) und die Markierung
   // für heute.
   const shown = useMemo(() => layout.background() + todayMarks(layout, today), [layout, today]);
@@ -250,7 +251,7 @@ export function PageView(p: Props) {
       },
       // Ein Finger oder die Maus auf einer Tageszahl öffnet den Tag. Der Stift tippt nie, er schreibt.
       onTap: ({ x, y }) => {
-        const hit = tapTargetAt(days, x, y);
+        const hit = tapTargetAt(days, x, y) ?? tapTargetAt(calendar, x, y);
         if (hit) window.location.hash = routeHash({ view: 'tag', key: hit.day });
       },
       // Die Karten über der Fläche liegen im Maßstab der Seite und wandern mit ihr. Der Stift schreibt nicht unter sie.
@@ -364,7 +365,7 @@ export function PageView(p: Props) {
       session.close();
       view.destroy();
     };
-  }, [engine, layout, path, days, shown, readOnly, locked, sigma, prediction, palm]);
+  }, [engine, layout, path, days, calendar, shown, readOnly, locked, sigma, prediction, palm]);
 
   // Neue Geburtstage, Termine und Prioritäten (Woche, Monat) und neue Geburtstage im Kopf der Tagesseite zeigt die Fläche an Ort
   // und Stelle. Darum steht `marks` nicht im Effekt oben: Eine neue Fläche verlöre den Strich, der gerade entsteht, und den Verlauf
@@ -554,6 +555,15 @@ export function PageView(p: Props) {
                 </a>
               );
             })}
+          </nav>
+        )}
+        {calendar.length > 0 && (
+          <nav class="tage" aria-label="Monatskalender">
+            {calendar.map((d) => (
+              <a key={d.day} href={routeHash({ view: 'tag', key: d.day })} aria-current={d.day === today ? 'date' : undefined}>
+                {d.label}
+              </a>
+            ))}
           </nav>
         )}
         {/* Die Hinweise liegen über der Fläche, damit sie die Seite nicht verschieben, wenn sie kommen oder gehen. */}
