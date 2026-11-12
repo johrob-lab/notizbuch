@@ -1,8 +1,12 @@
 import { render } from 'preact';
 import { startAppUpdate } from './lib/appUpdate';
+import { isHomeScreenApp } from './lib/homeScreen';
 import { flushInkPrefs } from './ui/inkPrefs';
 import { holdsDrafts } from './ui/pageSession';
 import { App } from './ui/App';
+
+// Als App vom Home-Bildschirm rückt app.css die Leiste oben unter den Glaseffekt von iPadOS (siehe homeScreen.ts).
+if (isHomeScreenApp(window)) document.documentElement.classList.add('heimbildschirm');
 
 // Die App registriert den Service Worker selbst und lädt eine neue Version in einem ruhigen Moment (siehe appUpdate.ts).
 if (import.meta.env.PROD) {
