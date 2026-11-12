@@ -4,6 +4,13 @@
   --leiste: #fbfaf6;
   --hinweis: #fff4d6;
   --fehler: #fde4e1;
+  /*
+   * Abstand unter der Statusleiste des iPads: iPadOS legt unter die Statusleiste einen weichen Glaseffekt, der tiefer
+   * reicht als der sichere Rand (safe-area-inset-top), und Knöpfe darin wirken verschwommen. Darum rücken die Leiste
+   * oben und der Status im Vollbild dort um bis zu 24 px tiefer. Ohne Statusleiste (Firmen-PC, Safari-Tab) ist der
+   * sichere Rand 0 und damit auch dieser Zuschlag.
+   */
+  --unter-glas: min(24px, env(safe-area-inset-top));
 }
 
 html,
@@ -236,7 +243,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: max(6px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left));
+  padding: calc(max(6px, env(safe-area-inset-top)) + var(--unter-glas)) max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left));
   background: var(--leiste);
   border-bottom: 1px solid var(--linie);
 }
@@ -475,7 +482,7 @@ body {
 
 .vollbild .status {
   position: absolute;
-  top: max(8px, env(safe-area-inset-top));
+  top: calc(max(8px, env(safe-area-inset-top)) + var(--unter-glas));
   right: max(12px, env(safe-area-inset-right));
   padding: 4px 10px;
   border-radius: 12px;
