@@ -215,6 +215,38 @@ test.describe('without Geburtstage.md or with a broken one the pages load as bef
   }
 });
 
+// Die Punkte der Karte „Kalender“ sitzen in den oberen Ecken des Tages, der für Termine links, der für Geburtstage rechts. So
+// bleibt die Zahl frei lesbar. Geprüft an einem Tag mit beidem und zweistelliger Zahl, in Einheiten der Karte (sie ist skaliert).
+test('in the calendar card the dots for appointments and birthdays sit in the upper corners, clear of the number', async ({ page }) => {
+  await openSeeded(page, DAY, { files: FILES });
+  const day = calendar(page).getByRole('link', { name: 'Di 27.10.2026, Geburtstag von Erika Muster, 1 Termin', exact: true });
+  await expect(day).toHaveClass(/termine/);
+  await expect(day).toHaveClass(/geburtstag/);
+  const boxes = await day.evaluate((el) => {
+    const cell = el.getBoundingClientRect();
+    const scale = cell.width / (el as HTMLElement).offsetWidth;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const t = range.getBoundingClientRect();
+    const text = { left: (t.left - cell.left) / scale, right: (t.right - cell.left) / scale, top: (t.top - cell.top) / scale, bottom: (t.bottom - cell.top) / scale };
+    const dot = (pseudo: string) => {
+      const s = getComputedStyle(el, pseudo);
+      const left = parseFloat(s.left);
+      const top = parseFloat(s.top);
+      return { left, right: left + parseFloat(s.width), top, bottom: top + parseFloat(s.height) };
+    };
+    return { width: (el as HTMLElement).offsetWidth, text, termin: dot('::after'), geburtstag: dot('::before') };
+  });
+  type Box = { left: number; right: number; top: number; bottom: number };
+  const apart = (a: Box, b: Box) => a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top;
+  expect(apart(boxes.termin, boxes.text), JSON.stringify(boxes)).toBe(true);
+  expect(apart(boxes.geburtstag, boxes.text), JSON.stringify(boxes)).toBe(true);
+  // Oben, und der Termin links von der Mitte, der Geburtstag rechts davon.
+  expect(boxes.termin.top).toBe(boxes.geburtstag.top);
+  expect(boxes.termin.right).toBeLessThan(boxes.width / 2);
+  expect(boxes.geburtstag.left).toBeGreaterThan(boxes.width / 2);
+});
+
 test('a new birthday from another device shows up on the open day page without rebuilding it', async ({ page }) => {
   const repo = await openSeeded(page, DAY, { files: { ...AGENDA, [GEBURTSTAGE]: GEBURTSTAGE_VORHER } });
   // Die Datei ist gelesen: Der 27.10. hat im Kalender seinen Geburtstag, heute steht keiner im Kopf.
