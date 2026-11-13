@@ -85,6 +85,8 @@ function fakeEngine(initial: string | null = null, others: Record<string, string
     /** So viele der nächsten Schreibaufträge scheitern. Ein gescheiterter Auftrag ändert die Kopie nicht. */
     failWrites: 0,
     readError: undefined as Error | undefined,
+    /** Wie `SyncEngine.closed`: beendet für immer (zum Beispiel ersetzt). */
+    closed: false,
     get listenerCount(): number {
       return listeners.size;
     },
@@ -1855,6 +1857,20 @@ test('a draft page that could not be loaded holds its draft, also once it is lef
   expect(holdsDrafts()).toBe(false);
   await settle();
   expect(engine.writes.map(ids)).toEqual([['alt']]);
+});
+
+// P5d-R1: Ersetzt die App die Engine an den Einstellungen vorbei (der gespeicherte Zugang änderte sich hinter dem Fenster),
+// wird ein aufgehobener Entwurf der alten Engine nie mehr gespeichert. Er darf das Neuladen für ein Update nicht aufhalten.
+test('the parked draft of a closed engine no longer holds the app from reloading', async () => {
+  const engine = fakeEngine(null);
+  await leaveUnloaded(engine, stroke('alt', 3000));
+  expect(holdsDrafts()).toBe(true);
+  expect(parkedPaths(engine)).toEqual([PATH]);
+  engine.closed = true;
+  expect(holdsDrafts()).toBe(false);
+  // Der Eintrag selbst bleibt (gespeichert wird er nie, er ist nur nicht mehr im Weg). Aufräumen für die Prüfung nach dem Test.
+  expect(parkedPaths(engine)).toEqual([PATH]);
+  expect(forgetDraftsForTests()).toEqual({ finishing: [], parked: [PATH] });
 });
 
 test('a draft page left before it is read holds its draft until it is saved', async () => {
