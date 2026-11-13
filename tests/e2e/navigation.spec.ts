@@ -603,6 +603,19 @@ test('the month calendar of the week is a list of links, too', async ({ page }) 
   await expect(page.getByRole('navigation', { name: 'Monatskalender' })).toHaveCount(0);
 });
 
+// Mit der Tastatur: Nach den sieben Tagen der Woche kommt der Knopf „Ganze Seite“ (nur ohne Werkzeugleiste, etwa am Firmen-PC),
+// erst danach die 42 Tage des Monatskalenders. Sonst bräuchte man 42 Tabs mehr bis zur ganzen Seite.
+test('on the office PC the tab key reaches "Ganze Seite" before the 42 days of the month calendar', async ({ page }) => {
+  await openSeeded(page, WEEK, { device: 'Firmen-PC' });
+  const week = page.getByRole('navigation', { name: 'Tage dieser Seite' }).getByRole('link');
+  await expect(week).toHaveCount(7);
+  await week.last().focus();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Ganze Seite' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('navigation', { name: 'Monatskalender' }).getByRole('link').first()).toBeFocused();
+});
+
 test('today is circled in the month calendar of the week, on the screen only', async ({ page }) => {
   const repo = await openSeeded(page, WEEK);
   const layout = wocheLayout('2026-W44');

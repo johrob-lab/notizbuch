@@ -67,9 +67,19 @@ export async function accessProblem(client: { checkAccess(): Promise<{ canWrite:
 
 // ---------- Speichern ----------
 
-/** Der Text, wenn noch Änderungen auf ihren Upload warten: Erst müssen sie oben sein, dann kann das Repository wechseln. */
-export function waitingText(count: number): string {
-  return count === 1 ? 'Erst sichern: Es wartet noch 1 Änderung.' : `Erst sichern: Es warten noch ${count} Änderungen.`;
+/**
+ * Der Text, wenn das Repository noch nicht wechseln kann: `count` Änderungen warten auf ihren Upload, und auf den Seiten `pages`
+ * (Namen wie aus `pageName`) liegen Striche nur im Arbeitsspeicher, weil sich die Seite beim Verlassen nicht laden ließ. Die
+ * kommen erst in ihre Datei, wenn die Seite wieder offen ist und sich lesen lässt. Darum nennt der Text diese Seiten: Oben steht
+ * dann vielleicht „Gesichert“, denn in der Warteschlange liegen sie nicht.
+ */
+export function waitingText(count: number, pages: readonly string[] = []): string {
+  const changes = count === 1 ? 'Es wartet noch 1 Änderung' : `Es warten noch ${count} Änderungen`;
+  if (pages.length === 0) return `Erst sichern: ${changes}.`;
+  const quoted = pages.map((page) => `„${page}“`);
+  const named = quoted.length === 1 ? `der Seite ${quoted[0]}` : `den Seiten ${quoted.slice(0, -1).join(', ')} und ${quoted[quoted.length - 1]}`;
+  const where = count > 0 ? `${changes}, und auf ${named}` : `Auf ${named}`;
+  return `Erst sichern: ${where} liegen noch Striche nur auf diesem Gerät. Öffne sie einmal mit Netz und warte auf „Gesichert“, dann geht der Wechsel.`;
 }
 
 /** Das Repository kann nicht wechseln, solange Änderungen warten: Sie gehörten zum alten und gingen ins neue. */

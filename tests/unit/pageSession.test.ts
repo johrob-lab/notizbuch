@@ -7,7 +7,7 @@ import {
   forgetDraftsForTests,
   holdsDrafts,
   PageSession,
-  parkedDrafts,
+  parkedPaths,
   previewStrokes,
   type PageSurface,
   type Phase,
@@ -85,6 +85,8 @@ function fakeEngine(initial: string | null = null, others: Record<string, string
     /** So viele der nächsten Schreibaufträge scheitern. Ein gescheiterter Auftrag ändert die Kopie nicht. */
     failWrites: 0,
     readError: undefined as Error | undefined,
+    /** Wie `SyncEngine.closed`: beendet für immer (zum Beispiel ersetzt). */
+    closed: false,
     get listenerCount(): number {
       return listeners.size;
     },
@@ -1726,22 +1728,22 @@ test('draftsSettled waits for every page left in its engine, also for one left w
   expect(settled).toBe(true);
 });
 
-test('parkedDrafts counts the parked drafts of its engine, one per file, until a session takes them', async () => {
+test('parkedPaths lists the files with parked drafts of its engine, one per file, until a session takes them', async () => {
   const engine = fakeEngine(null, { [NEXT_PATH]: null });
   const other = fakeEngine(null);
-  expect(parkedDrafts(engine)).toBe(0);
+  expect(parkedPaths(engine)).toEqual([]);
   await leaveUnloaded(engine, stroke('eins', 3000));
-  expect(parkedDrafts(engine)).toBe(1);
+  expect(parkedPaths(engine)).toEqual([PATH]);
   await leaveUnloaded(engine, stroke('zwei', 4000)); // dieselbe Datei: beide in einem Entwurf
-  expect(parkedDrafts(engine)).toBe(1);
+  expect(parkedPaths(engine)).toEqual([PATH]);
   await leaveUnloaded(engine, stroke('drei', 5000), NEXT_PATH);
-  expect(parkedDrafts(engine)).toBe(2);
-  expect(parkedDrafts(other)).toBe(0);
+  expect(parkedPaths(engine)).toEqual([PATH, NEXT_PATH]);
+  expect(parkedPaths(other)).toEqual([]);
 
   await open(engine, fakeSurface()).session.reload();
-  expect(parkedDrafts(engine)).toBe(1);
+  expect(parkedPaths(engine)).toEqual([NEXT_PATH]);
   await open(engine, fakeSurface(), { path: NEXT_PATH }).session.reload();
-  expect(parkedDrafts(engine)).toBe(0);
+  expect(parkedPaths(engine)).toEqual([]);
   await settle();
   expect(engine.writes.map((text) => ids(text).sort())).toEqual([['eins', 'zwei'], ['drei']]);
 });
@@ -1855,6 +1857,20 @@ test('a draft page that could not be loaded holds its draft, also once it is lef
   expect(holdsDrafts()).toBe(false);
   await settle();
   expect(engine.writes.map(ids)).toEqual([['alt']]);
+});
+
+// P5d-R1: Ersetzt die App die Engine an den Einstellungen vorbei (der gespeicherte Zugang änderte sich hinter dem Fenster),
+// wird ein aufgehobener Entwurf der alten Engine nie mehr gespeichert. Er darf das Neuladen für ein Update nicht aufhalten.
+test('the parked draft of a closed engine no longer holds the app from reloading', async () => {
+  const engine = fakeEngine(null);
+  await leaveUnloaded(engine, stroke('alt', 3000));
+  expect(holdsDrafts()).toBe(true);
+  expect(parkedPaths(engine)).toEqual([PATH]);
+  engine.closed = true;
+  expect(holdsDrafts()).toBe(false);
+  // Der Eintrag selbst bleibt (gespeichert wird er nie, er ist nur nicht mehr im Weg). Aufräumen für die Prüfung nach dem Test.
+  expect(parkedPaths(engine)).toEqual([PATH]);
+  expect(forgetDraftsForTests()).toEqual({ finishing: [], parked: [PATH] });
 });
 
 test('a draft page left before it is read holds its draft until it is saved', async () => {

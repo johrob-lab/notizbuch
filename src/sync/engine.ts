@@ -153,6 +153,11 @@ export class SyncEngine {
     return this.#readOnly || this.#closed;
   }
 
+  /** Beendet für immer (`close`), zum Beispiel weil das Repository wechselt oder die App die Engine ersetzt hat. */
+  get closed(): boolean {
+    return this.#closed;
+  }
+
   /** Das Gerät in den Commit-Texten ändert sich sofort, auch für Änderungen, die schon warten. */
   setDevice(device: string): void {
     this.#device = device;

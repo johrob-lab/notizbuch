@@ -1,4 +1,4 @@
-import type { Day } from './dates';
+import { formatDayLong, MONTHS, type Day } from './dates';
 
 const DAILY_NOTES_DIR = '05 Daily Notes';
 const PAGES_DIR = '07 Anhänge/Notizbuch';
@@ -49,6 +49,23 @@ export function besprechungBase(d: Day, zeit: string, thema: string): string {
 /** Seite `n` einer Besprechung. Der Ordner folgt dem Jahr am Anfang von `base`. */
 export function besprechungPagePath(base: string, n: number): string {
   return `${PAGES_DIR}/${base.slice(0, 4)}/${base} S${n}.svg`;
+}
+
+/**
+ * Der Name einer Seite für Meldungen, so wie die App sie zeigt: `Fr 30.10.2026`, `KW 44 / 2026`, `Oktober 2026` oder
+ * `Thema, Seite 2` für eine Besprechung. Andere Dateien heißen wie die Datei ohne Ordner und Endung.
+ */
+export function pageName(path: string): string {
+  const file = path.slice(path.lastIndexOf('/') + 1);
+  const day = /^(\d{4}-\d{2}-\d{2}) Tag\.svg$/.exec(file);
+  if (day) return formatDayLong(day[1]);
+  const week = /^(\d{4}) KW(\d{2}) Woche\.svg$/.exec(file);
+  if (week) return `KW ${week[2]} / ${week[1]}`;
+  const month = /^(\d{4})-(\d{2}) Monat\.svg$/.exec(file);
+  if (month && Number(month[2]) >= 1 && Number(month[2]) <= 12) return `${MONTHS[Number(month[2]) - 1]} ${month[1]}`;
+  const meeting = /^\d{4}-\d{2}-\d{2} \d* (.+) S(\d+)\.svg$/.exec(file);
+  if (meeting) return `${meeting[1]}, Seite ${meeting[2]}`;
+  return file.replace(/\.svg$/, '');
 }
 
 /** Name der Konfliktkopie: `(Konflikt)` kommt vor die letzte Dateiendung. */

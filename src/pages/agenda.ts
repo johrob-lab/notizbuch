@@ -86,7 +86,7 @@ export function textWidth(s: string, size: number): number {
 }
 
 /**
- * Kleine Toleranz, wenn `fitLines` prüft, ob etwas in eine Zeile passt. Die Breiten sind Summen von Kommazahlen; was
+ * Kleine Toleranz, wenn `fitLines`, `shorten`, `wrapHead` und `withHead` prüfen, ob etwas in eine Zeile passt. Die Breiten sind Summen von Kommazahlen; was
  * rechnerisch genau passt, soll nicht an einem Rest aus der Rundung scheitern (sonst würde zum Beispiel `withHead` den
  * ersten Termin kürzen, obwohl er genau neben den Eintrag passt).
  */
@@ -98,14 +98,16 @@ const rowWidth = (list: AgendaItem[], size: number): number =>
 
 /**
  * Der Text mit Ellipse am Ende (ohne Leerraum und ohne Komma davor), so dass er höchstens `width` breit ist. Passt nicht
- * einmal die Ellipse, gibt es `undefined`: Der Eintrag wird dann gar nicht gezeichnet.
+ * einmal die Ellipse, gibt es `undefined`: Der Eintrag wird dann gar nicht gezeichnet. „Passt“ gilt mit derselben Toleranz
+ * wie in `fitLines` (`FIT_EPSILON`): Sonst kürzte `withHead` die Geburtstage um ein, zwei Buchstaben, wenn sie mit dem
+ * ersten Termin rechnerisch genau in die Zeile passen und nur ein Rest aus der Rundung fehlt.
  */
 function shorten(s: string, size: number, width: number): string | undefined {
-  if (textWidth(s, size) <= width) return s;
-  if (textWidth(ELLIPSIS, size) > width) return undefined;
+  if (textWidth(s, size) <= width + FIT_EPSILON) return s;
+  if (textWidth(ELLIPSIS, size) > width + FIT_EPSILON) return undefined;
   const chars = Array.from(s);
   const cut = () => chars.join('').replace(/[\s,]+$/, '') + ELLIPSIS;
-  while (chars.length > 0 && textWidth(cut(), size) > width) chars.pop();
+  while (chars.length > 0 && textWidth(cut(), size) > width + FIT_EPSILON) chars.pop();
   return cut();
 }
 
@@ -172,10 +174,10 @@ function wrapHead(head: AgendaItem, lines: number, width: number, size: number):
   let text = head.text;
   while (text !== '' && out.length < lines) {
     let cut = text.length;
-    if (out.length < lines - 1 && textWidth(text, s) > width) {
+    if (out.length < lines - 1 && textWidth(text, s) > width + FIT_EPSILON) {
       // Stellen nach einem Namen: hinter dem Komma von „, “ und vor dem Leerzeichen von „ ♥“.
       const breaks = [...text.matchAll(/,(?= )| (?=♥)/g)].map((m) => m.index + (m[0] === ',' ? 1 : 0));
-      cut = breaks.filter((b) => textWidth(text.slice(0, b), s) <= width).pop() ?? breaks[0] ?? text.length;
+      cut = breaks.filter((b) => textWidth(text.slice(0, b), s) <= width + FIT_EPSILON).pop() ?? breaks[0] ?? text.length;
     }
     const shown = shorten(text.slice(0, cut), s, width);
     if (shown === undefined) break;
@@ -220,7 +222,7 @@ export function withHead(head: AgendaItem | undefined, rest: AgendaItem[], lines
   const shown: AgendaItem = { ...head, text };
   const avail = width - textWidth(text, headSize) - textWidth(SEPARATOR, size);
   const first = fitLines(rest, lines, [avail, width], size);
-  if (first.length === 0 || (lines > 1 && textWidth(ELLIPSIS, size) > avail)) {
+  if (first.length === 0 || (lines > 1 && textWidth(ELLIPSIS, size) > avail + FIT_EPSILON)) {
     // Neben `head` ist kein Platz für einen Eintrag: `head` steht allein, `rest` beginnt in Zeile 2.
     const below = lines > 1 ? fitLines(rest, lines - 1, width, size) : [];
     return [{ items: [shown], more: lines > 1 ? 0 : rest.length }, ...below];

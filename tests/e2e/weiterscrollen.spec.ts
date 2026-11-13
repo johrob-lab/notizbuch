@@ -969,7 +969,9 @@ test('the repository does not change while a stroke waits on a day that could no
   // In die Einstellungen, der 30.10. wird verlassen: Sein Strich wartet nur im Arbeitsspeicher, bis der Tag wieder offen ist.
   // Darum wechselt das Repository nicht, und das neue hört nicht einmal eine Frage.
   await switchRepository(page, SWITCH_REPO);
-  await expect(page.getByRole('alert').filter({ hasText: /\S/ })).toHaveText('Erst sichern: Es wartet noch 1 Änderung.');
+  await expect(page.getByRole('alert').filter({ hasText: /\S/ })).toHaveText(
+    'Erst sichern: Auf der Seite „Fr 30.10.2026“ liegen noch Striche nur auf diesem Gerät. Öffne sie einmal mit Netz und warte auf „Gesichert“, dann geht der Wechsel.',
+  );
   expect(await savedSettings(page)).toMatchObject({ repo: repo.name });
   expect(other.requests).toEqual([]);
 

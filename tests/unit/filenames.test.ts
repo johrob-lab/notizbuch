@@ -3,6 +3,7 @@ import { todayVienna } from '../../src/lib/dates';
 import {
   besprechungBase,
   besprechungPagePath,
+  pageName,
   conflictPath,
   dailyNotePath,
   monatPagePath,
@@ -83,4 +84,13 @@ test('conflictPath inserts the marker before the last extension only', () => {
 
 test('the appointments file lives in the read only calendar folder', () => {
   expect(TERMINE_PATH).toBe('04 Ressourcen/Kalender/Termine.md');
+});
+
+test('pageName names a page the way the app shows it: day, week, month, meeting page, or else the file name', () => {
+  expect(pageName(tagPagePath('2026-10-30'))).toBe('Fr 30.10.2026');
+  expect(pageName(wochePagePath('2026-W44'))).toBe('KW 44 / 2026');
+  expect(pageName(monatPagePath('2026-10'))).toBe('Oktober 2026');
+  expect(pageName(besprechungPagePath(besprechungBase('2026-10-29', '08:00', 'Abstimmung Beispiel 2027'), 2))).toBe('Abstimmung Beispiel 2027, Seite 2');
+  expect(pageName(besprechungPagePath(besprechungBase('2026-10-29', '', 'Ohne Zeit'), 1))).toBe('Ohne Zeit, Seite 1');
+  expect(pageName('07 Anhänge/Notizbuch/2026/Etwas anderes.svg')).toBe('Etwas anderes');
 });

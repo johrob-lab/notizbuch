@@ -557,15 +557,6 @@ export function PageView(p: Props) {
             })}
           </nav>
         )}
-        {calendar.length > 0 && (
-          <nav class="tage" aria-label="Monatskalender">
-            {calendar.map((d) => (
-              <a key={d.day} href={routeHash({ view: 'tag', key: d.day })} aria-current={d.day === today ? 'date' : undefined}>
-                {d.label}
-              </a>
-            ))}
-          </nav>
-        )}
         {/* Die Hinweise liegen über der Fläche, damit sie die Seite nicht verschieben, wenn sie kommen oder gehen. */}
         {phase === 'laden' && loadingHint && <p class="hinweis">Seite wird geladen</p>}
         {phase === 'unlesbar' && (
@@ -618,6 +609,16 @@ export function PageView(p: Props) {
         )}
         {/* Das Regler-Fenster der Füllfeder liegt über allem auf der Bühne. Ohne Schreiben gibt es keine Stiftwahl, also auch kein Fenster. */}
         {canWrite && <FuellerPanel filter={palm} />}
+        {/* Der Monatskalender der Woche als Links, zuletzt: Mit der Tastatur kommen seine 42 Tage erst nach allen Knöpfen der Bühne. */}
+        {calendar.length > 0 && (
+          <nav class="tage" aria-label="Monatskalender">
+            {calendar.map((d) => (
+              <a key={d.day} href={routeHash({ view: 'tag', key: d.day })} aria-current={d.day === today ? 'date' : undefined}>
+                {d.label}
+              </a>
+            ))}
+          </nav>
+        )}
       </div>
     </div>
   );

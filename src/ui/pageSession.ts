@@ -16,7 +16,8 @@ export type PageSurface = {
 };
 
 /** Was die Sitzung von der Engine braucht. */
-export type SessionEngine = Pick<SyncEngine, 'read' | 'write' | 'addRemoteChangeListener'>;
+/** `closed` wie bei `SyncEngine`: Fehlt es, gilt die Engine als offen. */
+export type SessionEngine = Pick<SyncEngine, 'read' | 'write' | 'addRemoteChangeListener'> & { readonly closed?: boolean };
 
 /**
  * `bereit`: die Seite ist gelesen. `unlesbar`: die Datei ist kaputt (sie lässt sich nicht als Seite lesen) und wird nie
@@ -136,7 +137,7 @@ function remove<T>(list: T[], entry: T): void {
 
 /**
  * Erfüllt, sobald keine verlassene Sitzung der Engine `engine` mehr ihren Entwurf fertig macht, auch keine, die erst während des
- * Wartens dazukam. Dann steht jeder dieser Entwürfe in der Warteschlange der Engine, ist aufgehoben (siehe `parkedDrafts`) oder
+ * Wartens dazukam. Dann steht jeder dieser Entwürfe in der Warteschlange der Engine, ist aufgehoben (siehe `parkedPaths`) oder
  * aufgegeben (eine kaputte Datei). Für den Wechsel des Repositorys. Wirft nie.
  */
 export async function draftsSettled(engine: SessionEngine): Promise<void> {
@@ -147,9 +148,15 @@ export async function draftsSettled(engine: SessionEngine): Promise<void> {
   }
 }
 
-/** Wie viele Entwürfe verlassener Seiten der Engine `engine` aufgehoben sind, je Datei einer. Sie stehen in keiner Warteschlange. */
-export function parkedDrafts(engine: SessionEngine): number {
-  return parked.filter((entry) => entry.engine === engine).length;
+/**
+ * Die Dateien (mit `normalizePath`, sortiert), deren Entwurf eine verlassene Seite der Engine `engine` aufgehoben hat, je Datei
+ * einer. Diese Entwürfe stehen in keiner Warteschlange.
+ */
+export function parkedPaths(engine: SessionEngine): string[] {
+  return parked
+    .filter((entry) => entry.engine === engine)
+    .map((entry) => entry.path)
+    .sort();
 }
 
 /**
@@ -162,10 +169,13 @@ const holding = new Set<() => boolean>();
  * Ob irgendwo ein Entwurf nur im Arbeitsspeicher liegt, der noch gespeichert werden kann: auf einer offenen Seite, die noch nicht
  * gelesen ist oder sich nicht laden ließ, bei einer verlassenen Seite, die ihn noch fertig macht, oder aufgehoben. Ein Neuladen
  * der App verwürfe ihn. Ein Entwurf, der nie gespeichert wird, zählt nicht: auf einer kaputten oder gesperrten Seite, auf einer
- * aus einer neueren Version und auf einer, die gelöscht wird.
+ * aus einer neueren Version und auf einer, die gelöscht wird. Auch Einträge einer beendeten Engine zählen nicht (P5d-R1): Hat
+ * die App die Engine ersetzt, etwa weil sich der gespeicherte Zugang hinter diesem Fenster änderte, schreibt keine Sitzung
+ * sie je in eine Datei, und sie sollen das Neuladen für ein Update nicht bis zum nächsten Start aufhalten.
  */
 export function holdsDrafts(): boolean {
-  return finishing.length > 0 || parked.length > 0 || [...holding].some((holds) => holds());
+  const open = (entry: Owner) => entry.engine.closed !== true;
+  return finishing.some(open) || parked.some(open) || [...holding].some((holds) => holds());
 }
 
 /**
