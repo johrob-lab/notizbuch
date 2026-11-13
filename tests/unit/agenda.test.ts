@@ -172,6 +172,19 @@ test('with a long first appointment the birthdays keep 40 % of line 1 and the fi
   expect(line.more).toBe(1);
 });
 
+// P5e-R1: Passen Geburtstage und erster Termin rechnerisch genau in die Zeile, darf ein Rest aus der Rundung die Namen nicht
+// kürzen. Gefunden mit einer Suche: Bei diesen Werten ist die Breite minus Trenner und Termin um einen Hauch kleiner als die Namen.
+test('the birthdays stay whole when they fit exactly next to the first appointment, despite rounding', () => {
+  const head = { text: '🎂 Erika Muster, Max Beispiel', tone: 'geburtstag' as const, size: 11 };
+  const cases = ['09:30 Zahnarzt', 'Runde Werkstatt', '08:00 Planung'];
+  for (const text of cases) {
+    const first = { text, tone: 'termin' as const };
+    const exact = textWidth(head.text, 11) + textWidth(SEPARATOR, 13) + textWidth(text, 13);
+    expect(withHead(head, [first], 1, exact, 13)).toEqual([{ items: [head, first], more: 0 }]);
+    expect(withHead(head, [first, { text: 'Zweiter Termin', tone: 'termin' }], 2, exact, 13)[0].items[0]).toEqual(head);
+  }
+});
+
 test('without appointments the birthdays may use the whole width, without birthdays withHead is fitLines', () => {
   const head = { text: '🎂 Max Beispiel, Paul Beispiel, Erika Muster', tone: 'geburtstag' as const, size: 11 };
   expect(textWidth(head.text, 11)).toBeGreaterThan(0.4 * 300);
