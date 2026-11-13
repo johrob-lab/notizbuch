@@ -1811,14 +1811,14 @@ body {
   color: #a8674f;
 }
 
+/* Termine: ein Punkt oben links in der Farbe der Zahl, gegenüber dem Punkt der Geburtstage oben rechts. So bleibt die Zahl frei lesbar. */
 .karte .tag.termine::after {
   content: '';
   position: absolute;
-  bottom: 2px;
-  left: 50%;
+  top: 3px;
+  left: 4px;
   width: 6px;
   height: 6px;
-  margin-left: -3px;
   border-radius: 50%;
   background: currentColor;
 }
