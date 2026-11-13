@@ -158,6 +158,13 @@ test('the refusal counts the changes that still wait', () => {
   expect(waitingText(1)).toBe('Erst sichern: Es wartet noch 1 Änderung.');
   expect(waitingText(2)).toBe('Erst sichern: Es warten noch 2 Änderungen.');
   expect(waitingText(17)).toBe('Erst sichern: Es warten noch 17 Änderungen.');
+  // Striche, die nur im Arbeitsspeicher liegen (eine verlassene Seite ließ sich nicht laden): Die Meldung nennt die Seiten.
+  const tail = 'liegen noch Striche nur auf diesem Gerät. Öffne sie einmal mit Netz und warte auf „Gesichert“, dann geht der Wechsel.';
+  expect(waitingText(0, ['Fr 30.10.2026'])).toBe(`Erst sichern: Auf der Seite „Fr 30.10.2026“ ${tail}`);
+  expect(waitingText(0, ['Fr 30.10.2026', 'KW 44 / 2026'])).toBe(`Erst sichern: Auf den Seiten „Fr 30.10.2026“ und „KW 44 / 2026“ ${tail}`);
+  expect(waitingText(0, ['A', 'B', 'C'])).toBe(`Erst sichern: Auf den Seiten „A“, „B“ und „C“ ${tail}`);
+  expect(waitingText(1, ['Fr 30.10.2026'])).toBe(`Erst sichern: Es wartet noch 1 Änderung, und auf der Seite „Fr 30.10.2026“ ${tail}`);
+  expect(waitingText(2, [])).toBe('Erst sichern: Es warten noch 2 Änderungen.');
 });
 
 // ---------- Speichern ----------

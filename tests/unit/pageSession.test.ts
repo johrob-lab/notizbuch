@@ -7,7 +7,7 @@ import {
   forgetDraftsForTests,
   holdsDrafts,
   PageSession,
-  parkedDrafts,
+  parkedPaths,
   previewStrokes,
   type PageSurface,
   type Phase,
@@ -1726,22 +1726,22 @@ test('draftsSettled waits for every page left in its engine, also for one left w
   expect(settled).toBe(true);
 });
 
-test('parkedDrafts counts the parked drafts of its engine, one per file, until a session takes them', async () => {
+test('parkedPaths lists the files with parked drafts of its engine, one per file, until a session takes them', async () => {
   const engine = fakeEngine(null, { [NEXT_PATH]: null });
   const other = fakeEngine(null);
-  expect(parkedDrafts(engine)).toBe(0);
+  expect(parkedPaths(engine)).toEqual([]);
   await leaveUnloaded(engine, stroke('eins', 3000));
-  expect(parkedDrafts(engine)).toBe(1);
+  expect(parkedPaths(engine)).toEqual([PATH]);
   await leaveUnloaded(engine, stroke('zwei', 4000)); // dieselbe Datei: beide in einem Entwurf
-  expect(parkedDrafts(engine)).toBe(1);
+  expect(parkedPaths(engine)).toEqual([PATH]);
   await leaveUnloaded(engine, stroke('drei', 5000), NEXT_PATH);
-  expect(parkedDrafts(engine)).toBe(2);
-  expect(parkedDrafts(other)).toBe(0);
+  expect(parkedPaths(engine)).toEqual([PATH, NEXT_PATH]);
+  expect(parkedPaths(other)).toEqual([]);
 
   await open(engine, fakeSurface()).session.reload();
-  expect(parkedDrafts(engine)).toBe(1);
+  expect(parkedPaths(engine)).toEqual([NEXT_PATH]);
   await open(engine, fakeSurface(), { path: NEXT_PATH }).session.reload();
-  expect(parkedDrafts(engine)).toBe(0);
+  expect(parkedPaths(engine)).toEqual([]);
   await settle();
   expect(engine.writes.map((text) => ids(text).sort())).toEqual([['eins', 'zwei'], ['drei']]);
 });

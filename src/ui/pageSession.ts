@@ -136,7 +136,7 @@ function remove<T>(list: T[], entry: T): void {
 
 /**
  * Erfüllt, sobald keine verlassene Sitzung der Engine `engine` mehr ihren Entwurf fertig macht, auch keine, die erst während des
- * Wartens dazukam. Dann steht jeder dieser Entwürfe in der Warteschlange der Engine, ist aufgehoben (siehe `parkedDrafts`) oder
+ * Wartens dazukam. Dann steht jeder dieser Entwürfe in der Warteschlange der Engine, ist aufgehoben (siehe `parkedPaths`) oder
  * aufgegeben (eine kaputte Datei). Für den Wechsel des Repositorys. Wirft nie.
  */
 export async function draftsSettled(engine: SessionEngine): Promise<void> {
@@ -147,9 +147,15 @@ export async function draftsSettled(engine: SessionEngine): Promise<void> {
   }
 }
 
-/** Wie viele Entwürfe verlassener Seiten der Engine `engine` aufgehoben sind, je Datei einer. Sie stehen in keiner Warteschlange. */
-export function parkedDrafts(engine: SessionEngine): number {
-  return parked.filter((entry) => entry.engine === engine).length;
+/**
+ * Die Dateien (mit `normalizePath`, sortiert), deren Entwurf eine verlassene Seite der Engine `engine` aufgehoben hat, je Datei
+ * einer. Diese Entwürfe stehen in keiner Warteschlange.
+ */
+export function parkedPaths(engine: SessionEngine): string[] {
+  return parked
+    .filter((entry) => entry.engine === engine)
+    .map((entry) => entry.path)
+    .sort();
 }
 
 /**
