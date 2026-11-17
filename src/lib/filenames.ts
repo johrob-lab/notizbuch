@@ -1,7 +1,7 @@
 import { formatDayLong, MONTHS, type Day } from './dates';
 
 const DAILY_NOTES_DIR = '05 Daily Notes';
-const PAGES_DIR = '07 Anhänge/Notizbuch';
+export const PAGES_DIR = '07 Anhänge/Notizbuch';
 const MAX_THEMA_LENGTH = 80;
 
 /** Die Terminliste, die das Morgenbriefing schreibt. Die App liest sie nur. */

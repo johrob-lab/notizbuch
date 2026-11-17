@@ -3,6 +3,7 @@ import {
   addDays,
   formatDay,
   formatDayLong,
+  formatDayShort,
   formatStand,
   isValidDay,
   isoWeekKey,
@@ -258,4 +259,9 @@ test('nextFullHour always has the form HH:00', () => {
 test('formatStand shows the build time in Vienna, in winter and in summer', () => {
   expect(formatStand('2026-11-12T13:50:00.000Z')).toBe('12.11.2026, 14:50');
   expect(formatStand('2026-07-01T22:05:00.000Z')).toBe('02.07.2026, 00:05');
+});
+
+test('formatDayShort gives weekday and day', () => {
+  expect(formatDayShort('2026-11-17')).toBe('Di 17.11.');
+  expect(formatDayShort('2026-10-29')).toBe('Do 29.10.');
 });
