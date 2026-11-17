@@ -239,6 +239,46 @@ test('a touch move that can not be cancelled is left alone', () => {
   expect(ev.defaultPrevented).toBe(false);
 });
 
+// ---------- Die große Karte ----------
+
+/** Ein Rad an `target`. Gibt das Ereignis zurück: Ob es verhindert ist, sagt, ob der Browser selbst noch scrollen oder zoomen darf. */
+function wheelOn(target: Element, o: { deltaY: number; ctrlKey?: boolean }): WheelEvent {
+  const ev = new WheelEvent('wheel', { deltaY: o.deltaY, bubbles: true, cancelable: true });
+  Object.defineProperty(ev, 'ctrlKey', { value: o.ctrlKey ?? false }); // happy-dom übernimmt `ctrlKey` beim Rad nicht
+  target.dispatchEvent(ev);
+  return ev;
+}
+
+test('fingers and wheel on a big card never go to the page', () => {
+  header.parentElement!.classList.add('karte', 'gross'); // das Morgenbriefing in der Großansicht
+  const wheels: WheelEvent[] = [];
+  host.addEventListener('wheel', (e) => wheels.push(e));
+
+  // Seitwärts, dort, wo nichts scrollt.
+  send(header, 'pointerdown', { id: 1, t: 1000, x: 100, y: 40 });
+  send(header, 'pointermove', { id: 1, t: 1010, x: 160, y: 40 });
+  send(header, 'pointerup', { id: 1, t: 1020, x: 160, y: 40 });
+  expect(handed).toEqual([]);
+  // Senkrecht über das Ende der Liste hinaus: Sie steht oben, der Finger zieht nach unten.
+  send(control, 'pointerdown', { id: 2, t: 2000, x: 100, y: 100 });
+  send(control, 'pointermove', { id: 2, t: 2010, x: 101, y: 160 });
+  expect(touchMove(control).defaultPrevented).toBe(false); // was die Karte selbst kann, macht der Browser weiter
+  // Ein zweiter Finger kommt dazu.
+  send(header, 'pointerdown', { id: 3, t: 2020, x: 200, y: 40 });
+  send(header, 'pointermove', { id: 3, t: 2030, x: 260, y: 40 });
+  send(control, 'pointermove', { id: 2, t: 2040, x: 101, y: 220 });
+  expect(handed).toEqual([]);
+
+  // Ein Rad, wo nichts scrollt: Die Seite bekommt es nicht, und Strg mit Rad zoomt auch den Browser nicht.
+  wheelOn(header, { deltaY: 120 });
+  expect(wheelOn(header, { deltaY: -300, ctrlKey: true }).defaultPrevented).toBe(true);
+  scroller.scrollTop = 300; // die Liste ist ganz unten
+  wheelOn(control, { deltaY: 120 });
+  expect(wheels).toEqual([]);
+  // Wo die Liste noch scrollen kann, scrollt sie selbst.
+  expect(wheelOn(control, { deltaY: -120 }).defaultPrevented).toBe(false);
+});
+
 // ---------- Handballen und Stift ----------
 
 test('a palm on a card is not handed over, and the click it makes is dropped', () => {

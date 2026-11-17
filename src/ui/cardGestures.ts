@@ -19,6 +19,10 @@ import { TAP_SLOP_PX, type GestureFilter } from '../ink/gestures';
 //
 // Rad: Strg (oder Cmd) mit Rad zoomt, sonst wandert die Seite. Ohne das zoomte der Browser die ganze Oberfläche. Nur wo die
 // Karte selbst noch in diese Richtung scrollen kann, scrollt sie.
+//
+// Die große Karte (das Morgenbriefing in der Großansicht, `.karte.gross`) deckt die Seite ganz ab. Ein Finger oder ein Rad, das auf
+// ihr beginnt, geht nie an die Seite: Sie würde sich unsichtbar bewegen. Was die Karte selbst blättern kann, blättert sie weiter.
+// Für Stift und Handballen gilt dort dasselbe wie auf jeder Karte.
 
 /** Wo und wann ein Finger aufgesetzt hat. */
 export type Origin = { clientX: number; clientY: number; timeStamp: number };
@@ -54,7 +58,11 @@ const PALM_CLICK_RADIUS_PX = 40;
  * `ignoriert`: Er ist weder Finger der Seite noch der Karte (Handballen, die Fläche hat ihn nicht angenommen, der Stift kam).
  */
 type Owner = 'offen' | 'seite' | 'karte' | 'ignoriert';
-type Track = { origin: Origin; last: PointerEvent; target: EventTarget | null; owner: Owner };
+/** `big`: Der Finger hat auf der großen Karte aufgesetzt. */
+type Track = { origin: Origin; last: PointerEvent; target: EventTarget | null; owner: Owner; big: boolean };
+
+/** Liegt das Ziel in der großen Karte? */
+const onBigCard = (target: EventTarget | null): boolean => target instanceof Element && target.closest('.karte.gross') !== null;
 
 /** Kann etwas zwischen `from` und `stop` (der Rahmen der Karten) in dieser Richtung noch scrollen? Dann gehört das Rad ihm. */
 export function scrollsFurther(from: EventTarget | null, stop: Element, deltaY: number): boolean {
@@ -83,6 +91,11 @@ export function watchCards(o: CardLayer): () => void {
   const onPaper = (target: EventTarget | null): boolean => target instanceof Node && host.contains(target);
 
   function handOver(track: Track): void {
+    // Ein Finger der großen Karte bleibt bei ihr, was immer er tut.
+    if (track.big) {
+      track.owner = 'karte';
+      return;
+    }
     track.owner = o.surface()?.adopt(track.last, track.origin) ? 'seite' : 'ignoriert';
   }
 
@@ -128,6 +141,7 @@ export function watchCards(o: CardLayer): () => void {
       last: e,
       target: e.target,
       owner: 'offen',
+      big: onBigCard(e.target),
     };
     tracks.set(e.pointerId, here);
     const others = [...tracks.values()].some((track) => track !== here && (track.owner === 'offen' || track.owner === 'seite'));
@@ -179,6 +193,11 @@ export function watchCards(o: CardLayer): () => void {
   }
 
   function onWheel(e: WheelEvent): void {
+    if (onBigCard(e.target)) {
+      // Die große Karte scrollt selbst, was sie scrollen kann. Strg mit Rad zoomt nichts, auch nicht den Browser.
+      if (e.ctrlKey || e.metaKey) e.preventDefault();
+      return;
+    }
     if (!(e.ctrlKey || e.metaKey) && scrollsFurther(e.target, frame, e.deltaY)) return;
     e.preventDefault();
     host.dispatchEvent(

@@ -1442,6 +1442,45 @@ body {
 
 /* ----- Morgenbriefing ----- */
 
+/*
+ * Oben rechts der Knopf „Briefing durchgehen“ (groß: „Fertig“), links daneben der Name der Karte, den die Seite zeichnet. Der
+ * Knopf steht im Fluss der Karte vor dem Inhalt, so liegt nichts unter ihm, und die Karte braucht oben nur einen schmalen Rand.
+ */
+.karte.briefing {
+  padding-top: 6px;
+}
+
+.karte .durchgehen {
+  flex: none;
+  align-self: flex-end;
+  margin-bottom: 6px;
+}
+
+/*
+ * Die Großansicht (BriefingCard.tsx): Die Karte trägt die Klasse `gross` und hat keinen Ort auf der Seite. Die Ebene der Karten
+ * verliert so lange ihre Verschiebung und ihre Lage (PageView setzt das `transform` bei jeder Geste am Element neu, darum
+ * `!important`). Dann ist der Rahmen der Karten das Rechteck der großen Karte: die Bühne unter Leiste und Werkzeugleiste. Sie
+ * liegt über allem auf der Bühne (Lasche 4, Rad und Füllfeder 5) und ist undurchsichtig, die anderen Karten sind unsichtbar. Ihre
+ * Maße sind jetzt Bildschirmpunkte statt Seiteneinheiten, die Schrift etwas größer als in der Karte. Unten bleibt der Streifen frei,
+ * den das iPad ohne Home-Taste für seine Geste braucht.
+ */
+.karten:has(> .karte.gross) {
+  transform: none !important;
+  position: static;
+}
+
+.karten:has(> .karte.gross) > .karte:not(.gross) {
+  visibility: hidden;
+}
+
+.karte.gross {
+  inset: 0;
+  z-index: 6;
+  padding: 8px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: #f5f7f5; /* wie die Karte auf der Seite */
+  font-size: 22px;
+}
+
 .karte .vorspann {
   padding: 0 8px;
 }
