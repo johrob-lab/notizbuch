@@ -1,4 +1,5 @@
 import { isValidDay, weekDays } from '../lib/dates';
+import { istTabelle } from '../lib/meetings';
 import { outlineDOf } from './outline';
 import { BLEISTIFT_OPACITY, PENS, isShape, type PenKind } from './pens';
 import { repairOldLine } from './repair';
@@ -20,8 +21,11 @@ import {
 // ein <path>. Schreiben ist reine Textarbeit und braucht keinen DOM. Nur Lesen und Zusammenführen brauchen
 // den DOMParser.
 
-/** Höchste Formatversion, die diese App liest. 1: nur Kugelschreiber, 2: dazu Fineliner, Füllfeder und Bleistift. */
-export const FORMAT_VERSION = 2;
+/**
+ * Höchste Formatversion, die diese App liest. 1: nur Kugelschreiber, 2: dazu Fineliner, Füllfeder und Bleistift,
+ * 3: Tabellenseite der Arbeitsvorbereitung (ältere Apps würden sie falsch lesen und überschreiben).
+ */
+export const FORMAT_VERSION = 3;
 
 /** Die Seite hat eine höhere Versionsnummer, als diese App kennt. */
 export class PageTooNewError extends Error {
@@ -186,7 +190,7 @@ function writeSvg(head: Pick<Page, 'kind' | 'key' | 'meta'>, background: string,
     ['viewBox', `0 0 ${PAGE_W} ${PAGE_H}`],
     ['width', String(PAGE_W)],
     ['height', String(PAGE_H)],
-    ['data-notizbuch', [...tools].some((t) => t !== 'kugel') ? '2' : '1'],
+    ['data-notizbuch', istTabelle(head.meta) ? '3' : [...tools].some((t) => t !== 'kugel') ? '2' : '1'],
     ['data-seite', head.kind],
     ['data-schluessel', head.key],
   ];

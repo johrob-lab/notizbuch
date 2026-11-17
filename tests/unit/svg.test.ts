@@ -5,6 +5,7 @@ import { outlinePolygons } from '../../src/ink/outline';
 import { StrokeBuilder, toHundredths } from '../../src/ink/stroke';
 import { INK } from '../../src/ink/types';
 import { DEFAULT_FUELLER, MIN_DIST_PX, stabilSigmaPx, type PenKind } from '../../src/ink/pens';
+import { tabelleLayout } from '../../src/pages/layouts';
 import { FORMAT_VERSION, PageTooNewError, mergePages, parsePage, serializePage, storedForm } from '../../src/ink/svg';
 import type { FieldBox, InkColor, Page, Stroke } from '../../src/ink/types';
 import { medianStep, UPRIGHT } from './repairHelpers';
@@ -721,7 +722,7 @@ const version = (svg: string) => /data-notizbuch="(\d+)"/.exec(svg)?.[1];
 
 test('a page with ballpoint strokes only stays version 1 without defs', () => {
   const svg = serializePage(tagPage([penStroke('kugel')]), FIELDS, '');
-  expect(FORMAT_VERSION).toBe(2);
+  expect(FORMAT_VERSION).toBe(3);
   expect(version(svg)).toBe('1');
   expect(svg).not.toContain('<defs>');
   expect(svg).not.toContain('data-linie');
@@ -856,13 +857,13 @@ test('when all new pens are erased the merged page goes back to version 1', () =
   expect(merged).not.toContain('<defs>');
 });
 
-test('a page of version 3 is too new', () => {
-  const svg = svgWith('a').replace('data-notizbuch="1"', 'data-notizbuch="3"');
+test('a page of version 4 is too new', () => {
+  const svg = svgWith('a').replace('data-notizbuch="1"', 'data-notizbuch="4"');
   expect(() => parsePage(svg)).toThrow(PageTooNewError);
   try {
     parsePage(svg);
   } catch (e) {
-    expect((e as PageTooNewError).version).toBe(3);
+    expect((e as PageTooNewError).version).toBe(4);
     expect((e as Error).message).toBe('Diese Seite stammt aus einer neueren Version der App.');
   }
 });
@@ -1256,4 +1257,32 @@ test('old ballpoint and fineliner strokes are never repaired', () => {
   expect(old.every((s) => s.pts.length >= 5 && medianStep(s.pts) < 0.35)).toBe(true);
   const read = parsePage(serializePage(tagPage(old), FIELDS, '')).strokes;
   expect(read.map(places)).toEqual(old.map(places));
+});
+
+function tabellePage(strokes: Stroke[]): Page {
+  return { kind: 'besprechung', key: '2026-10-29 0800 Abstimmung Beispiel 2027', meta: { art: 'tabelle', datum: '2026-10-29', thema: 'Abstimmung Beispiel 2027' }, strokes };
+}
+
+test('a table page is written as version 3, a notes page stays version 1 or 2', () => {
+  const layout = tabelleLayout(tabellePage([]).meta);
+  expect(version(serializePage(tabellePage([penStroke('kugel')]), layout.fields, ''))).toBe('3');
+  expect(version(serializePage(tagPage([penStroke('kugel')]), FIELDS, ''))).toBe('1');
+  expect(version(serializePage(tagPage([penStroke('fueller')]), FIELDS, ''))).toBe('2');
+});
+
+test('a version 3 page is read back, a version 4 page is too new', () => {
+  const layout = tabelleLayout(tabellePage([]).meta);
+  const svg = serializePage(tabellePage([strokeAt(300, 360, 'blau', 't1')]), layout.fields, '');
+  const back = parsePage(svg);
+  expect(back.meta.art).toBe('tabelle');
+  expect(back.strokes.map((s) => s.id)).toEqual(['t1']);
+  expect(() => parsePage(svg.replace('data-notizbuch="3"', 'data-notizbuch="4"'))).toThrow(PageTooNewError);
+});
+
+test('the strokes of a table page are grouped by row', () => {
+  const layout = tabelleLayout(tabellePage([]).meta);
+  const svg = serializePage(tabellePage([strokeAt(300, 360, 'blau', 'zeile'), strokeAt(300, 230, 'blau', 'kopf')]), layout.fields, '');
+  const group = (feld: string) => new RegExp(`<g data-feld="${feld}"[^>]*>[\\s\\S]*?</g>`).exec(svg)?.[0] ?? '';
+  expect(group('zeile-03')).toContain('data-id="zeile"');
+  expect(group('frei')).toContain('data-id="kopf"');
 });
