@@ -285,6 +285,11 @@ body {
   color: #fff;
 }
 
+/* Die Kurzform des Knopfs „Besprechungen“ gilt nur auf schmalen Bildschirmen (siehe unten). */
+.pill .kurz {
+  display: none;
+}
+
 /* Ausgegraut, aber nicht tot: Ein Tipp sagt, wann es kommt. */
 .pill[aria-disabled='true'] {
   opacity: 0.4;
@@ -373,6 +378,15 @@ body {
 @media (max-width: 900px) {
   .topbar {
     gap: 4px;
+  }
+
+  /* Der Knopf „Besprechungen“ ist die längste Beschriftung der Leiste und zeigt hier die Kurzform. */
+  .pill .lang {
+    display: none;
+  }
+
+  .pill .kurz {
+    display: inline;
   }
 
   .pill {
@@ -527,7 +541,8 @@ body {
  * ist (kleines iPad, Tastatur eingeblendet). Die Schrift ist 16 Punkte oder größer, sonst zoomt Safari beim Antippen.
  */
 .einrichten,
-.einstellungen {
+.einstellungen,
+.besprechungen-liste {
   box-sizing: border-box;
   flex: 1;
   min-height: 0;
@@ -538,12 +553,14 @@ body {
 }
 
 .einrichten > *,
-.einstellungen > * {
+.einstellungen > *,
+.besprechungen-liste > * {
   max-width: 560px;
 }
 
 .einrichten h1,
-.einstellungen h1 {
+.einstellungen h1,
+.besprechungen-liste h1 {
   margin: 0 0 12px;
   font-size: 22px;
 }
@@ -1425,6 +1442,76 @@ body {
 
 /* ----- Morgenbriefing ----- */
 
+/*
+ * Oben rechts der Knopf „Briefing durchgehen“ (groß: „Fertig“), links daneben der Name der Karte, den die Seite zeichnet. Der
+ * Knopf steht im Fluss der Karte vor dem Inhalt, so liegt nichts unter ihm, und die Karte braucht oben nur einen schmalen Rand.
+ */
+.karte.briefing {
+  padding-top: 6px;
+}
+
+.karte .durchgehen {
+  flex: none;
+  align-self: flex-end;
+  margin-bottom: 6px;
+}
+
+/*
+ * Die Großansicht (BriefingCard.tsx): Die Karte trägt die Klasse `gross` und hat keinen Ort auf der Seite. Die Ebene der Karten
+ * verliert so lange ihre Verschiebung und ihre Lage (PageView setzt das `transform` bei jeder Geste am Element neu, darum
+ * `!important`). Dann ist der Rahmen der Karten das Rechteck der großen Karte: die Bühne unter Leiste und Werkzeugleiste, im
+ * Vollbild das ganze Fenster. Sie ist undurchsichtig und deckt nur die Seite ab: das Papier, die anderen Karten (unsichtbar) und
+ * „Ganze Seite“ (1), das nur die verdeckte Seite einpassen würde. Was die App sonst über der Bühne zeigt, bleibt über ihr: die
+ * Leiste oben mit Stand und Meldungen (4, auch im Vollbild), die Lasche (4), Rad und Füllfeder (5), die Monatsreiter (2, im DOM
+ * danach), die Hinweise der Seite und der Schnellwechsel (unten). Ihre Maße sind jetzt Bildschirmpunkte statt Seiteneinheiten,
+ * die Schrift etwas größer als in der Karte. Unten bleibt der Streifen frei, den das iPad ohne Home-Taste für seine Geste braucht.
+ */
+.karten:has(> .karte.gross) {
+  transform: none !important;
+  position: static;
+}
+
+.karten:has(> .karte.gross) > .karte:not(.gross) {
+  visibility: hidden;
+}
+
+.karte.gross {
+  inset: 0;
+  z-index: 2;
+  padding: 8px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: #f5f7f5; /* wie die Karte auf der Seite */
+  font-size: 22px;
+}
+
+/*
+ * Die Hinweise der Seite (etwa, dass sich die letzte Änderung nicht speichern ließ) und der Schnellwechsel (im Vollbild das Rad)
+ * liegen im DOM nach den Karten: Mit gleicher Höhe bleiben sie über der großen Karte. „Ganze Seite“ (1) bleibt darunter.
+ */
+.buehne:has(.karte.gross) > .hinweis,
+.buehne:has(.karte.gross) .schnellwechsel {
+  z-index: 2;
+}
+
+/* Wo die Monatsreiter am rechten Rand liegen, bleibt ihr Streifen frei wie im Kopf der Besprechung: Nichts liegt unter ihnen. */
+.inhalt:has(> .monatsreiter) .karte.gross {
+  padding-right: max(56px, env(safe-area-inset-right));
+}
+
+/* Als App vom Home-Bildschirm beginnt die Bühne im Vollbild am oberen Rand: Der Inhalt rückt unter den Glaseffekt wie die Leiste. */
+.heimbildschirm .vollbild .karte.gross {
+  padding-top: calc(max(8px, env(safe-area-inset-top)) + 24px);
+}
+
+/*
+ * Im Vollbild schweben Stand und Meldungen der Leiste oben rechts über der Bühne, genau dort, wo die große Karte „Fertig“ zeigt.
+ * Solange sie offen ist, rückt die Leiste um die Zeile mit „Fertig“ tiefer (Knopf 68, Abstand 8): Die Meldungen bleiben über der
+ * Karte zu lesen, und „Fertig“ bleibt frei. Ihre Abstände nach oben gelten wie sonst, wie die Karte rücken sie als App vom
+ * Home-Bildschirm 24 Punkte tiefer.
+ */
+.vollbild:has(.karte.gross) > .topbar {
+  top: 76px;
+}
+
 .karte .vorspann {
   padding: 0 8px;
 }
@@ -1929,4 +2016,35 @@ body {
 .schnellwechsel[data-modus='stueck'] {
   outline: 2px dashed currentColor;
   outline-offset: -6px;
+}
+
+/* Die Liste der Besprechungen: Monate mit Links, jeder Link mindestens 44 Punkte hoch zum Antippen. */
+.besprechungen-liste h2 {
+  margin: 20px 0 8px;
+  font-size: 18px;
+}
+
+.besprechungen-liste p {
+  margin: 0 0 12px;
+  font-size: 16px;
+  line-height: 1.4;
+  color: #4a5160;
+}
+
+.besprechungen-liste ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.besprechungen-liste li a {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--linie);
+  color: inherit;
+  font-size: 16px;
+  text-decoration: none;
 }

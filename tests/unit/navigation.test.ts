@@ -120,10 +120,10 @@ test('only the current month tab is highlighted', async () => {
 
 // ---------- Leiste ----------
 
-test('the bar has the views in order and only Month, Week and Day lead somewhere yet', async () => {
+test('the bar has the views in order and only Month, Week, Day and Besprechungen lead somewhere yet', async () => {
   await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
   const names = all('nav a, nav button').map((el) => el.textContent);
-  expect(names).toEqual(['Index', 'Jahr', 'Monat', 'Woche', 'Tag', 'To-Dos']);
+  expect(names).toEqual(['Index', 'Jahr', 'Monat', 'Woche', 'Tag', 'To-Dos', 'BesprechungenBespr.']);
   for (const name of ['Index', 'Jahr', 'To-Dos']) {
     const el = item(name);
     expect(el.tagName, name).toBe('BUTTON');
@@ -134,6 +134,18 @@ test('the bar has the views in order and only Month, Week and Day lead somewhere
   expect(item('Monat').getAttribute('href')).toBe('#/monat/2026-10');
   expect(item('Woche').getAttribute('href')).toBe('#/woche/2026-W44');
   expect(item('Tag').getAttribute('href')).toBe('#/tag/2026-10-29');
+  expect(item('Besprechungen').getAttribute('href')).toBe('#/besprechungen');
+});
+
+test('Besprechungen on the open list asks to load it again, from any other view it only leads there', async () => {
+  const reload = vi.fn();
+  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine(), onReloadList: reload }));
+  await act(() => item('Besprechungen').click());
+  expect(reload).not.toHaveBeenCalled();
+  await mount(h(TopBar, { route: route('#/besprechungen'), engine: fakeEngine(), onReloadList: reload }));
+  await act(() => item('Besprechungen').click());
+  expect(reload).toHaveBeenCalledTimes(1);
+  expect(item('Besprechungen').getAttribute('href')).toBe('#/besprechungen');
 });
 
 test('the view of the shown page is marked, and the others keep its date', async () => {

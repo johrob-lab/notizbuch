@@ -24,6 +24,11 @@ import { FAILED } from './texts';
 // des vorigen aus. Ein Haken zeigt sich sofort, ob er stimmt, entscheidet der neueste Text. Ändert sich die Zeile, die man gerade
 // bearbeitet, woanders, bleibt das Feld mit dem Getippten offen (die Zeile wird an ihrer Kennung wiedergefunden). Nur wenn es
 // die Zeile nicht mehr gibt, bleibt der Text sichtbar zum Kopieren stehen.
+//
+// „Briefing durchgehen“ macht die Karte groß: Sie füllt die Bühne unter den Leisten (Klasse `gross`, siehe app.css) und wird mit
+// „Fertig“ wieder zur Karte. Es bleibt dieselbe Karte an derselben Stelle im DOM, nur ihre Klasse wechselt: Aufgeklappte
+// Abschnitte, ein offenes Feld und was darin getippt ist, bleiben, und die Notiz wird nicht neu gelesen. Finger und Rad auf der
+// großen Karte gibt `watchCards` nie an die Seite darunter. Ein anderer Tag ist eine neue Karte, sie beginnt klein.
 
 const NO_NOTE = 'Noch kein Briefing für diesen Tag';
 const LOADING = 'Briefing wird geladen';
@@ -36,6 +41,12 @@ const ERGAENZUNGEN = 'Ergänzungen';
 const OPEN_AT_START = new Set(['Morgenbriefing (automatisch)', ERGAENZUNGEN]);
 /** So lange bleibt ein Hinweis stehen, wenn ihn niemand wegtippt. */
 const NOTICE_MS = 8000;
+/** Arten von `input`, in die man keinen Text tippt: Kästchen, Schalter, Knöpfe und dergleichen. */
+const NOT_TYPED = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'range', 'color', 'file']);
+
+/** Ein Feld zum Tippen von Text: ein `textarea` oder ein `input`, das Text annimmt. */
+const takesText = (target: EventTarget | null): boolean =>
+  target instanceof HTMLTextAreaElement || (target instanceof HTMLInputElement && !NOT_TYPED.has(target.type));
 
 /**
  * `laden`: noch nicht gelesen. `bereit`: gelesen, die Notiz oder ihr Fehlen steht fest. `offline`: es gibt keine Kopie, und
@@ -109,6 +120,8 @@ export function BriefingCard({ engine, day, rect }: Props) {
   const root = useRef<HTMLElement>(null);
   /** Was im Eingabefeld der Bearbeitung steht. Das Feld hält es selbst, die Karte erfährt es hier, ohne neu zu zeichnen. */
   const draft = useRef('');
+  /** Die Großansicht („Briefing durchgehen“) ist offen. */
+  const [gross, setGross] = useState(false);
 
   const update = (patch: Partial<State> | ((now: State) => Partial<State>)) => {
     const next = { ...current.current, ...(typeof patch === 'function' ? patch(current.current) : patch) };
@@ -171,6 +184,20 @@ export function BriefingCard({ engine, day, rect }: Props) {
     const timer = setTimeout(() => update({ notice: null }), NOTICE_MS);
     return () => clearTimeout(timer);
   }, [state.notice]);
+
+  // Escape schließt die Großansicht, wo auch immer der Fokus steht, außer in einem Feld zum Tippen: Dort gehört Escape dem Feld (in
+  // der Bearbeitung verwirft es das Getippte). Ein Kästchen, das man mit der Maus angeklickt hat, behält den Fokus: Dort schließt
+  // Escape wie überall. Hat schon jemand anderes Escape verbraucht, bleibt sie offen.
+  useEffect(() => {
+    if (!gross) return;
+    const escape = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || takesText(e.target)) return;
+      e.preventDefault();
+      setGross(false);
+    };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, [gross]);
 
   /**
    * Ein Vorgang an der Notiz. Er läuft in der Warteschlange und liest zuerst den neuesten Text (`lookupFresh`: von GitHub, wenn
@@ -342,7 +369,12 @@ export function BriefingCard({ engine, day, rect }: Props) {
   const notice = state.notice;
 
   return (
-    <section ref={root} class="karte briefing" aria-label="Morgenbriefing" aria-busy={busy} style={cardStyle(rect)}>
+    // Groß hat die Karte keinen Ort auf der Seite: Sie füllt den Rahmen der Karten (app.css).
+    <section ref={root} class={gross ? 'karte briefing gross' : 'karte briefing'} aria-label="Morgenbriefing" aria-busy={busy} style={gross ? undefined : cardStyle(rect)}>
+      {/* Oben rechts, im Fluss der Karte vor dem Inhalt: So liegt nichts unter ihm. */}
+      <button type="button" class="knopf durchgehen" onClick={() => setGross((on) => !on)}>
+        {gross ? 'Fertig' : 'Briefing durchgehen'}
+      </button>
       <div class="karten-inhalt">
         {state.phase === 'laden' && <p class="leer">{LOADING}</p>}
         {state.phase === 'offline' && <p class="leer">{OFFLINE}</p>}

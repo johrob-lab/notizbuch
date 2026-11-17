@@ -14,7 +14,7 @@ const TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 /** `2026-10-29 0800 Thema`: Tag, Uhrzeit ohne Doppelpunkt und das Thema, wie es im Dateinamen steht. */
 const MEETING_BASE = /^(?<datum>\d{4}-\d{2}-\d{2}) (?<stunde>[01]\d|2[0-3])(?<minute>[0-5]\d) (?<thema>.+)$/;
 /** `2026-10-29 0800 Thema S2.svg`: eine Seite einer Besprechung. Konfliktkopien und andere Endungen gehören nicht dazu. */
-const MEETING_PAGE = /^(?<datum>\d{4}-\d{2}-\d{2}) (?<zeit>(?:[01]\d|2[0-3])[0-5]\d) (?<thema>.+) S(?<seite>[1-9]\d*)\.svg$/;
+export const MEETING_PAGE = /^(?<datum>\d{4}-\d{2}-\d{2}) (?<zeit>(?:[01]\d|2[0-3])[0-5]\d) (?<thema>.+) S(?<seite>[1-9]\d*)\.svg$/;
 
 /** Wert der Kopfangabe `art` für eine Tabellenseite. Fehlt `art` oder ist sie leer, ist es eine Notizseite. */
 export const ART_TABELLE = 'tabelle';

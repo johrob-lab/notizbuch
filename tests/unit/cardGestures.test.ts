@@ -239,6 +239,78 @@ test('a touch move that can not be cancelled is left alone', () => {
   expect(ev.defaultPrevented).toBe(false);
 });
 
+// ---------- Die große Karte ----------
+
+/** Ein Rad an `target`. Gibt das Ereignis zurück: Ob es verhindert ist, sagt, ob der Browser selbst noch scrollen oder zoomen darf. */
+function wheelOn(target: Element, o: { deltaY: number; ctrlKey?: boolean }): WheelEvent {
+  const ev = new WheelEvent('wheel', { deltaY: o.deltaY, bubbles: true, cancelable: true });
+  Object.defineProperty(ev, 'ctrlKey', { value: o.ctrlKey ?? false }); // happy-dom übernimmt `ctrlKey` beim Rad nicht
+  target.dispatchEvent(ev);
+  return ev;
+}
+
+/** Die Karte wird zur großen Karte (das Morgenbriefing in der Großansicht). */
+const makeBig = () => header.parentElement!.classList.add('karte', 'gross');
+
+test('fingers and wheel on a big card never go to the page', () => {
+  makeBig();
+  const wheels: WheelEvent[] = [];
+  host.addEventListener('wheel', (e) => wheels.push(e));
+
+  // Seitwärts, dort, wo nichts scrollt.
+  send(header, 'pointerdown', { id: 1, t: 1000, x: 100, y: 40 });
+  send(header, 'pointermove', { id: 1, t: 1010, x: 160, y: 40 });
+  send(header, 'pointerup', { id: 1, t: 1020, x: 160, y: 40 });
+  expect(handed).toEqual([]);
+  // Senkrecht über das Ende der Liste hinaus: Sie steht oben, der Finger zieht nach unten.
+  send(control, 'pointerdown', { id: 2, t: 2000, x: 100, y: 100 });
+  send(control, 'pointermove', { id: 2, t: 2010, x: 101, y: 160 });
+  expect(touchMove(control).defaultPrevented).toBe(false); // was die Karte selbst kann, macht der Browser weiter
+  // Ein zweiter Finger kommt dazu.
+  send(header, 'pointerdown', { id: 3, t: 2020, x: 200, y: 40 });
+  send(header, 'pointermove', { id: 3, t: 2030, x: 260, y: 40 });
+  send(control, 'pointermove', { id: 2, t: 2040, x: 101, y: 220 });
+  expect(handed).toEqual([]);
+
+  // Ein Rad, wo nichts scrollt: Die Seite bekommt es nicht, und Strg mit Rad zoomt auch den Browser nicht.
+  wheelOn(header, { deltaY: 120 });
+  expect(wheelOn(header, { deltaY: -300, ctrlKey: true }).defaultPrevented).toBe(true);
+  scroller.scrollTop = 300; // die Liste ist ganz unten
+  wheelOn(control, { deltaY: 120 });
+  expect(wheels).toEqual([]);
+  // Wo die Liste noch scrollen kann, scrollt sie selbst.
+  expect(wheelOn(control, { deltaY: -120 }).defaultPrevented).toBe(false);
+});
+
+test('two fingers that land on a big card together stay with it, while the first still taps', () => {
+  makeBig();
+  // Der erste Finger hat sich noch nicht bewegt, da kommt der zweite: Auf einer Karte gingen jetzt beide an die Seite.
+  send(control, 'pointerdown', { id: 1, t: 1000, x: 100, y: 100 });
+  send(header, 'pointerdown', { id: 2, t: 1020, x: 160, y: 40 });
+  expect(handed).toEqual([]);
+  // Sie ziehen auseinander wie zum Zoomen und heben ab.
+  send(control, 'pointermove', { id: 1, t: 1030, x: 60, y: 140 });
+  send(header, 'pointermove', { id: 2, t: 1030, x: 220, y: 20 });
+  send(control, 'pointerup', { id: 1, t: 1040, x: 60, y: 140 });
+  send(header, 'pointerup', { id: 2, t: 1040, x: 220, y: 20 });
+  expect(handed).toEqual([]);
+});
+
+test('a finger on a big card stays with it while the page already has a finger', () => {
+  makeBig();
+  live.add(9); // ein Finger liegt auf dem Papier: Auf einer Karte gehörte jeder neue sofort der Seite
+  send(header, 'pointerdown', { id: 2, t: 1000, x: 100, y: 40 });
+  send(header, 'pointermove', { id: 2, t: 1010, x: 160, y: 40 });
+  expect(handed).toEqual([]);
+});
+
+test('a finger that lands on the paper does not take a finger of the big card along', () => {
+  makeBig();
+  send(control, 'pointerdown', { id: 1, t: 1000, x: 100, y: 100 });
+  send(host, 'pointerdown', { id: 2, t: 1010, x: 400, y: 600 });
+  expect(handed).toEqual([]);
+});
+
 // ---------- Handballen und Stift ----------
 
 test('a palm on a card is not handed over, and the click it makes is dropped', () => {

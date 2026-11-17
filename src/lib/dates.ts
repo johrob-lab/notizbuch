@@ -135,6 +135,11 @@ export function formatDayLong(d: Day): string {
   return `${WEEKDAY_NAMES[weekdayIndex(d)]} ${formatDay(d)}`;
 }
 
+/** Zum Beispiel `Do 29.10.`: Wochentag und Tag ohne Jahr. */
+export function formatDayShort(d: Day): string {
+  return `${WEEKDAY_NAMES[weekdayIndex(d)]} ${d.slice(8, 10)}.${d.slice(5, 7)}.`;
+}
+
 /**
  * `true`, wenn `d` genau die Form `YYYY-MM-DD` hat und es diesen Tag im Kalender gibt
  * (`2026-02-30` und `2026-13-45` gibt es nicht).
