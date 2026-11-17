@@ -3,7 +3,7 @@ import { mergeMeetings, type MeetingRef } from '../lib/dayMeetings';
 import { PAGES_DIR } from '../lib/filenames';
 import { meetingLabel, meetingMonths, meetingsInPaths } from '../lib/meetingList';
 import type { SyncEngine } from '../sync/engine';
-import type { ListDir } from '../sync/github';
+import { withTimeout, type ListDir } from '../sync/github';
 import { routeHash } from './router';
 
 // Die Liste aller Besprechungen, neueste zuerst, nach Monaten. Sie liest, was GitHub hat (die Jahresordner von
@@ -28,7 +28,8 @@ async function listedPaths(listDir: ListDir): Promise<string[]> {
 
 async function load(engine: SyncEngine, listDir: ListDir): Promise<Loaded> {
   const [github, device] = await Promise.all([
-    listedPaths(listDir).then(
+    // Eine Anfrage, die nie antwortet, gilt nach der üblichen Zeit als fehlendes Netz: Die Liste bleibt nicht beim Laden hängen.
+    withTimeout(() => listedPaths(listDir)).then(
       (paths) => ({ listed: meetingsInPaths(paths), offline: false }),
       () => ({ listed: [], offline: true }), // ohne die Liste von GitHub gilt, was dieses Gerät hat
     ),
