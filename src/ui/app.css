@@ -542,7 +542,7 @@ body {
  */
 .einrichten,
 .einstellungen,
-.besprechungen {
+.besprechungen-liste {
   box-sizing: border-box;
   flex: 1;
   min-height: 0;
@@ -554,13 +554,13 @@ body {
 
 .einrichten > *,
 .einstellungen > *,
-.besprechungen > * {
+.besprechungen-liste > * {
   max-width: 560px;
 }
 
 .einrichten h1,
 .einstellungen h1,
-.besprechungen h1 {
+.besprechungen-liste h1 {
   margin: 0 0 12px;
   font-size: 22px;
 }
@@ -2019,25 +2019,25 @@ body {
 }
 
 /* Die Liste der Besprechungen: Monate mit Links, jeder Link mindestens 44 Punkte hoch zum Antippen. */
-.besprechungen h2 {
+.besprechungen-liste h2 {
   margin: 20px 0 8px;
   font-size: 18px;
 }
 
-.besprechungen p {
+.besprechungen-liste p {
   margin: 0 0 12px;
   font-size: 16px;
   line-height: 1.4;
   color: #4a5160;
 }
 
-.besprechungen ul {
+.besprechungen-liste ul {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.besprechungen li a {
+.besprechungen-liste li a {
   display: flex;
   align-items: center;
   box-sizing: border-box;

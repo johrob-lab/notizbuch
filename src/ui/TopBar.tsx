@@ -26,6 +26,8 @@ type Props = {
   vollbild?: boolean;
   /** Schaltet das Vollbild ein. Ohne diese Angabe (die Einstellungen) gibt es den Knopf nicht. */
   onVollbild?(): void;
+  /** „Besprechungen“ wird angetippt, während die Liste schon offen ist: Sie soll neu laden. Von jeder anderen Ansicht führt der Knopf nur hin. */
+  onReloadList?(): void;
 };
 
 type Note = { id: number; text: string; alert: boolean; start?: boolean };
@@ -73,7 +75,7 @@ function Step({ label, symbol, from, to }: { label: string; symbol: string; from
  * Meldungen der Engine auf (Konfliktkopie, Fehler beim Abgleich) und bleiben, bis man sie schließt. Ein Hinweis, der nur
  * informiert, verschwindet nach 8 Sekunden von selbst.
  */
-export function TopBar({ route, engine, steps, startNotice, passive, blocked, vollbild, onVollbild }: Props) {
+export function TopBar({ route, engine, steps, startNotice, passive, blocked, vollbild, onVollbild, onReloadList }: Props) {
   const [notes, setNotes] = useState<Note[]>([]);
   const lastId = useRef(0);
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -179,7 +181,14 @@ export function TopBar({ route, engine, steps, startNotice, passive, blocked, vo
             </button>
           ),
         )}
-        <a class="pill" href="#/besprechungen" aria-label="Besprechungen" aria-current={route.view === 'besprechungen' ? 'page' : undefined}>
+        {/* Ist die Liste schon offen, ändert ein Tipp die Adresse nicht: Dann lädt sie auf diesem Weg neu. */}
+        <a
+          class="pill"
+          href="#/besprechungen"
+          aria-label="Besprechungen"
+          aria-current={route.view === 'besprechungen' ? 'page' : undefined}
+          onClick={route.view === 'besprechungen' ? onReloadList : undefined}
+        >
           <span class="lang" aria-hidden="true">Besprechungen</span>
           <span class="kurz" aria-hidden="true">Bespr.</span>
         </a>

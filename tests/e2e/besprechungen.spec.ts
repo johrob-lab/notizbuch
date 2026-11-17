@@ -1,7 +1,7 @@
 import { expect, test as base, type Page } from '@playwright/test';
 import { serializePage } from '../../src/ink/svg';
 import { meetingLayout } from '../../src/pages/layouts';
-import { openSeeded } from './helpers/app';
+import { networkBack, openSeeded } from './helpers/app';
 
 /**
  * Jeder Test achtet auf Fehler, die im Browser unbehandelt bleiben, und darauf, dass die App nie einen Dialog des
@@ -98,7 +98,7 @@ test('the button opens all meetings, the newest on top', async ({ page }) => {
   await expect(first).toBeVisible();
   await expect(link(page, 'Do 29.10. · 08:00 · Abstimmung Beispiel 2027')).toBeVisible();
   await expect(link(page, 'Di 04.03. · 14:00 · Baustelle Beispiel')).toBeVisible();
-  await expect(page.locator('section.besprechungen a')).toHaveCount(3);
+  await expect(page.locator('section.besprechungen-liste a')).toHaveCount(3);
 
   await first.click();
   await expect.poll(() => hash(page)).toBe(`#/besprechung/${encodeURIComponent(NOV)}/1`);
@@ -116,8 +116,39 @@ test('a meeting made offline on this device is listed with the hint', async ({ p
   await expect(page.getByRole('status').filter({ hasText: HINT })).toBeVisible();
   await expect(page.getByText('Besprechungen werden geladen')).toHaveCount(0);
   // Was nur im Repo liegt, kennt dieses Gerät nicht.
-  await expect(page.locator('section.besprechungen a')).toHaveCount(1);
+  await expect(page.locator('section.besprechungen-liste a')).toHaveCount(1);
   await expect(page.getByText('Abstimmung')).toHaveCount(0);
+});
+
+test('a list opened without network loads again by itself when the network is back', async ({ page }) => {
+  const repo = await openSeeded(page, DAY, { files: repoFiles() });
+  repo.offline = true;
+  await link(page, 'Besprechungen').click();
+  await expect(page.getByRole('status').filter({ hasText: HINT })).toBeVisible();
+  await expect(page.getByText('Noch keine Besprechungen')).toBeVisible();
+
+  repo.offline = false;
+  await networkBack(page);
+  await expect(link(page, 'Di 03.11. · 09:00 · Abstimmung Muster 2028 · 2 Seiten')).toBeVisible();
+  await expect(page.locator('section.besprechungen-liste a')).toHaveCount(3);
+  await expect(page.getByText(HINT)).toHaveCount(0);
+  await expect(page.getByText('Noch keine Besprechungen')).toHaveCount(0);
+  expect(await hash(page)).toBe(LIST);
+});
+
+test('a tap on Besprechungen while the list is open loads it again', async ({ page }) => {
+  const repo = await openSeeded(page, DAY, { files: repoFiles() });
+  repo.offline = true;
+  await link(page, 'Besprechungen').click();
+  await expect(page.getByRole('status').filter({ hasText: HINT })).toBeVisible();
+
+  // Das Netz ist zurück, ohne dass das Gerät es meldet: Nur der Tipp lädt die Liste neu.
+  repo.offline = false;
+  await link(page, 'Besprechungen').click();
+  await expect(link(page, 'Di 03.11. · 09:00 · Abstimmung Muster 2028 · 2 Seiten')).toBeVisible();
+  await expect(page.locator('section.besprechungen-liste a')).toHaveCount(3);
+  await expect(page.getByText(HINT)).toHaveCount(0);
+  expect(await hash(page)).toBe(LIST);
 });
 
 test('with network the new meeting and the repo meetings are both there, without hint', async ({ page }) => {

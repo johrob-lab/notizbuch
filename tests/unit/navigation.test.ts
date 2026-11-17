@@ -137,6 +137,17 @@ test('the bar has the views in order and only Month, Week, Day and Besprechungen
   expect(item('Besprechungen').getAttribute('href')).toBe('#/besprechungen');
 });
 
+test('Besprechungen on the open list asks to load it again, from any other view it only leads there', async () => {
+  const reload = vi.fn();
+  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine(), onReloadList: reload }));
+  await act(() => item('Besprechungen').click());
+  expect(reload).not.toHaveBeenCalled();
+  await mount(h(TopBar, { route: route('#/besprechungen'), engine: fakeEngine(), onReloadList: reload }));
+  await act(() => item('Besprechungen').click());
+  expect(reload).toHaveBeenCalledTimes(1);
+  expect(item('Besprechungen').getAttribute('href')).toBe('#/besprechungen');
+});
+
 test('the view of the shown page is marked, and the others keep its date', async () => {
   await mount(h(TopBar, { route: route('#/woche/2026-W45'), engine: fakeEngine() }));
   expect(item('Woche').getAttribute('aria-current')).toBe('page');

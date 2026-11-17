@@ -116,6 +116,9 @@ export function App() {
   const [pageSteps, setPageSteps] = useState<{ hash: string; steps: Steps } | null>(null);
   const here = routeHash(route);
   const reportSteps = useCallback((steps: Steps | null) => setPageSteps(steps && { hash: here, steps }), [here]);
+  // Ein Tipp auf „Besprechungen“, während die Liste offen ist, zählt hoch. Die Zahl gehört zum Schlüssel der Liste: Sie entsteht
+  // neu und lädt alles noch einmal.
+  const [listRound, setListRound] = useState(0);
 
   // Der Hinweis zum Start: Er kommt mit dem Start der Sitzung und, wenn sich dadurch ein anderer Text ergibt, noch einmal an einem anderen
   // Tag, sobald die App wieder sichtbar wird. Derselbe Text kommt nicht wieder, auch wenn man ihn geschlossen hat. (`today` stößt nur
@@ -427,6 +430,7 @@ export function App() {
             blocked={switching}
             vollbild={fullscreen}
             onVollbild={() => setVollbild({ an: true })}
+            onReloadList={() => setListRound((round) => round + 1)}
           />
           {banner !== null && (
             <p class="fensterhinweis" role="status">
@@ -445,7 +449,7 @@ export function App() {
                 onAccess={changeAccess}
               />
             ) : route.view === 'besprechungen' ? (
-              <BesprechungenPage key={here} engine={boot.engine} listDir={boot.listDir} />
+              <BesprechungenPage key={`${here} ${listRound}`} engine={boot.engine} listDir={boot.listDir} />
             ) : (
               <Seite
                 key={here}
