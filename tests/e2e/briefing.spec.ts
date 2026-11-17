@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test as base, type Locator, type Page } from '@playwright/test';
 import { openSeeded, queued } from './helpers/app';
-import { viewOf } from './helpers/pointer';
+import { pen, viewOf } from './helpers/pointer';
 import { touchscreen } from './helpers/touch';
 
 // „Briefing durchgehen“: Die Karte „Morgenbriefing“ der Tagesseite füllt die Bühne und wird mit „Fertig“ wieder zur Karte. Es
@@ -55,6 +55,9 @@ const TODAY = '2026-10-29';
 const DAY = `#/tag/${TODAY}`;
 const NOTE = '05 Daily Notes/2026-10-29.md';
 const TAG_PAGE = `07 Anhänge/Notizbuch/2026/${TODAY} Tag.svg`;
+/** Eine Tagesseite, die sich nicht lesen lässt (wie in tag.spec.ts), und der Hinweis, den die Bühne dann zeigt. */
+const BROKEN_PAGE = '<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="1"';
+const UNREADABLE = 'Diese Seite lässt sich nicht lesen und wird nicht verändert.';
 
 /** Die erste Aufgabe des Morgenbriefings im Mini-Vault, genau wie in der Datei, und die Namen der ersten beiden Kästchen. */
 const TASK1 = '- [ ] Liste Planobjekte ergänzen (fällig 30.10.) %%todo:AAMkTEST1%%';
@@ -257,7 +260,73 @@ test.describe('with a touch screen', () => {
     await penOnScreen(page, points);
     expect(await strokeCount(page)).toBe(1);
   });
+
+  /**
+   * Öffnet die Großansicht über einer Seite mit einem Strich (ein Tipp mit zwei Fingern, der bei der Seite ankäme, nähme ihn
+   * zurück). Gibt die Mitte der großen Karte und wie die Seite liegt zurück.
+   */
+  async function bigOverStroke(page: Page) {
+    await opened(page);
+    await pen(page).stroke([
+      [200, 900],
+      [260, 920],
+      [320, 900],
+    ]);
+    expect(await strokeCount(page)).toBe(1);
+    await button(page, 'Briefing durchgehen').click();
+    await expect(button(page, 'Fertig')).toBeVisible();
+    await afterPalmWindow(page);
+    const box = await boxOf(briefing(page));
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2, layer: await layerTransform(page), view: await viewOf(page) };
+  }
+
+  test('a pinch on the big briefing neither moves nor zooms the page', async ({ page }) => {
+    const { x, y, layer, view } = await bigOverStroke(page);
+    // Auseinander und dabei nach unten: Auf der Seite wäre das ein Zoom auf das Dreifache und ein Verschieben.
+    await (await touchscreen(page)).pinch(
+      [
+        [x - 50, y],
+        [x + 50, y],
+      ],
+      [
+        [x - 150, y + 60],
+        [x + 150, y + 60],
+      ],
+    );
+    await twoFrames(page);
+    expect(await layerTransform(page)).toBe(layer);
+    expect(await viewOf(page)).toEqual(view);
+    expect(await strokeCount(page)).toBe(1);
+  });
+
+  test('a two finger tap on the big briefing undoes nothing', async ({ page }) => {
+    const { x, y, layer, view } = await bigOverStroke(page);
+    await (await touchscreen(page)).twoFingerTap([x - 40, y], [x + 40, y]);
+    await twoFrames(page);
+    expect(await strokeCount(page)).toBe(1);
+    expect(await layerTransform(page)).toBe(layer);
+    expect(await viewOf(page)).toEqual(view);
+  });
 });
+
+for (const ctrl of [false, true]) {
+  test(ctrl ? 'Control and the wheel over the big briefing zoom nothing' : 'a wheel over the big briefing does not move the page', async ({ page }) => {
+    await opened(page);
+    await button(page, 'Briefing durchgehen').click();
+    await expect(button(page, 'Fertig')).toBeVisible();
+    const layer = await layerTransform(page);
+    const view = await viewOf(page);
+    // Ein echtes Rad über der Mitte der Karte: Der Browser gibt es dem, was dort zuoberst liegt.
+    const box = await boxOf(briefing(page));
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    if (ctrl) await page.keyboard.down('Control');
+    await page.mouse.wheel(0, ctrl ? -300 : 300);
+    if (ctrl) await page.keyboard.up('Control');
+    await twoFrames(page);
+    expect(await layerTransform(page)).toBe(layer);
+    expect(await viewOf(page)).toEqual(view);
+  });
+}
 
 test('Escape closes the big briefing', async ({ page }) => {
   await opened(page);
@@ -307,7 +376,7 @@ test('flipping to another day closes it', async ({ page }) => {
   await expect(briefing(page)).not.toHaveClass(/\bgross\b/);
 });
 
-// ---------- Was die App zum Bedienen zeigt, bleibt über der großen Karte ----------
+// ---------- Was die App zum Bedienen und Hinweise über der Bühne zeigt, bleibt über der großen Karte ----------
 
 /** Liegt an der Mitte des Elements das Element selbst (oder etwas in ihm) zuoberst? */
 async function onTop(locator: Locator): Promise<boolean> {
@@ -373,4 +442,20 @@ test('as an app from the home screen in fullscreen, the big briefing starts belo
   // Wie die Leiste oben dort: 24 Punkte tiefer als im Tab des Browsers.
   await expect(briefing(page)).toHaveCSS('padding-top', '32px');
   expect((await boxOf(button(page, 'Fertig'))).y).toBeGreaterThanOrEqual(32);
+});
+
+test('a hint of the page stays above the big briefing, the button Ganze Seite stays under it', async ({ page }) => {
+  // Die Tagesseite selbst lässt sich nicht lesen: Die Bühne zeigt den Hinweis dazu (eine Warnung) und „Ganze Seite“.
+  await openSeeded(page, DAY, { files: { [TAG_PAGE]: BROKEN_PAGE } });
+  const hint = page.locator('p.hinweis', { hasText: UNREADABLE });
+  await expect(hint).toBeVisible();
+  await expect(hint).toHaveAttribute('role', 'alert');
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await button(page, 'Briefing durchgehen').click();
+  await expect(button(page, 'Fertig')).toBeVisible();
+  // Ein Hinweis nimmt keine Zeiger an (pointer-events: none), `elementFromPoint` sähe durch ihn hindurch. Für die Prüfung nimmt er sie an.
+  await hint.evaluate((el) => void ((el as HTMLElement).style.pointerEvents = 'auto'));
+  expect(await onTop(hint), 'der Hinweis liegt über der Karte').toBe(true);
+  // „Ganze Seite“ passt nur die verdeckte Seite ein.
+  expect(await onTop(button(page, 'Ganze Seite')), '„Ganze Seite“ liegt unter der Karte').toBe(false);
 });

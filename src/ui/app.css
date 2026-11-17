@@ -1460,10 +1460,10 @@ body {
  * Die Großansicht (BriefingCard.tsx): Die Karte trägt die Klasse `gross` und hat keinen Ort auf der Seite. Die Ebene der Karten
  * verliert so lange ihre Verschiebung und ihre Lage (PageView setzt das `transform` bei jeder Geste am Element neu, darum
  * `!important`). Dann ist der Rahmen der Karten das Rechteck der großen Karte: die Bühne unter Leiste und Werkzeugleiste, im
- * Vollbild das ganze Fenster. Sie ist undurchsichtig und deckt nur die Seite ab: das Papier, die anderen Karten (unsichtbar), die
- * Hinweise der Seite und „Ganze Seite“ (alle 1), das nur die verdeckte Seite einpassen würde. Was die App zum Bedienen darüber zeigt,
- * bleibt über ihr: die Leiste oben mit Stand und Meldungen (4, auch im Vollbild), die Lasche (4), Rad und Füllfeder (5), die
- * Monatsreiter (2, im DOM danach) und der Schnellwechsel (unten). Ihre Maße sind jetzt Bildschirmpunkte statt Seiteneinheiten,
+ * Vollbild das ganze Fenster. Sie ist undurchsichtig und deckt nur die Seite ab: das Papier, die anderen Karten (unsichtbar) und
+ * „Ganze Seite“ (1), das nur die verdeckte Seite einpassen würde. Was die App sonst über der Bühne zeigt, bleibt über ihr: die
+ * Leiste oben mit Stand und Meldungen (4, auch im Vollbild), die Lasche (4), Rad und Füllfeder (5), die Monatsreiter (2, im DOM
+ * danach), die Hinweise der Seite und der Schnellwechsel (unten). Ihre Maße sind jetzt Bildschirmpunkte statt Seiteneinheiten,
  * die Schrift etwas größer als in der Karte. Unten bleibt der Streifen frei, den das iPad ohne Home-Taste für seine Geste braucht.
  */
 .karten:has(> .karte.gross) {
@@ -1483,7 +1483,11 @@ body {
   font-size: 22px;
 }
 
-/* Der Schnellwechsel (im Vollbild das Rad) liegt im DOM nach den Karten: Mit gleicher Höhe bleibt er über der großen Karte. */
+/*
+ * Die Hinweise der Seite (etwa, dass sich die letzte Änderung nicht speichern ließ) und der Schnellwechsel (im Vollbild das Rad)
+ * liegen im DOM nach den Karten: Mit gleicher Höhe bleiben sie über der großen Karte. „Ganze Seite“ (1) bleibt darunter.
+ */
+.buehne:has(.karte.gross) > .hinweis,
 .buehne:has(.karte.gross) .schnellwechsel {
   z-index: 2;
 }
