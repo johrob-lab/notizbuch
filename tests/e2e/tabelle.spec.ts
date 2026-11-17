@@ -1,8 +1,9 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test as base, type Page, type Route } from '@playwright/test';
 import { serializePage } from '../../src/ink/svg';
 import type { Stroke } from '../../src/ink/types';
 import { meetingLayout } from '../../src/pages/layouts';
-import { openSeeded, queued, sendToBackground } from './helpers/app';
+import { localFiles, openSeeded, queued, sendToBackground } from './helpers/app';
 import { mouse, pen } from './helpers/pointer';
 
 /**
@@ -142,4 +143,91 @@ test('plus page on a table page makes another table page', async ({ page }) => {
   const text = repo.puts.find((p) => p.path === PAGE2)?.text ?? '';
   expect(text).toContain('data-art="tabelle"');
   expect(text).toContain('data-notizbuch="3"');
+});
+
+// Der Knopf „Für Excel herunterladen“.
+
+const DOWNLOAD = 'Für Excel herunterladen';
+const CSV_NAME = `${BASE} Tabelle.csv`;
+const CSV_PATH = `${FILES}/${CSV_NAME}`;
+const JSON_PATH = `${FILES}/${BASE} Tabelle.json`;
+const KOPF =
+  'Besprechung;Datum;Seite;Zeile;Vorhaben;Schritt;Monat;Faktor1;Faktor2;Faktor3;Anzahl;wer;Fahrzeuge;Ressourcen;Material_EUR;Fremd_EUR;Bemerkung;Mass1;Einheit1;Mass2;Einheit2;Mass3;Einheit3;Unsicher';
+const CSV = '\uFEFF' + KOPF + '\r\n' + 'Abstimmung Muster 2027;2026-10-29;1;2;Musterbrücke 4711;Vorarbeiten;3;50;2;;;KI;BCR 8;SAS ET 8;;;;;;;;;;\r\n';
+const NOT_TYPED = 'Noch nicht abgetippt. Die CSV kommt mit der Abendroutine.';
+const NO_NETWORK = 'Zum Herunterladen braucht die App Netz.';
+const STALE = 'Stand der CSV: 29.10., 19:02. Neuere Striche kommen mit der nächsten Abendroutine dazu.';
+const STORE = JSON.stringify({ format: 1, verarbeitet: '2026-10-29 19:02', seiten: { '1': { stand: 1000 } } });
+
+test('on the office PC the button downloads the CSV byte for byte', async ({ page }) => {
+  await openSeeded(page, hashOf(BASE, 1), {
+    device: 'Firmen-PC',
+    files: { [PAGE1]: tablePageText(1), [CSV_PATH]: CSV, [JSON_PATH]: STORE },
+  });
+  const download = page.waitForEvent('download');
+  await button(page, DOWNLOAD).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toBe(CSV_NAME);
+  const path = await file.path();
+  expect(await readFile(path)).toEqual(Buffer.from(CSV, 'utf8'));
+});
+
+test('on the iPad the button hands the CSV to the share sheet', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { shared?: { name: string; bytes: number[] } };
+    Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true });
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: async (data: ShareData) => {
+        const file = data.files![0];
+        w.shared = { name: file.name, bytes: [...new Uint8Array(await file.arrayBuffer())] };
+      },
+    });
+  });
+  await openSeeded(page, hashOf(BASE, 1), { files: { [PAGE1]: tablePageText(1), [CSV_PATH]: CSV, [JSON_PATH]: STORE } });
+  await button(page, DOWNLOAD).click();
+  await page.waitForFunction(() => 'shared' in window);
+  const shared = await page.evaluate(() => (window as unknown as { shared: { name: string; bytes: number[] } }).shared);
+  expect(shared.name).toBe(CSV_NAME);
+  expect(Buffer.from(shared.bytes)).toEqual(Buffer.from(CSV, 'utf8'));
+});
+
+test('without a CSV the button says it comes with the evening routine', async ({ page }) => {
+  await openSeeded(page, hashOf(BASE, 1), { device: 'Firmen-PC', files: { [PAGE1]: tablePageText(1) } });
+  let downloads = 0;
+  page.on('download', () => downloads++);
+  await button(page, DOWNLOAD).click();
+  await expect(page.getByText(NOT_TYPED, { exact: true })).toBeVisible();
+  expect(downloads).toBe(0);
+});
+
+test('without network the button says so', async ({ page }) => {
+  // Erst mit Netz öffnen, damit das Gerät eine Kopie der Seite hat, dann fällt das Netz weg.
+  const repo = await openSeeded(page, hashOf(BASE, 1), { device: 'Firmen-PC', files: { [PAGE1]: tablePageText(1), [CSV_PATH]: CSV } });
+  await expect(field(page, 'Art')).toHaveValue('tabelle');
+  await expect.poll(async () => (await localFiles(page)).includes(PAGE1)).toBe(true);
+  repo.offline = true;
+  await page.reload();
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await button(page, DOWNLOAD).click();
+  await expect(page.getByText(NO_NETWORK, { exact: true })).toBeVisible();
+});
+
+test('a page with strokes newer than the CSV still downloads and says so', async ({ page }) => {
+  const stroke = { ...rowStroke(), t: 2000 };
+  await openSeeded(page, hashOf(BASE, 1), {
+    device: 'Firmen-PC',
+    files: { [PAGE1]: tablePageText(1, [stroke]), [CSV_PATH]: CSV, [JSON_PATH]: STORE },
+  });
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  const download = page.waitForEvent('download');
+  await button(page, DOWNLOAD).click();
+  expect((await download).suggestedFilename()).toBe(CSV_NAME);
+  await expect(page.getByRole('status').filter({ hasText: STALE })).toBeVisible();
+});
+
+test('notes pages have no download button', async ({ page }) => {
+  await openSeeded(page, hashOf(BASE, 1), { files: { [PAGE1]: pageText(1) } });
+  await expect(field(page, 'Art')).toHaveValue('');
+  await expect(button(page, DOWNLOAD)).toHaveCount(0);
 });

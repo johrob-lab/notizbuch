@@ -7,7 +7,7 @@ import { pageName } from '../lib/filenames';
 import { loadSettings, updateSettings, vollbildOf, type Settings, type Vollbild } from '../lib/settings';
 import { initInkPrefs } from './inkPrefs';
 import { SyncEngine } from '../sync/engine';
-import { GitHubClient, type ListDir } from '../sync/github';
+import { GitHubClient, type ListDir, type ReadFile } from '../sync/github';
 import { openStore, type Store } from '../sync/store';
 import { acquireActiveWindow, type ActiveWindow } from './activeWindow';
 import type { AccessValues } from './AccessForm';
@@ -31,6 +31,7 @@ type Session = {
   client: GitHubClient;
   settings: Settings;
   listDir: ListDir;
+  readFile: ReadFile;
 };
 
 type Ready = { phase: 'bereit'; store: Store; window: ActiveWindow } & Session;
@@ -81,7 +82,7 @@ function useToday(): Day {
 /** Die Warnung vor dem Ablauf, für diesen Augenblick gerechnet: nach dem Datum, das GitHub genannt hat, sonst nach dem aus der Einrichtung. */
 const warningFor = (client: GitHubClient, typedExpiry: Day | undefined): string | null => expiryWarning(knownExpiry(client, typedExpiry), new Date());
 
-function Seite({ route, listDir, onSteps, ...page }: { route: Route; listDir: ListDir; onSteps(steps: Steps | null): void } & PageProps) {
+function Seite({ route, listDir, readFile, onSteps, ...page }: { route: Route; listDir: ListDir; readFile: ReadFile; onSteps(steps: Steps | null): void } & PageProps) {
   switch (route.view) {
     case 'tag':
       return <TagPage day={route.key} listDir={listDir} {...page} />;
@@ -90,7 +91,7 @@ function Seite({ route, listDir, onSteps, ...page }: { route: Route; listDir: Li
     case 'monat':
       return <MonatPage month={route.key} {...page} />;
     case 'besprechung':
-      return <BesprechungPage base={route.key} n={route.n ?? 1} listDir={listDir} onSteps={onSteps} {...page} />;
+      return <BesprechungPage base={route.key} n={route.n ?? 1} listDir={listDir} readFile={readFile} onSteps={onSteps} {...page} />;
     case 'einstellungen':
       return null; // die Einstellungen sind keine Seite zum Schreiben, die App zeigt sie selbst
   }
@@ -148,7 +149,7 @@ export function App() {
       return null;
     }
     // Die Dateilisten (Projekte, Seiten einer Besprechung) holt die Oberfläche selbst: Sie gehören nicht zum Abgleich.
-    return { engine, client, settings, listDir: (folder) => client.listDir(folder) };
+    return { engine, client, settings, listDir: (folder) => client.listDir(folder), readFile: (path) => client.getFile(path).then((file) => (file ? file.text : null)) };
   };
 
   /**
@@ -347,7 +348,7 @@ export function App() {
     engine.setClient(client);
     const { token, tokenExpiry } = result.settings;
     setBoot((current) =>
-      current.phase === 'bereit' ? { ...current, client, listDir: (folder) => client.listDir(folder), settings: { ...current.settings, token, tokenExpiry } } : current,
+      current.phase === 'bereit' ? { ...current, client, listDir: (folder) => client.listDir(folder), readFile: (path) => client.getFile(path).then((file) => (file ? file.text : null)), settings: { ...current.settings, token, tokenExpiry } } : current,
     );
     // Was mit dem alten Token nicht ging, geht jetzt: hochladen, was wartet, und nach Änderungen anderswo fragen.
     void engine.flush();
@@ -446,6 +447,7 @@ export function App() {
                 key={here}
                 route={route}
                 listDir={boot.listDir}
+                readFile={boot.readFile}
                 onSteps={reportSteps}
                 engine={boot.engine}
                 readOnly={boot.settings.device === 'Firmen-PC'}

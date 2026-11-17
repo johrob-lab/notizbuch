@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Page } from '../ink/types';
 import { isValidDay } from '../lib/dates';
-import { besprechungPagePath } from '../lib/filenames';
+import { besprechungPagePath, tabelleCsvPath, tabelleJsonPath } from '../lib/filenames';
 import {
   ART_TABELLE,
   firstFreePage,
@@ -15,13 +15,16 @@ import {
   pageLabel,
   projectNames,
 } from '../lib/meetings';
+import { csvDateiname, KEINE_CSV, neuesterStrich, OHNE_NETZ, standHinweis } from '../lib/tabelleCsv';
 import { meetingLayout } from '../pages/layouts';
 import { meetingPageText } from '../pages/meetingText';
-import type { ListDir } from '../sync/github';
+import { OfflineError, type ListDir, type ReadFile } from '../sync/github';
 import { normalizePath } from '../sync/paths';
+import { csvAusgeben } from './csvAusgabe';
 import { confirmDialog } from './Dialog';
 import { PageView, type Kopf, type KopfTools, type PageProps } from './PageView';
 import { routeHash, type Steps } from './router';
+import { FAILED } from './texts';
 
 // Eine Seite einer Besprechung: Über der Schreibfläche steht ein Formular für Thema, Datum, Zeit, Ort und Projekt, daneben
 // die Leiste für die Seiten (welche Seite von wie vielen, neue Seite, Seite löschen). Das Formular ist HTML und nicht auf
@@ -34,6 +37,8 @@ type Props = PageProps & {
   base: string;
   n: number;
   listDir: ListDir;
+  /** Liest eine Datei aus dem Repository (für die CSV einer Tabellenseite). */
+  readFile: ReadFile;
   /** Meldet, wohin ‹ und › der Leiste oben von dieser Seite aus führen. `null`, sobald die Seite geht. */
   onSteps(steps: Steps | null): void;
 };
@@ -64,12 +69,15 @@ type FormProps = {
   /** Das zweite Fenster eines Geräts: Nichts lässt sich ändern, auch der Kopf nicht. */
   locked: boolean;
   problem: string;
+  /** Der Hinweis zum Herunterladen der CSV (kein Fehler, darum eigener Absatz). */
+  hinweis: string;
   onAdd(): void;
   onDelete(): void;
   onArt(select: HTMLSelectElement): void;
+  onDownload(): void;
 };
 
-function Form({ tools, projects, label, readOnly, locked, problem, onAdd, onDelete, onArt }: FormProps) {
+function Form({ tools, projects, label, readOnly, locked, problem, hinweis, onAdd, onDelete, onArt, onDownload }: FormProps) {
   const { meta } = tools;
   // Solange die Seite nicht gelesen ist, lässt sich nichts ändern: Sonst entstünde neben einer Seite, die man noch nicht sieht, eine zweite.
   const ready = tools.phase === 'bereit' && !locked;
@@ -153,7 +161,18 @@ function Form({ tools, projects, label, readOnly, locked, problem, onAdd, onDele
             </button>
           </>
         )}
+        {/* Der Knopf ändert nichts und ist darum nie gesperrt, auch am Firmen-PC und im zweiten Fenster. */}
+        {istTabelle(meta) && (
+          <button type="button" class="knopf" onClick={onDownload}>
+            Für Excel herunterladen
+          </button>
+        )}
       </div>
+      {hinweis && (
+        <p class="kopfhinweis" role="status">
+          {hinweis}
+        </p>
+      )}
       {problem && (
         <p class="kopfhinweis" role="alert">
           {problem}
@@ -163,7 +182,7 @@ function Form({ tools, projects, label, readOnly, locked, problem, onAdd, onDele
   );
 }
 
-export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }: Props) {
+export function BesprechungPage({ base: address, n, listDir, readFile, onSteps, ...rest }: Props) {
   const { engine } = rest;
   // Im zweiten Fenster eines Geräts (die Engine liest nur) gilt dasselbe wie am Firmen-PC, und der Kopf lässt sich auch nicht tippen.
   const locked = engine.readOnly;
@@ -177,6 +196,7 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
   const [listed, setListed] = useState<number[] | null>(null);
   const [local, setLocal] = useState<{ present: number[]; deleted: number[] }>({ present: [], deleted: [] });
   const [problem, setProblem] = useState('');
+  const [hinweis, setHinweis] = useState('');
   // Zählt die Versuche, die Seite neu zu öffnen: Scheitert das Löschen, ist die Sitzung der Seite beendet.
   const [attempt, setAttempt] = useState(0);
   const busy = useRef(false);
@@ -322,6 +342,31 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
     }
   };
 
+  // Die CSV holt die App von GitHub (die Abendroutine schreibt sie dort) und gibt sie unverändert aus: am Firmen-PC als Download,
+  // sonst über das Teilen-Blatt. Hat die Seite neuere Striche als die CSV, kommt die Datei trotzdem, mit einem Hinweis.
+  const downloading = useRef(false);
+  const download = async (tools: KopfTools) => {
+    if (downloading.current) return;
+    downloading.current = true;
+    setHinweis('');
+    try {
+      const csv = await readFile(tabelleCsvPath(base));
+      if (csv === null) {
+        setHinweis(KEINE_CSV);
+        return;
+      }
+      // Ein fehlender oder unlesbarer Zeilenspeicher ist kein Grund, die Datei zurückzuhalten.
+      const store = await readFile(tabelleJsonPath(base)).catch(() => null);
+      await csvAusgeben(csv, csvDateiname(base), rest.readOnly ? 'laden' : 'teilen');
+      setHinweis(standHinweis(store, n, neuesterStrich(tools.current())) ?? '');
+    } catch (error) {
+      if (error instanceof OfflineError) setHinweis(OHNE_NETZ);
+      else if (!(error instanceof DOMException && error.name === 'AbortError')) setHinweis(FAILED);
+    } finally {
+      downloading.current = false;
+    }
+  };
+
   const head: Kopf = {
     ...kopf,
     form: (tools) => (
@@ -332,9 +377,11 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
         readOnly={readOnly}
         locked={locked}
         problem={problem}
+        hinweis={hinweis}
         onAdd={() => void addPage(tools)}
         onDelete={() => void deletePage(tools)}
         onArt={(select) => void changeArt(tools, select)}
+        onDownload={() => void download(tools)}
       />
     ),
   };
