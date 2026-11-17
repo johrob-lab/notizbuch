@@ -9,7 +9,8 @@ import { StrokeBuilder } from '../../src/ink/stroke';
 import { serializePage, storedForm } from '../../src/ink/svg';
 import { SMOOTHING, type InkColor, type Page, type Stroke } from '../../src/ink/types';
 import { besprechungPagePath, monatPagePath, tagPagePath, wochePagePath } from '../../src/lib/filenames';
-import { besprechungLayout, monatLayout, tagLayout, wocheLayout, type Layout, type Rect } from '../../src/pages/layouts';
+import { besprechungLayout, monatLayout, tabelleLayout, tagLayout, wocheLayout, type Layout, type Rect } from '../../src/pages/layouts';
+import { tabelleGeometrie } from '../../src/pages/tabelle';
 import { GAP, GLYPHS, type Pt } from './font';
 
 // ---------- Zufall mit festem Startwert, damit jeder Lauf dieselben Dateien ergibt ----------
@@ -255,6 +256,54 @@ function meetingPage(n: 1 | 2): Built {
   });
 }
 
+const TABLE_MEETING = { thema: 'Abstimmung Muster 2027', datum: '2026-10-30', zeit: '09:00', ort: 'Musterstadt', projekt: 'Beispielprojekt A', seitennr: '1', art: 'tabelle' };
+
+/**
+ * Tabellenseite (Arbeitsvorbereitung) mit acht beschriebenen Zeilen: zwei Vorhaben (Zeile 1 und 7), vier Schritte, eine Fortsetzung,
+ * eine Summe und eine durchgestrichene Zeile. Jeder Strich liegt mit seiner Mitte im Band seiner Zeile (so ordnet ihn die App zu).
+ * Die Schrift hat kein „•“, „×“, „€“: der Punkt ist ein kleiner Kreis, „x“ steht für „×“. Der Text der Vorhaben beginnt bei x 46,
+ * damit er den Punkt bei x 34 nicht berührt.
+ */
+function tablePage(): Built {
+  const layout = tabelleLayout(TABLE_MEETING);
+  const geo = tabelleGeometrie();
+  return seeded(20261030, (rng) => {
+    const s = new Scribe(rng, Date.UTC(2026, 9, 30, 8, 5)); // ab 09:05 Uhr Wiener Zeit
+    const top = (row: number): number => geo.zeilen[row - 1];
+    const base = (row: number): number => top(row) + 34;
+    // Zelle: Text in Spalte `col` (0 = Schritt) der Zeile `row`
+    const cell = (row: number, col: number, str: string): void => {
+      s.text(str, geo.spalten[col] + 8, base(row), 'schwarz', 2.0);
+    };
+    const dot = (row: number): void => {
+      const cy = top(row) + 24;
+      s.stroke(Array.from({ length: 17 }, (_, i) => [34 + 4 * Math.cos((i * Math.PI) / 8), cy + 4 * Math.sin((i * Math.PI) / 8)] as Pt), 'schwarz');
+    };
+    const vorhaben = (row: number, str: string): void => {
+      dot(row);
+      s.text(str, 46, base(row), 'schwarz', 2.0);
+    };
+
+    vorhaben(1, 'Musterbrücke 4711 km 12,345, 120 m x 1,70 m');
+    // Zeile 2: Schritt, Monat, Std, Faktor 1, wer, Fahrzeuge, Ressourcen
+    [[0, 'Vorarbeiten'], [1, '3'], [2, '50'], [3, '2'], [6, 'KI'], [7, 'BCR 8'], [8, 'SAS ET 8']].forEach(([c, t]) => cell(2, c as number, t as string));
+    // Zeile 3: dazu Fremd € und Bemerkung
+    [[0, 'Einbau'], [1, '4'], [2, '120'], [3, '4'], [6, 'IB'], [7, 'HTW 16'], [8, 'AZF 16'], [10, '2000'], [11, 'Kran']].forEach(([c, t]) => cell(3, c as number, t as string));
+    cell(4, 7, 'LKW 8'); // Fortsetzung: nur Fahrzeuge
+    // Zeile 5: Summe in der Spalte Std, darüber ein Strich
+    cell(5, 2, '340');
+    s.stroke([[geo.spalten[2] + 6, top(5) + 8], [(geo.spalten[2] + geo.spalten[3]) / 2, top(5) + 8.8], [geo.spalten[3] - 6, top(5) + 7.6]], 'schwarz');
+    vorhaben(7, 'Musterbahn Lichtraum 40 lm, 8 Konsolen');
+    // Zeile 8: Schritt, danach ein Strich quer durch die ganze Zeile
+    [[0, 'Konsolen setzen'], [1, '5'], [2, '60'], [3, '2'], [6, 'KI']].forEach(([c, t]) => cell(8, c as number, t as string));
+    const mid = top(8) + 24;
+    s.stroke([[geo.spalten[0] + 4, mid + 1], [(geo.spalten[0] + geo.spalten[12]) / 2, mid - 1.2], [geo.spalten[12] - 4, mid + 0.6]], 'schwarz');
+    // Zeile 9: Schritt, Monat, Std, Faktor 1, Anzahl, wer, Fahrzeuge
+    [[0, 'SU'], [1, '9'], [2, '48'], [3, '2'], [5, '6'], [6, 'KI'], [7, 'BCR 48']].forEach(([c, t]) => cell(9, c as number, t as string));
+    return { page: { kind: 'besprechung', key: layout.key, meta: TABLE_MEETING, strokes: s.strokes }, layout };
+  });
+}
+
 function weekPage(): Built {
   const key = '2026-W44';
   const layout = wocheLayout(key);
@@ -306,7 +355,7 @@ function monthPage(): Built {
 
 /** Eine fertige Beispielseite: wohin sie im Ausgabeordner gehört und ihr SVG-Text. */
 export type Sample = {
-  /** Unterordner der Ausgabe: `lauf1`, `monat`, `lauf3-nachtrag` oder `stifte`. */
+  /** Unterordner der Ausgabe: `lauf1`, `monat`, `lauf3-nachtrag`, `stifte` oder `tabelle`. */
   folder: string;
   /** Pfad im Vault, zum Beispiel `07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg`. */
   path: string;
@@ -321,6 +370,7 @@ export type Sample = {
  * - `monat`: die Monatsseite
  * - `lauf3-nachtrag`: dieselbe Tagesseite, am Nachmittag weitergeschrieben
  * - `stifte`: Tagesseite vom 30.10.2026 mit je einer Zeile in Kugelschreiber, Fineliner, Füllfeder und Bleistift (Version 2)
+ * - `tabelle`: Tabellenseite der Arbeitsvorbereitung vom 30.10.2026 (Version 3)
  */
 export function buildSamples(): Sample[] {
   const samples: Sample[] = [];
@@ -337,5 +387,7 @@ export function buildSamples(): Sample[] {
   add('monat', monatPagePath('2026-10'), monthPage());
   add('lauf3-nachtrag', tagPagePath(DAY), dayPage(true));
   add('stifte', tagPagePath(PEN_DAY), penPage());
+  const table = tablePage();
+  add('tabelle', besprechungPagePath(table.layout.key, 1), table);
   return samples;
 }
