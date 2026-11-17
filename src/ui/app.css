@@ -1459,10 +1459,12 @@ body {
 /*
  * Die Großansicht (BriefingCard.tsx): Die Karte trägt die Klasse `gross` und hat keinen Ort auf der Seite. Die Ebene der Karten
  * verliert so lange ihre Verschiebung und ihre Lage (PageView setzt das `transform` bei jeder Geste am Element neu, darum
- * `!important`). Dann ist der Rahmen der Karten das Rechteck der großen Karte: die Bühne unter Leiste und Werkzeugleiste. Sie
- * liegt über allem auf der Bühne (Lasche 4, Rad und Füllfeder 5) und ist undurchsichtig, die anderen Karten sind unsichtbar. Ihre
- * Maße sind jetzt Bildschirmpunkte statt Seiteneinheiten, die Schrift etwas größer als in der Karte. Unten bleibt der Streifen frei,
- * den das iPad ohne Home-Taste für seine Geste braucht.
+ * `!important`). Dann ist der Rahmen der Karten das Rechteck der großen Karte: die Bühne unter Leiste und Werkzeugleiste, im
+ * Vollbild das ganze Fenster. Sie ist undurchsichtig und deckt nur die Seite ab: das Papier, die anderen Karten (unsichtbar), die
+ * Hinweise der Seite und „Ganze Seite“ (alle 1), das nur die verdeckte Seite einpassen würde. Was die App zum Bedienen darüber zeigt,
+ * bleibt über ihr: die Leiste oben mit Stand und Meldungen (4, auch im Vollbild), die Lasche (4), Rad und Füllfeder (5), die
+ * Monatsreiter (2, im DOM danach) und der Schnellwechsel (unten). Ihre Maße sind jetzt Bildschirmpunkte statt Seiteneinheiten,
+ * die Schrift etwas größer als in der Karte. Unten bleibt der Streifen frei, den das iPad ohne Home-Taste für seine Geste braucht.
  */
 .karten:has(> .karte.gross) {
   transform: none !important;
@@ -1475,10 +1477,35 @@ body {
 
 .karte.gross {
   inset: 0;
-  z-index: 6;
+  z-index: 2;
   padding: 8px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   background: #f5f7f5; /* wie die Karte auf der Seite */
   font-size: 22px;
+}
+
+/* Der Schnellwechsel (im Vollbild das Rad) liegt im DOM nach den Karten: Mit gleicher Höhe bleibt er über der großen Karte. */
+.buehne:has(.karte.gross) .schnellwechsel {
+  z-index: 2;
+}
+
+/* Wo die Monatsreiter am rechten Rand liegen, bleibt ihr Streifen frei wie im Kopf der Besprechung: Nichts liegt unter ihnen. */
+.inhalt:has(> .monatsreiter) .karte.gross {
+  padding-right: max(56px, env(safe-area-inset-right));
+}
+
+/* Als App vom Home-Bildschirm beginnt die Bühne im Vollbild am oberen Rand: Der Inhalt rückt unter den Glaseffekt wie die Leiste. */
+.heimbildschirm .vollbild .karte.gross {
+  padding-top: calc(max(8px, env(safe-area-inset-top)) + 24px);
+}
+
+/*
+ * Im Vollbild schweben Stand und Meldungen der Leiste oben rechts über der Bühne, genau dort, wo die große Karte „Fertig“ zeigt.
+ * Solange sie offen ist, rückt die Leiste um die Zeile mit „Fertig“ tiefer (Knopf 68, Abstand 8): Die Meldungen bleiben über der
+ * Karte zu lesen, und „Fertig“ bleibt frei. Ihre Abstände nach oben gelten wie sonst, wie die Karte rücken sie als App vom
+ * Home-Bildschirm 24 Punkte tiefer.
+ */
+.vollbild:has(.karte.gross) > .topbar {
+  top: 76px;
 }
 
 .karte .vorspann {

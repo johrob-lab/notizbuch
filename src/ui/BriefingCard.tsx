@@ -41,6 +41,12 @@ const ERGAENZUNGEN = 'Ergänzungen';
 const OPEN_AT_START = new Set(['Morgenbriefing (automatisch)', ERGAENZUNGEN]);
 /** So lange bleibt ein Hinweis stehen, wenn ihn niemand wegtippt. */
 const NOTICE_MS = 8000;
+/** Arten von `input`, in die man keinen Text tippt: Kästchen, Schalter, Knöpfe und dergleichen. */
+const NOT_TYPED = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'range', 'color', 'file']);
+
+/** Ein Feld zum Tippen von Text: ein `textarea` oder ein `input`, das Text annimmt. */
+const takesText = (target: EventTarget | null): boolean =>
+  target instanceof HTMLTextAreaElement || (target instanceof HTMLInputElement && !NOT_TYPED.has(target.type));
 
 /**
  * `laden`: noch nicht gelesen. `bereit`: gelesen, die Notiz oder ihr Fehlen steht fest. `offline`: es gibt keine Kopie, und
@@ -179,13 +185,13 @@ export function BriefingCard({ engine, day, rect }: Props) {
     return () => clearTimeout(timer);
   }, [state.notice]);
 
-  // Escape schließt die Großansicht, wo auch immer der Fokus steht, außer in einem `input` oder `textarea`: Dort gehört Escape dem
-  // Element (in der Bearbeitung verwirft es das Getippte). Hat schon jemand anderes Escape verbraucht, bleibt sie offen.
+  // Escape schließt die Großansicht, wo auch immer der Fokus steht, außer in einem Feld zum Tippen: Dort gehört Escape dem Feld (in
+  // der Bearbeitung verwirft es das Getippte). Ein Kästchen, das man mit der Maus angeklickt hat, behält den Fokus: Dort schließt
+  // Escape wie überall. Hat schon jemand anderes Escape verbraucht, bleibt sie offen.
   useEffect(() => {
     if (!gross) return;
     const escape = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented) return;
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key !== 'Escape' || e.defaultPrevented || takesText(e.target)) return;
       e.preventDefault();
       setGross(false);
     };

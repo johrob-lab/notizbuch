@@ -104,6 +104,9 @@ async function boxOf(locator: Locator): Promise<Box> {
 const offBy = (a: Box, b: Box): number =>
   Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y), Math.abs(a.x + a.width - (b.x + b.width)), Math.abs(a.y + a.height - (b.y + b.height)));
 
+/** Ob sich zwei Rechtecke überdecken (Ränder, die sich nur berühren, zählen nicht). */
+const overlap = (a: Box, b: Box): boolean => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
 type At = { x: number; y: number };
 type Ev = At & { type: 'pointerdown' | 'pointermove' | 'pointerup' };
 
@@ -281,6 +284,18 @@ test('Escape closes the big briefing', async ({ page }) => {
   await expect(button(page, 'Briefing durchgehen')).toBeVisible();
 });
 
+test('Escape also closes the big briefing after a box was ticked with the mouse', async ({ page }) => {
+  await opened(page);
+  await button(page, 'Briefing durchgehen').click();
+  await checkbox(page, NAME1).click(); // ein echter Mausklick: Danach hat das Kästchen den Fokus
+  await expect(checkbox(page, NAME1)).toBeChecked();
+  await expect(checkbox(page, NAME1)).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(button(page, 'Briefing durchgehen')).toBeVisible();
+  await expect(briefing(page)).not.toHaveClass(/\bgross\b/);
+  await expect(checkbox(page, NAME1)).toBeChecked();
+});
+
 test('flipping to another day closes it', async ({ page }) => {
   await opened(page);
   await button(page, 'Briefing durchgehen').click();
@@ -290,4 +305,72 @@ test('flipping to another day closes it', async ({ page }) => {
   await expect(button(page, 'Briefing durchgehen')).toBeVisible();
   await expect(button(page, 'Fertig')).toHaveCount(0);
   await expect(briefing(page)).not.toHaveClass(/\bgross\b/);
+});
+
+// ---------- Was die App zum Bedienen zeigt, bleibt über der großen Karte ----------
+
+/** Liegt an der Mitte des Elements das Element selbst (oder etwas in ihm) zuoberst? */
+async function onTop(locator: Locator): Promise<boolean> {
+  const box = await boxOf(locator);
+  return locator.evaluate((el, at) => el.contains(document.elementFromPoint(at.x, at.y)), { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+}
+
+/** Die Meldung, die die Leiste oben zeigt, wenn der Zugang bald abläuft (heute ist der 29.10.2026). */
+const EXPIRY = 'Dein Zugang läuft am 08.11.2026 ab. Bitte rechtzeitig erneuern.';
+
+test('outside fullscreen the month tabs stay above the big briefing, and nothing of the card lies under them', async ({ page }) => {
+  await opened(page);
+  await button(page, 'Briefing durchgehen').click();
+  await expect(button(page, 'Fertig')).toBeVisible();
+  const strip = await boxOf(page.locator('nav.monatsreiter'));
+  for (const target of [button(page, 'Fertig'), pencil(page, NAME1), button(page, 'Hinzufügen')]) {
+    const box = await boxOf(target);
+    expect(box.x + box.width, 'links vom Streifen der Monatsreiter').toBeLessThanOrEqual(strip.x);
+  }
+  const october = page.getByRole('link', { name: 'Oktober 2026', exact: true });
+  expect(await onTop(october), 'der Reiter liegt über der Karte').toBe(true);
+  await october.click();
+  await expect.poll(() => hash(page)).toBe('#/monat/2026-10');
+});
+
+for (const werkzeuge of ['kreis', 'tab'] as const) {
+  test(`in fullscreen the message in the top bar and the ${werkzeuge === 'kreis' ? 'wheel' : 'tab'} stay above the big briefing`, async ({ page }) => {
+    await openSeeded(page, DAY, { settings: { vollbild: { an: true, werkzeuge }, tokenExpiry: '2026-11-08' } });
+    await expect(checkbox(page, NAME1)).toBeVisible();
+    const message = page.locator('.meldung', { hasText: EXPIRY });
+    await expect(message).toBeVisible();
+    await button(page, 'Briefing durchgehen').click();
+    await expect(button(page, 'Fertig')).toBeVisible();
+    // Im Vollbild füllt die große Karte das ganze Fenster. Im Tab des Browsers rückt sie oben nicht unter einen Glaseffekt.
+    expect(offBy(await boxOf(briefing(page)), { x: 0, y: 0, ...page.viewportSize()! })).toBeLessThanOrEqual(1);
+    await expect(briefing(page)).toHaveCSS('padding-top', '8px');
+    expect(await onTop(message), 'die Meldung liegt über der Karte').toBe(true);
+    expect(overlap(await boxOf(message), await boxOf(button(page, 'Fertig'))), 'die Meldung liegt nicht auf „Fertig“').toBe(false);
+
+    // Ein echter Mausklick: Playwright klickt nur, wenn an der Stelle das Rad oder die Lasche zuoberst liegt.
+    if (werkzeuge === 'kreis') {
+      await page.getByTestId('quick-switch').click();
+      const ring = page.getByRole('group', { name: 'Werkzeugrad', exact: true });
+      await expect(ring).toBeVisible();
+      expect(await onTop(ring.getByRole('button', { name: 'Vollbild aus', exact: true })), 'der Ring liegt über der Karte').toBe(true);
+    } else {
+      const handle = page.getByRole('button', { name: 'Werkzeuge', exact: true });
+      await handle.click();
+      await expect(handle).toHaveAttribute('aria-expanded', 'true');
+      const strip = page.getByRole('toolbar', { name: 'Werkzeuge im Vollbild', exact: true });
+      await expect(strip).toBeVisible();
+      expect(await onTop(strip.getByRole('button', { name: 'Vollbild aus', exact: true })), 'die Leiste der Lasche liegt über der Karte').toBe(true);
+    }
+  });
+}
+
+test('as an app from the home screen in fullscreen, the big briefing starts below the glass of iPadOS', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(Navigator.prototype, 'standalone', { get: () => true, configurable: true }));
+  await openSeeded(page, DAY, { settings: { vollbild: { an: true, werkzeuge: 'kreis' } } });
+  await expect(page.locator('html')).toHaveClass(/heimbildschirm/);
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await button(page, 'Briefing durchgehen').click();
+  // Wie die Leiste oben dort: 24 Punkte tiefer als im Tab des Browsers.
+  await expect(briefing(page)).toHaveCSS('padding-top', '32px');
+  expect((await boxOf(button(page, 'Fertig'))).y).toBeGreaterThanOrEqual(32);
 });
