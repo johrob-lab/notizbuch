@@ -218,6 +218,57 @@ test('when the tap has expired the second tap shares the loaded CSV', async ({ p
   expect(Buffer.from(shared.bytes)).toEqual(Buffer.from(CSV, 'utf8'));
 });
 
+/** Mittag des 29.10.2026 in Wien, die feste Zeit aller Tests (siehe `fixedToday`), in Millisekunden. */
+const NOON = Date.parse('2026-10-29T12:00:00+01:00');
+const AGAIN = 'Die CSV ist geladen. Zum Teilen bitte noch einmal tippen.';
+/** Dieselbe CSV, wie sie eine spätere Abendroutine schreibt (Std in Zeile 2 jetzt 60). */
+const NEWER_CSV = CSV.replace(';Vorarbeiten;3;50;', ';Vorarbeiten;3;60;');
+
+/** Das Teilen am iPad: Das erste Mal scheitert es wie nach einem abgelaufenen Fingertipp, danach merkt es sich jede Datei. */
+async function shareFailingOnce(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { shares: number[][]; calls: number };
+    w.shares = [];
+    w.calls = 0;
+    Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true });
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: async (data: ShareData) => {
+        if (++w.calls === 1) throw new DOMException('Der Fingertipp ist abgelaufen.', 'NotAllowedError');
+        w.shares.push([...new Uint8Array(await data.files![0].arrayBuffer())]);
+      },
+    });
+  });
+}
+
+/** Die geteilten Dateien als Text, Byte für Byte (ein BOM bleibt als erstes Zeichen stehen). */
+const shares = async (page: Page): Promise<string[]> =>
+  (await page.evaluate(() => (window as unknown as { shares: number[][] }).shares)).map((bytes) => Buffer.from(bytes).toString('utf8'));
+
+test('just under a minute after the failed share the next tap still shares the loaded CSV', async ({ page }) => {
+  await shareFailingOnce(page);
+  const repo = await openSeeded(page, hashOf(BASE, 1), { files: { [PAGE1]: tablePageText(1), [CSV_PATH]: CSV, [JSON_PATH]: STORE } });
+  await button(page, DOWNLOAD).click();
+  await expect(page.getByRole('status').filter({ hasText: AGAIN })).toBeVisible();
+  // Inzwischen liegt eine neuere CSV auf GitHub, aber der geladene Text gilt noch: Der Tipp teilt ihn, ohne neu zu laden.
+  repo.commit(CSV_PATH, NEWER_CSV);
+  await page.clock.setFixedTime(NOON + 59_999);
+  await button(page, DOWNLOAD).click();
+  await expect.poll(() => shares(page)).toEqual([CSV]);
+});
+
+test('a minute after the failed share the next tap loads the CSV again', async ({ page }) => {
+  await shareFailingOnce(page);
+  const repo = await openSeeded(page, hashOf(BASE, 1), { files: { [PAGE1]: tablePageText(1), [CSV_PATH]: CSV, [JSON_PATH]: STORE } });
+  await button(page, DOWNLOAD).click();
+  await expect(page.getByRole('status').filter({ hasText: AGAIN })).toBeVisible();
+  // Nach einer Minute ist der geladene Text verfallen: Der Tipp lädt die CSV neu und teilt den Stand, der jetzt auf GitHub liegt.
+  repo.commit(CSV_PATH, NEWER_CSV);
+  await page.clock.setFixedTime(NOON + 60_000);
+  await button(page, DOWNLOAD).click();
+  await expect.poll(() => shares(page)).toEqual([NEWER_CSV]);
+});
+
 test('without a CSV the button says it comes with the evening routine', async ({ page }) => {
   await openSeeded(page, hashOf(BASE, 1), { device: 'Firmen-PC', files: { [PAGE1]: tablePageText(1) } });
   let downloads = 0;

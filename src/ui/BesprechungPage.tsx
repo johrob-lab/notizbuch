@@ -48,6 +48,8 @@ const QUESTION = 'Seite wirklich löschen?';
 const ART_QUESTION = 'Auf der Seite steht schon etwas. Art trotzdem ändern?';
 const ADD_FAILED = 'Die neue Seite konnte nicht angelegt werden. Bitte noch einmal versuchen.';
 const DELETE_FAILED = 'Die Seite konnte nicht gelöscht werden. Bitte noch einmal versuchen.';
+/** So lange gilt eine geladene CSV nach einem gescheiterten Teilen, danach lädt der nächste Tipp sie neu. */
+const KEEP_CSV_MS = 60_000;
 
 /** Die Nummern der Seiten dieser Besprechung unter den Dateinamen. */
 const pagesOf = (names: string[], base: string): number[] => listMeetings(names, base.slice(0, 10)).find((meeting) => meeting.base === base)?.pages ?? [];
@@ -345,9 +347,12 @@ export function BesprechungPage({ base: address, n, listDir, readFile, onSteps, 
   // Die CSV holt die App von GitHub (die Abendroutine schreibt sie dort) und gibt sie unverändert aus: am Firmen-PC als Download,
   // sonst über das Teilen-Blatt. Hat die Seite neuere Striche als die CSV, kommt die Datei trotzdem, mit einem Hinweis.
   // Das Teilen braucht den Fingertipp noch frisch (iOS). Dauert das Laden zu lang, scheitert es mit `NotAllowedError`: Dann bleibt
-  // der geladene Text für den nächsten Tipp liegen, der ohne Warten teilt. Er gilt nur für diesen einen Tipp und diese Seite.
+  // der geladene Text für den nächsten Tipp liegen, der ohne Warten teilt. Er gilt nur für diesen einen Tipp, nur auf dieser Seite
+  // und nur eine Minute lang (`KEEP_CSV_MS`, gemessen beim nächsten Tipp): Ein späterer Tipp lädt die CSV neu, denn die
+  // Abendroutine kann sie inzwischen neu geschrieben haben. Liegt die Zeit des Behaltens in der Zukunft (Uhr zurückgestellt),
+  // gilt der Text ebenfalls als verfallen.
   const downloading = useRef(false);
-  const loaded = useRef<string | null>(null);
+  const loaded = useRef<{ csv: string; at: number } | null>(null);
   const download = async (tools: KopfTools) => {
     if (downloading.current) return;
     downloading.current = true;
@@ -355,7 +360,8 @@ export function BesprechungPage({ base: address, n, listDir, readFile, onSteps, 
     loaded.current = null;
     setHinweis('');
     try {
-      const csv = kept ?? (await readFile(tabelleCsvPath(base)));
+      const age = kept === null ? -1 : Date.now() - kept.at;
+      const csv = kept !== null && age >= 0 && age < KEEP_CSV_MS ? kept.csv : await readFile(tabelleCsvPath(base));
       if (csv === null) {
         setHinweis(KEINE_CSV);
         return;
@@ -364,7 +370,7 @@ export function BesprechungPage({ base: address, n, listDir, readFile, onSteps, 
         await csvAusgeben(csv, csvDateiname(base), rest.readOnly ? 'laden' : 'teilen');
       } catch (error) {
         if (error instanceof DOMException && error.name === 'NotAllowedError') {
-          loaded.current = csv;
+          loaded.current = { csv, at: Date.now() };
           setHinweis(ERNEUT_TIPPEN);
           return;
         }
