@@ -4,6 +4,7 @@ import { besprechungBase, besprechungPagePath } from '../../src/lib/filenames';
 import {
   createMeeting,
   firstFreePage,
+  istTabelle,
   listMeetings,
   meetingMeta,
   meetingPages,
@@ -333,4 +334,11 @@ test('a new page takes the first number that is free, so no page is overwritten'
   expect(await firstFreePage(base, 3, exists)).toBe(5);
   expect(asked).toEqual([besprechungPagePath(base, 3), besprechungPagePath(base, 4), besprechungPagePath(base, 5)]);
   expect(await firstFreePage(base, 2, async () => false)).toBe(2);
+});
+
+test('istTabelle is true for art tabelle only', () => {
+  expect(istTabelle({ art: 'tabelle' })).toBe(true);
+  expect(istTabelle({})).toBe(false);
+  expect(istTabelle({ art: '' })).toBe(false);
+  expect(istTabelle({ art: 'Tabelle' })).toBe(false);
 });

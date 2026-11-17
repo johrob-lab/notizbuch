@@ -33,7 +33,7 @@ afterEach(() => {
 describe('sample pages', () => {
   const samples = buildSamples();
 
-  test('the set: day, two meeting pages, week, month, the later day page and the pen page', () => {
+  test('the set: day, two meeting pages, week, month, the later day page, the pen page and the table page', () => {
     expect(samples.map((s) => `${s.folder}: ${s.path}`)).toEqual([
       `lauf1: ${tagPagePath(DAY)}`,
       `lauf1: ${besprechungPagePath(MEETING, 1)}`,
@@ -42,6 +42,7 @@ describe('sample pages', () => {
       `monat: ${monatPagePath('2026-10')}`,
       `lauf3-nachtrag: ${tagPagePath(DAY)}`,
       `stifte: ${tagPagePath(PEN_DAY)}`,
+      `tabelle: ${besprechungPagePath('2026-10-30 0900 Abstimmung Muster 2027', 1)}`,
     ]);
   });
 
@@ -109,8 +110,20 @@ describe('sample pages', () => {
     expect(new Set(page.strokes.map((s) => s.t)).size).toBe(page.strokes.length);
   });
 
+  test('the table sample is a version 3 table page with strokes in its rows only', () => {
+    const sample = find(samples, 'tabelle', besprechungPagePath('2026-10-30 0900 Abstimmung Muster 2027', 1));
+    expect(sample.svg).toContain('data-notizbuch="3"');
+    expect(sample.svg).toContain('data-art="tabelle"');
+    const groups = [...sample.svg.matchAll(/<g data-feld="([^"]+)"/g)].map((m) => m[1]);
+    expect(groups).toEqual(['zeile-01', 'zeile-02', 'zeile-03', 'zeile-04', 'zeile-05', 'zeile-07', 'zeile-08', 'zeile-09']);
+    const page = parsePage(sample.svg);
+    expect(page).toMatchObject({ kind: 'besprechung', key: '2026-10-30 0900 Abstimmung Muster 2027' });
+    expect(page.meta).toMatchObject({ art: 'tabelle', projekt: 'Beispielprojekt A', seitennr: '1' });
+    expect(page.strokes.length).toBe(sample.page.strokes.length);
+  });
+
   test('the older samples stay ballpoint pages of version 1', () => {
-    const older = samples.filter((s) => s.folder !== 'stifte');
+    const older = samples.filter((s) => s.folder !== 'stifte' && s.folder !== 'tabelle');
     expect(older.length).toBe(6);
     for (const sample of older) {
       expect(new Set(parsePage(sample.svg).strokes.map((s) => s.tool)), sample.path).toEqual(new Set(['kugel']));

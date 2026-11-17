@@ -355,7 +355,7 @@ test('the chosen pen survives a reload', async ({ page }) => {
 });
 
 test('a page from a newer version shows the note with a reload button and is never written', async ({ page }) => {
-  const newer = `<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="3" data-seite="tag" data-key="2026-10-29"></svg>`;
+  const newer = `<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="4" data-seite="tag" data-key="2026-10-29"></svg>`;
   const repo = await openSeeded(page, DAY, { files: { [TAG]: newer } });
   await expect(page.getByText('Diese Seite stammt aus einer neueren Version der App. Bitte neu laden.')).toBeVisible();
   // Der Knopf liegt in einem Hinweis ohne Zeigerereignisse: Er muss trotzdem klickbar sein und die App neu laden.

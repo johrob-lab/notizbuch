@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import { todayVienna } from '../../src/lib/dates';
+import { assertAllowedPath } from '../../src/sync/paths';
 import {
   besprechungBase,
   besprechungPagePath,
@@ -8,6 +9,8 @@ import {
   dailyNotePath,
   monatPagePath,
   sanitizeThema,
+  tabelleCsvPath,
+  tabelleJsonPath,
   tagPagePath,
   TERMINE_PATH,
   wochePagePath,
@@ -93,4 +96,12 @@ test('pageName names a page the way the app shows it: day, week, month, meeting 
   expect(pageName(besprechungPagePath(besprechungBase('2026-10-29', '08:00', 'Abstimmung Beispiel 2027'), 2))).toBe('Abstimmung Beispiel 2027, Seite 2');
   expect(pageName(besprechungPagePath(besprechungBase('2026-10-29', '', 'Ohne Zeit'), 1))).toBe('Ohne Zeit, Seite 1');
   expect(pageName('07 Anhänge/Notizbuch/2026/Etwas anderes.svg')).toBe('Etwas anderes');
+});
+
+test('the CSV and its store sit next to the pages of the meeting', () => {
+  const base = '2026-10-29 0800 Abstimmung Beispiel 2027';
+  expect(tabelleCsvPath(base)).toBe('07 Anhänge/Notizbuch/2026/2026-10-29 0800 Abstimmung Beispiel 2027 Tabelle.csv');
+  expect(tabelleJsonPath(base)).toBe('07 Anhänge/Notizbuch/2026/2026-10-29 0800 Abstimmung Beispiel 2027 Tabelle.json');
+  expect(() => assertAllowedPath(tabelleCsvPath(base), 'read')).not.toThrow();
+  expect(() => assertAllowedPath(tabelleJsonPath(base), 'read')).not.toThrow();
 });

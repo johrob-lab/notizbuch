@@ -80,6 +80,9 @@ export type DirEntry = { name: string; path: string; sha: string; type: 'file' |
 /** Die Dateiliste eines Ordners im Vault. */
 export type ListDir = (folder: string) => Promise<DirEntry[]>;
 
+/** Der Text einer Datei im Repository, `null`, wenn es sie nicht gibt. */
+export type ReadFile = (path: string) => Promise<string | null>;
+
 type Json = Record<string, unknown>;
 
 function isObject(value: unknown): value is Json {

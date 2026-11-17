@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Page } from '../ink/types';
 import { isValidDay } from '../lib/dates';
-import { besprechungPagePath } from '../lib/filenames';
+import { besprechungPagePath, tabelleCsvPath, tabelleJsonPath } from '../lib/filenames';
 import {
+  ART_TABELLE,
   firstFreePage,
+  istTabelle,
   isValidTime,
   listMeetings,
   meetingMeta,
@@ -13,13 +15,16 @@ import {
   pageLabel,
   projectNames,
 } from '../lib/meetings';
-import { besprechungLayout } from '../pages/layouts';
+import { csvDateiname, ERNEUT_TIPPEN, KEINE_CSV, neuesterStrich, OHNE_NETZ, standHinweis } from '../lib/tabelleCsv';
+import { meetingLayout } from '../pages/layouts';
 import { meetingPageText } from '../pages/meetingText';
-import type { ListDir } from '../sync/github';
+import { OfflineError, type ListDir, type ReadFile } from '../sync/github';
 import { normalizePath } from '../sync/paths';
+import { csvAusgeben } from './csvAusgabe';
 import { confirmDialog } from './Dialog';
 import { PageView, type Kopf, type KopfTools, type PageProps } from './PageView';
 import { routeHash, type Steps } from './router';
+import { FAILED } from './texts';
 
 // Eine Seite einer Besprechung: Über der Schreibfläche steht ein Formular für Thema, Datum, Zeit, Ort und Projekt, daneben
 // die Leiste für die Seiten (welche Seite von wie vielen, neue Seite, Seite löschen). Das Formular ist HTML und nicht auf
@@ -32,14 +37,19 @@ type Props = PageProps & {
   base: string;
   n: number;
   listDir: ListDir;
+  /** Liest eine Datei aus dem Repository (für die CSV einer Tabellenseite). */
+  readFile: ReadFile;
   /** Meldet, wohin ‹ und › der Leiste oben von dieser Seite aus führen. `null`, sobald die Seite geht. */
   onSteps(steps: Steps | null): void;
 };
 
 const PROJECTS = '02 Projekte';
 const QUESTION = 'Seite wirklich löschen?';
+const ART_QUESTION = 'Auf der Seite steht schon etwas. Art trotzdem ändern?';
 const ADD_FAILED = 'Die neue Seite konnte nicht angelegt werden. Bitte noch einmal versuchen.';
 const DELETE_FAILED = 'Die Seite konnte nicht gelöscht werden. Bitte noch einmal versuchen.';
+/** So lange gilt eine geladene CSV nach einem gescheiterten Teilen, danach lädt der nächste Tipp sie neu. */
+const KEEP_CSV_MS = 60_000;
 
 /** Die Nummern der Seiten dieser Besprechung unter den Dateinamen. */
 const pagesOf = (names: string[], base: string): number[] => listMeetings(names, base.slice(0, 10)).find((meeting) => meeting.base === base)?.pages ?? [];
@@ -61,11 +71,15 @@ type FormProps = {
   /** Das zweite Fenster eines Geräts: Nichts lässt sich ändern, auch der Kopf nicht. */
   locked: boolean;
   problem: string;
+  /** Der Hinweis zum Herunterladen der CSV (kein Fehler, darum eigener Absatz). */
+  hinweis: string;
   onAdd(): void;
   onDelete(): void;
+  onArt(select: HTMLSelectElement): void;
+  onDownload(): void;
 };
 
-function Form({ tools, projects, label, readOnly, locked, problem, onAdd, onDelete }: FormProps) {
+function Form({ tools, projects, label, readOnly, locked, problem, hinweis, onAdd, onDelete, onArt, onDownload }: FormProps) {
   const { meta } = tools;
   // Solange die Seite nicht gelesen ist, lässt sich nichts ändern: Sonst entstünde neben einer Seite, die man noch nicht sieht, eine zweite.
   const ready = tools.phase === 'bereit' && !locked;
@@ -130,6 +144,13 @@ function Form({ tools, projects, label, readOnly, locked, problem, onAdd, onDele
           ))}
         </select>
       </div>
+      <div class="feld">
+        <label for="kopf-art">Art</label>
+        <select id="kopf-art" value={istTabelle(meta) ? ART_TABELLE : ''} disabled={!ready} onChange={(e) => onArt(e.currentTarget)}>
+          <option value="">Notizen</option>
+          <option value={ART_TABELLE}>Tabelle Arbeitsvorbereitung</option>
+        </select>
+      </div>
       <div class="seitenleiste">
         <span class="seitenzahl">{label}</span>
         {!readOnly && (
@@ -142,7 +163,18 @@ function Form({ tools, projects, label, readOnly, locked, problem, onAdd, onDele
             </button>
           </>
         )}
+        {/* Der Knopf ändert nichts und ist darum nie gesperrt, auch am Firmen-PC und im zweiten Fenster. */}
+        {istTabelle(meta) && (
+          <button type="button" class="knopf" onClick={onDownload}>
+            Für Excel herunterladen
+          </button>
+        )}
       </div>
+      {hinweis && (
+        <p class="kopfhinweis" role="status">
+          {hinweis}
+        </p>
+      )}
       {problem && (
         <p class="kopfhinweis" role="alert">
           {problem}
@@ -152,7 +184,7 @@ function Form({ tools, projects, label, readOnly, locked, problem, onAdd, onDele
   );
 }
 
-export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }: Props) {
+export function BesprechungPage({ base: address, n, listDir, readFile, onSteps, ...rest }: Props) {
   const { engine } = rest;
   // Im zweiten Fenster eines Geräts (die Engine liest nur) gilt dasselbe wie am Firmen-PC, und der Kopf lässt sich auch nicht tippen.
   const locked = engine.readOnly;
@@ -166,6 +198,7 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
   const [listed, setListed] = useState<number[] | null>(null);
   const [local, setLocal] = useState<{ present: number[]; deleted: number[] }>({ present: [], deleted: [] });
   const [problem, setProblem] = useState('');
+  const [hinweis, setHinweis] = useState('');
   // Zählt die Versuche, die Seite neu zu öffnen: Scheitert das Löschen, ist die Sitzung der Seite beendet.
   const [attempt, setAttempt] = useState(0);
   const busy = useRef(false);
@@ -230,20 +263,21 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
     return () => onSteps(null);
   }, [onSteps, base, prev, next]);
 
-  const layout = useMemo(() => ({ ...besprechungLayout(meetingMeta(base, n, {})), key: base }), [base, n]);
+  const layout = useMemo(() => ({ ...meetingLayout(meetingMeta(base, n, {})), key: base }), [base, n]);
   const kopf = useMemo(
     () => ({
       // Der Dateiname bestimmt, welche Besprechung und welche Seite es ist: Der Schlüssel der Seite ist `base`, die Nummer `n`.
       complete: (page: Page): Page => ({ ...page, kind: 'besprechung', key: base, meta: meetingMeta(base, n, page.meta) }),
       layoutFor: (meta: Record<string, string>) => {
-        const { fields, background } = besprechungLayout(meta);
+        const { fields, background } = meetingLayout(meta);
         return { fields, background: background() };
       },
     }),
     [base, n],
   );
 
-  // Eine neue Seite hat die Kopfdaten dieser Seite, wie sie jetzt sind, und die nächste freie Nummer: Eine Seite, die es nur
+  // Eine neue Seite hat die Kopfdaten dieser Seite, wie sie jetzt sind (auch `art`: `meetingMeta` behält Angaben, die es nicht
+  // kennt, darum ist die nächste Seite einer Tabelle wieder eine Tabelle), und die nächste freie Nummer: Eine Seite, die es nur
   // auf diesem Gerät gibt, wird nie überschrieben.
   // Bekannte Grenze: Ob eine Nummer frei ist, sagt `engine.read`. Ohne Netz kennt sie nur Seiten, die dieses Gerät hat, eine
   // Seite, die es nur auf GitHub gibt, gilt dann als frei. Die neue Seite trägt deren Nummer, und beim Abgleich trifft sie
@@ -266,6 +300,20 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
     } finally {
       busy.current = false;
     }
+  };
+
+  // Die Art der Seite (Notizen oder Tabelle) wechselt im Kopf. Steht schon etwas auf der Seite, fragt die App erst: Die Striche
+  // bleiben, kommen aber in andere Felder. Bei „Abbrechen“ zeigt die Auswahl wieder, was die Seite hat: Die Kopfangabe hat
+  // sich nicht geändert, also zeichnet nichts neu.
+  const changeArt = async (tools: KopfTools, select: HTMLSelectElement) => {
+    const wanted = select.value;
+    const restore = () => {
+      select.value = istTabelle(tools.current().meta) ? ART_TABELLE : '';
+    };
+    if (tools.current().strokes.length > 0) {
+      if (!(await confirmDialog({ frage: ART_QUESTION, ja: 'Ändern', signal: away.signal }))) return restore();
+    }
+    tools.edit({ art: wanted });
   };
 
   // Gelöscht wird nur nach der Rückfrage der App und nur mit „Löschen“. Danach geht die Seite davor auf, sonst die nächste,
@@ -296,6 +344,49 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
     }
   };
 
+  // Die CSV holt die App von GitHub (die Abendroutine schreibt sie dort) und gibt sie unverändert aus: am Firmen-PC als Download,
+  // sonst über das Teilen-Blatt. Hat die Seite neuere Striche als die CSV, kommt die Datei trotzdem, mit einem Hinweis.
+  // Das Teilen braucht den Fingertipp noch frisch (iOS). Dauert das Laden zu lang, scheitert es mit `NotAllowedError`: Dann bleibt
+  // der geladene Text für den nächsten Tipp liegen, der ohne Warten teilt. Er gilt nur für diesen einen Tipp, nur auf dieser Seite
+  // und nur eine Minute lang (`KEEP_CSV_MS`, gemessen beim nächsten Tipp): Ein späterer Tipp lädt die CSV neu, denn die
+  // Abendroutine kann sie inzwischen neu geschrieben haben. Liegt die Zeit des Behaltens in der Zukunft (Uhr zurückgestellt),
+  // gilt der Text ebenfalls als verfallen.
+  const downloading = useRef(false);
+  const loaded = useRef<{ csv: string; at: number } | null>(null);
+  const download = async (tools: KopfTools) => {
+    if (downloading.current) return;
+    downloading.current = true;
+    const kept = loaded.current;
+    loaded.current = null;
+    setHinweis('');
+    try {
+      const age = kept === null ? -1 : Date.now() - kept.at;
+      const csv = kept !== null && age >= 0 && age < KEEP_CSV_MS ? kept.csv : await readFile(tabelleCsvPath(base));
+      if (csv === null) {
+        setHinweis(KEINE_CSV);
+        return;
+      }
+      try {
+        await csvAusgeben(csv, csvDateiname(base), rest.readOnly ? 'laden' : 'teilen');
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'NotAllowedError') {
+          loaded.current = { csv, at: Date.now() };
+          setHinweis(ERNEUT_TIPPEN);
+          return;
+        }
+        throw error;
+      }
+      // Der Zeilenspeicher kommt erst nach der Ausgabe. Ein fehlender oder unlesbarer ist kein Grund, die Datei zurückzuhalten.
+      const store = await readFile(tabelleJsonPath(base)).catch(() => null);
+      setHinweis(standHinweis(store, n, neuesterStrich(tools.current())) ?? '');
+    } catch (error) {
+      if (error instanceof OfflineError) setHinweis(OHNE_NETZ);
+      else if (!(error instanceof DOMException && error.name === 'AbortError')) setHinweis(FAILED);
+    } finally {
+      downloading.current = false;
+    }
+  };
+
   const head: Kopf = {
     ...kopf,
     form: (tools) => (
@@ -306,8 +397,11 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
         readOnly={readOnly}
         locked={locked}
         problem={problem}
+        hinweis={hinweis}
         onAdd={() => void addPage(tools)}
         onDelete={() => void deletePage(tools)}
+        onArt={(select) => void changeArt(tools, select)}
+        onDownload={() => void download(tools)}
       />
     ),
   };

@@ -380,7 +380,7 @@ test('an unreadable page is locked, announced and never written', async () => {
 });
 
 test('a page from a newer version is locked as too new and never written', async () => {
-  const engine = fakeEngine('<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="3" data-seite="tag"/>');
+  const engine = fakeEngine('<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="4" data-seite="tag"/>');
   const surface = fakeSurface();
   const { session, phases } = open(engine, surface);
   await session.reload();
@@ -1893,7 +1893,7 @@ test('a draft page left before it is read holds its draft until it is saved', as
 
 for (const { kind, file, readError, phase } of [
   { kind: 'broken', file: BROKEN, readError: undefined, phase: 'unlesbar' },
-  { kind: 'from a newer version', file: '<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="3" data-seite="tag"/>', readError: undefined, phase: 'zuNeu' },
+  { kind: 'from a newer version', file: '<svg xmlns="http://www.w3.org/2000/svg" data-notizbuch="4" data-seite="tag"/>', readError: undefined, phase: 'zuNeu' },
   { kind: 'refused by the path guard', file: null, readError: new PathNotAllowedError(PATH), phase: 'gesperrt' },
 ] as const) {
   test(`a draft on a page that is ${kind} is never saved and is not held, open or left`, async () => {

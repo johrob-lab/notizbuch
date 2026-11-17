@@ -3,6 +3,8 @@ import { MM, PAGE_H, PAGE_W, PAPER, type FieldBox, type PageKind } from '../ink/
 import { formatDayLong, isValidDay, isoWeekKey, monthGrid, monthKey, MONTHS, weekDays, type Day } from '../lib/dates';
 import { besprechungBase } from '../lib/filenames';
 import { holidaysAT } from '../lib/holidays';
+import { istTabelle } from '../lib/meetings';
+import { TABELLE_SPALTEN, TABELLE_ZEILEN, tabelleGeometrie, zeilenFeld } from './tabelle';
 import { fitLines, geburtstagItem, moreLabel, prioItems, SEPARATOR, terminItems, textWidth, withHead, type AgendaDay, type AgendaItem } from './agenda';
 
 export type { AgendaDay } from './agenda';
@@ -392,32 +394,99 @@ export function monatLayout(month: string): Layout {
 
 const MEETING_ROWS = 32;
 
+/** Der gemeinsame Kopf einer Besprechungsseite: Papier, Fläche, Linie, Thema, Seitenzahl, Zeile mit Datum, Zeit und Ort, Projekt. */
+function meetingHead(meta: Record<string, string>, datum: string, page: string): string {
+  const when = [datum ? formatDayLong(datum) : '', meta.zeit ?? '', meta.ort ?? ''].filter(Boolean).join(' · ');
+  return (
+    paper() +
+    rect([0, 0, PAGE_W, MEETING_HEAD], { fill: COLOR.soft }) +
+    rect([0, MEETING_HEAD - 2, PAGE_W, 2], { fill: COLOR.frame }) +
+    text(LEFT, 80, clip(meta.thema?.trim() || 'Besprechung', 36), { 'font-size': 34, 'font-weight': 700, fill: COLOR.text }) +
+    text(RIGHT, 80, `Seite ${page}`, { 'font-size': 16, 'text-anchor': 'end', fill: COLOR.muted }) +
+    (when ? text(LEFT, 120, clip(when, 70), { 'font-size': 18, fill: COLOR.muted }) : '') +
+    (meta.projekt ? text(LEFT, 154, clip(meta.projekt, 70), { 'font-size': 16, fill: COLOR.label }) : '')
+  );
+}
+
+const meetingDay = (meta: Record<string, string>): string => (isValidDay(meta.datum ?? '') ? meta.datum : '');
+const meetingPage = (meta: Record<string, string>): string => (/^[1-9]\d{0,3}$/.test(meta.seitennr ?? '') ? meta.seitennr : '1');
+
 /** `meta` sind die Kopfangaben der Seite: thema, datum, zeit, ort, projekt, seitennr. Fehlende Angaben bleiben leer. */
 export function besprechungLayout(meta: Record<string, string>): Layout {
-  const datum = isValidDay(meta.datum ?? '') ? meta.datum : '';
-  const page = /^[1-9]\d{0,3}$/.test(meta.seitennr ?? '') ? meta.seitennr : '1';
+  const datum = meetingDay(meta);
+  const page = meetingPage(meta);
   const field: Rect = [0, MEETING_HEAD, PAGE_W, MEETING_ROWS * LINE];
   return {
     kind: 'besprechung',
     key: datum ? besprechungBase(datum, meta.zeit ?? '', meta.thema ?? '') : '',
     fields: [{ id: 'besprechung', rect: field, datum, label: 'Besprechung', paper: 'liniert7' }],
     cards: [],
-    background: once(() => {
-      const when = [datum ? formatDayLong(datum) : '', meta.zeit ?? '', meta.ort ?? ''].filter(Boolean).join(' · ');
-      return (
-        paper() +
-        rect([0, 0, PAGE_W, MEETING_HEAD], { fill: COLOR.soft }) +
-        rect([0, MEETING_HEAD - 2, PAGE_W, 2], { fill: COLOR.frame }) +
-        text(LEFT, 80, clip(meta.thema?.trim() || 'Besprechung', 36), { 'font-size': 34, 'font-weight': 700, fill: COLOR.text }) +
-        text(RIGHT, 80, `Seite ${page}`, { 'font-size': 16, 'text-anchor': 'end', fill: COLOR.muted }) +
-        (when ? text(LEFT, 120, clip(when, 70), { 'font-size': 18, fill: COLOR.muted }) : '') +
-        (meta.projekt ? text(LEFT, 154, clip(meta.projekt, 70), { 'font-size': 16, fill: COLOR.label }) : '') +
+    background: once(
+      () =>
+        meetingHead(meta, datum, page) +
         ruling(field[0], field[1], field[2], MEETING_ROWS, COLOR.ruled) +
         rect([MEETING_MARGIN, MEETING_HEAD, 1.5, field[3]], { fill: COLOR.margin }) +
-        foot(`Besprechung${datum ? ` · ${formatDayLong(datum)}` : ''}`)
+        foot(`Besprechung${datum ? ` · ${formatDayLong(datum)}` : ''}`),
+    ),
+  };
+}
+
+/** Das leere Element, aus dem die Abendroutine die Geometrie der Tabelle liest. Genau diese Zeichen, nicht zusammengebaut. */
+const TABELLE_MARKER =
+  '<g data-tabelle="1" data-spalten="23 215 269 341 395 449 509 581 713 845 941 1037 1169" data-zeilen="248 296 344 392 440 488 536 584 632 680 728 776 824 872 920 968 1016 1064 1112 1160 1208 1256 1304 1352 1400 1448 1496 1544" data-kopfzeile="212 248"/>';
+
+/** Die Tabellenseite der Arbeitsvorbereitung: Kopf wie die Besprechung, darunter zwölf Spalten und je Zeile ein leeres Feld. */
+export function tabelleLayout(meta: Record<string, string>): Layout {
+  const datum = meetingDay(meta);
+  const page = meetingPage(meta);
+  const geo = tabelleGeometrie();
+  const [left, right] = [geo.spalten[0], geo.spalten[geo.spalten.length - 1]];
+  const [headTop, headBottom] = geo.kopfzeile;
+  const bottom = geo.zeilen[geo.zeilen.length - 1];
+  return {
+    kind: 'besprechung',
+    key: datum ? besprechungBase(datum, meta.zeit ?? '', meta.thema ?? '') : '',
+    fields: Array.from({ length: TABELLE_ZEILEN }, (_, i) => ({
+      id: zeilenFeld(i + 1),
+      rect: [0, geo.zeilen[i], PAGE_W, geo.zeilen[i + 1] - geo.zeilen[i]] as Rect,
+      datum,
+      label: `Zeile ${i + 1}`,
+      paper: 'blanko' as const,
+    })),
+    cards: [],
+    background: once(() => {
+      let heads = '';
+      TABELLE_SPALTEN.forEach((s, i) => {
+        heads += text((geo.spalten[i] + geo.spalten[i + 1]) / 2, 236, s.titel, {
+          'font-size': 13,
+          'font-weight': 700,
+          'text-anchor': 'middle',
+          fill: COLOR.label,
+        });
+      });
+      let numbers = '';
+      for (let i = 0; i < TABELLE_ZEILEN; i++) {
+        numbers += text(19, geo.zeilen[i] + 31, String(i + 1), { 'font-size': 11, 'text-anchor': 'end', fill: COLOR.dim });
+      }
+      const across = [headTop, ...geo.zeilen].map((y) => `M${num(left)} ${num(y)}H${num(right)}`).join('');
+      const down = geo.spalten.map((x) => `M${num(x)} ${num(headTop)}V${num(bottom)}`).join('');
+      return (
+        meetingHead(meta, datum, page) +
+        rect([left, headTop, right - left, headBottom - headTop], { fill: COLOR.header }) +
+        heads +
+        numbers +
+        `<path d="${across}" fill="none" stroke="${COLOR.rule}" stroke-width="1.2"/>` +
+        `<path d="${down}" fill="none" stroke="${COLOR.line}" stroke-width="1.2"/>` +
+        TABELLE_MARKER +
+        foot(`Tabelle Arbeitsvorbereitung${datum ? ` · ${formatDayLong(datum)}` : ''}`)
       );
     }),
   };
+}
+
+/** Das Layout einer Seite der Besprechung: die Tabelle nur bei `art` `tabelle`, sonst die Notizseite. */
+export function meetingLayout(meta: Record<string, string>): Layout {
+  return istTabelle(meta) ? tabelleLayout(meta) : besprechungLayout(meta);
 }
 
 // ---------- Tippen und Heute ----------

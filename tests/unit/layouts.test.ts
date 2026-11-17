@@ -10,6 +10,7 @@ import {
   besprechungLayout,
   calendarTargets,
   monatLayout,
+  tabelleLayout,
   tagLayout,
   tapTargetAt,
   tapTargets,
@@ -33,6 +34,11 @@ function textAt(bg: string, x: number, y: number): { attrs: string; body: string
   return m ? { attrs: m[1], body: m[2] } : undefined;
 }
 
+test('the meeting background stays exactly as it was', () => {
+  expect(besprechungLayout(MEETING).background()).toMatchSnapshot();
+  expect(besprechungLayout({}).background()).toMatchSnapshot();
+});
+
 function allLayouts(): Layout[] {
   const months = Array.from({ length: 12 }, (_, i) => `2026-${String(i + 1).padStart(2, '0')}`);
   return [
@@ -45,6 +51,8 @@ function allLayouts(): Layout[] {
     monatLayout('2027-02'),
     besprechungLayout(MEETING),
     besprechungLayout({}),
+    tabelleLayout({ ...MEETING, art: 'tabelle' }),
+    tabelleLayout({ art: 'tabelle' }),
   ];
 }
 

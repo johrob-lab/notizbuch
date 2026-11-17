@@ -51,6 +51,16 @@ export function besprechungPagePath(base: string, n: number): string {
   return `${PAGES_DIR}/${base.slice(0, 4)}/${base} S${n}.svg`;
 }
 
+/** Die CSV der Tabellenseiten einer Besprechung, neben den Seiten. */
+export function tabelleCsvPath(base: string): string {
+  return `${PAGES_DIR}/${base.slice(0, 4)}/${base} Tabelle.csv`;
+}
+
+/** Der JSON-Speicher dazu, neben den Seiten. */
+export function tabelleJsonPath(base: string): string {
+  return `${PAGES_DIR}/${base.slice(0, 4)}/${base} Tabelle.json`;
+}
+
 /**
  * Der Name einer Seite für Meldungen, so wie die App sie zeigt: `Fr 30.10.2026`, `KW 44 / 2026`, `Oktober 2026` oder
  * `Thema, Seite 2` für eine Besprechung. Andere Dateien heißen wie die Datei ohne Ordner und Endung.
