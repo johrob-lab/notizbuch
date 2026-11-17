@@ -3,11 +3,11 @@ import { addDays, isValidDay, isoWeekKey, monthKey, todayVienna, weekDays, type 
 // Die Adresse (`window.location.hash`) bestimmt, welche Seite offen ist. Jede Seite hat genau eine gültige Adresse,
 // und `parseRoute` liest nur Adressen mit einem Schlüssel, den es gibt: Alles andere zeigt den heutigen Tag.
 
-export type View = 'tag' | 'woche' | 'monat' | 'besprechung' | 'einstellungen';
+export type View = 'tag' | 'woche' | 'monat' | 'besprechung' | 'besprechungen' | 'einstellungen';
 
 /**
  * Eine Seite des Notizbuchs. Der Schlüssel ist je nach Ansicht der Tag (`2026-10-29`), die Woche (`2026-W44`),
- * der Monat (`2026-10`) oder der Name der Besprechung ohne Seitennummer. Die Einstellungen haben keinen Schlüssel.
+ * der Monat (`2026-10`) oder der Name der Besprechung ohne Seitennummer. Die Einstellungen und die Liste der Besprechungen haben keinen Schlüssel.
  */
 export type Route = { view: View; key: string; n?: number };
 
@@ -47,6 +47,7 @@ function isValidMeeting(base: string): boolean {
 
 function read(hash: string): Route | null {
   if (hash === '#/einstellungen') return { view: 'einstellungen', key: '' };
+  if (hash === '#/besprechungen') return { view: 'besprechungen', key: '' };
 
   const page = PAGE_ADDRESS.exec(hash);
   if (page) {
@@ -73,6 +74,7 @@ export function parseRoute(hash: string): Route {
 
 export function routeHash(r: Route): string {
   if (r.view === 'einstellungen') return '#/einstellungen';
+  if (r.view === 'besprechungen') return '#/besprechungen';
   if (r.view === 'besprechung') return `#/besprechung/${encodeURIComponent(r.key)}/${r.n ?? 1}`;
   return `#/${r.view}/${r.key}`;
 }
@@ -83,11 +85,11 @@ function stepMonth(key: string, delta: number): string {
   return `${String(year).padStart(4, '0')}-${String((index % 12) + 1).padStart(2, '0')}`;
 }
 
-// Einen Tag, eine Woche oder einen Monat weiter. Am Rand des Kalenders (Jahr 1000 und 9998) und bei Besprechung und
-// Einstellungen bleibt die Seite, wo sie ist, statt einen Schlüssel zu erfinden, den es nicht gibt. Die Seiten einer
+// Einen Tag, eine Woche oder einen Monat weiter. Am Rand des Kalenders (Jahr 1000 und 9998) und bei Besprechung, Liste
+// der Besprechungen und Einstellungen bleibt die Seite, wo sie ist, statt einen Schlüssel zu erfinden, den es nicht gibt. Die Seiten einer
 // Besprechung blättert die Seite selbst (siehe `Steps`): Welche Seiten es gibt, steht nicht in der Adresse.
 function step(r: Route, delta: 1 | -1): Route {
-  if (r.view === 'besprechung' || r.view === 'einstellungen') return r;
+  if (r.view === 'besprechung' || r.view === 'besprechungen' || r.view === 'einstellungen') return r;
   let key: string;
   if (r.view === 'tag') key = addDays(r.key, delta);
   else if (r.view === 'woche') key = isoWeekKey(addDays(weekDays(r.key)[0], 7 * delta));
@@ -140,6 +142,7 @@ export const STEP_LABELS: Record<Route['view'], [string, string]> = {
   woche: ['Vorige Woche', 'Nächste Woche'],
   monat: ['Voriger Monat', 'Nächster Monat'],
   besprechung: ['Vorige Seite', 'Nächste Seite'],
+  besprechungen: ['Vorige Seite', 'Nächste Seite'],
   einstellungen: ['Vorige Seite', 'Nächste Seite'],
 };
 

@@ -246,7 +246,7 @@ test('every button of the top bar and every tab is at least 44 points', async ({
       return { name: el.getAttribute('aria-label') ?? el.textContent, width: r.width, height: r.height };
     }),
   );
-  expect(sizes).toHaveLength(11 + 12); // oben 2 Pfeile, Heute, 6 Ansichten, Vollbild und das Zahnrad, dazu 12 Reiter
+  expect(sizes).toHaveLength(12 + 12); // oben 2 Pfeile, Heute, 7 Ansichten (mit Besprechungen), Vollbild und das Zahnrad, dazu 12 Reiter
   for (const s of sizes) {
     expect(s.width, `${s.name} breit genug`).toBeGreaterThanOrEqual(44);
     expect(s.height, `${s.name} hoch genug`).toBeGreaterThanOrEqual(44);

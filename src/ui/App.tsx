@@ -11,6 +11,7 @@ import { GitHubClient, type ListDir, type ReadFile } from '../sync/github';
 import { openStore, type Store } from '../sync/store';
 import { acquireActiveWindow, type ActiveWindow } from './activeWindow';
 import type { AccessValues } from './AccessForm';
+import { BesprechungenPage } from './BesprechungenPage';
 import { BesprechungPage } from './BesprechungPage';
 import { MonatPage } from './MonatPage';
 import { MonthTabs } from './MonthTabs';
@@ -92,8 +93,9 @@ function Seite({ route, listDir, readFile, onSteps, ...page }: { route: Route; l
       return <MonatPage month={route.key} {...page} />;
     case 'besprechung':
       return <BesprechungPage base={route.key} n={route.n ?? 1} listDir={listDir} readFile={readFile} onSteps={onSteps} {...page} />;
+    case 'besprechungen':
     case 'einstellungen':
-      return null; // die Einstellungen sind keine Seite zum Schreiben, die App zeigt sie selbst
+      return null; // Einstellungen und Liste der Besprechungen sind keine Seite zum Schreiben, die App zeigt sie selbst
   }
 }
 
@@ -395,9 +397,9 @@ export function App() {
     void updateSettings(now.store, (saved) => ({ ...saved, vollbild: { ...vollbildOf(saved), ...change } })).catch(() => undefined);
   };
 
-  // Vollbild gilt nur auf Seiten, nie in den Einstellungen.
+  // Vollbild gilt nur auf Seiten, nie in den Einstellungen und in der Liste der Besprechungen.
   const vollbild = boot.phase === 'bereit' ? vollbildOf(boot.settings) : null;
-  const fullscreen = vollbild !== null && vollbild.an && route.view !== 'einstellungen';
+  const fullscreen = vollbild !== null && vollbild.an && route.view !== 'einstellungen' && route.view !== 'besprechungen';
 
   // Wohin ‹ und › führen, in der Leiste oben wie im Rad: Die Schritte einer Besprechung gelten nur für die Seite, die sie gemeldet hat.
   const steps = pageSteps?.hash === here ? pageSteps.steps : undefined;
@@ -442,6 +444,8 @@ export function App() {
                 onChange={choose}
                 onAccess={changeAccess}
               />
+            ) : route.view === 'besprechungen' ? (
+              <BesprechungenPage key={here} engine={boot.engine} listDir={boot.listDir} />
             ) : (
               <Seite
                 key={here}
@@ -461,7 +465,7 @@ export function App() {
                 onVollbildAus={() => setVollbild({ an: false })}
               />
             )}
-            {route.view !== 'einstellungen' && !fullscreen && <MonthTabs year={Number(shown.slice(0, 4))} current={shown} />}
+            {route.view !== 'einstellungen' && route.view !== 'besprechungen' && !fullscreen && <MonthTabs year={Number(shown.slice(0, 4))} current={shown} />}
           </div>
         </>
       ) : boot.phase === 'einrichten' ? (

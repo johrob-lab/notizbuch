@@ -285,6 +285,11 @@ body {
   color: #fff;
 }
 
+/* Die Kurzform des Knopfs „Besprechungen“ gilt nur auf schmalen Bildschirmen (siehe unten). */
+.pill .kurz {
+  display: none;
+}
+
 /* Ausgegraut, aber nicht tot: Ein Tipp sagt, wann es kommt. */
 .pill[aria-disabled='true'] {
   opacity: 0.4;
@@ -373,6 +378,15 @@ body {
 @media (max-width: 900px) {
   .topbar {
     gap: 4px;
+  }
+
+  /* Der Knopf „Besprechungen“ ist die längste Beschriftung der Leiste und zeigt hier die Kurzform. */
+  .pill .lang {
+    display: none;
+  }
+
+  .pill .kurz {
+    display: inline;
   }
 
   .pill {
@@ -527,7 +541,8 @@ body {
  * ist (kleines iPad, Tastatur eingeblendet). Die Schrift ist 16 Punkte oder größer, sonst zoomt Safari beim Antippen.
  */
 .einrichten,
-.einstellungen {
+.einstellungen,
+.besprechungen {
   box-sizing: border-box;
   flex: 1;
   min-height: 0;
@@ -538,12 +553,14 @@ body {
 }
 
 .einrichten > *,
-.einstellungen > * {
+.einstellungen > *,
+.besprechungen > * {
   max-width: 560px;
 }
 
 .einrichten h1,
-.einstellungen h1 {
+.einstellungen h1,
+.besprechungen h1 {
   margin: 0 0 12px;
   font-size: 22px;
 }
@@ -1929,4 +1946,35 @@ body {
 .schnellwechsel[data-modus='stueck'] {
   outline: 2px dashed currentColor;
   outline-offset: -6px;
+}
+
+/* Die Liste der Besprechungen: Monate mit Links, jeder Link mindestens 44 Punkte hoch zum Antippen. */
+.besprechungen h2 {
+  margin: 20px 0 8px;
+  font-size: 18px;
+}
+
+.besprechungen p {
+  margin: 0 0 12px;
+  font-size: 16px;
+  line-height: 1.4;
+  color: #4a5160;
+}
+
+.besprechungen ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.besprechungen li a {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--linie);
+  color: inherit;
+  font-size: 16px;
+  text-decoration: none;
 }

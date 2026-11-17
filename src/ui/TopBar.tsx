@@ -179,10 +179,14 @@ export function TopBar({ route, engine, steps, startNotice, passive, blocked, vo
             </button>
           ),
         )}
+        <a class="pill" href="#/besprechungen" aria-label="Besprechungen" aria-current={route.view === 'besprechungen' ? 'page' : undefined}>
+          <span class="lang" aria-hidden="true">Besprechungen</span>
+          <span class="kurz" aria-hidden="true">Bespr.</span>
+        </a>
       </nav>
       {/* Das Fenster, das nur liest, hat keinen Stand zu zeigen. Die leere Fläche hält das Zahnrad rechts. */}
       {passive ? <span class="status" /> : <StatusPill engine={engine} />}
-      {onVollbild && route.view !== 'einstellungen' && (
+      {onVollbild && route.view !== 'einstellungen' && route.view !== 'besprechungen' && (
         <button type="button" class="pill vollbild-knopf" onClick={onVollbild}>
           Vollbild
         </button>

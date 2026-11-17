@@ -242,6 +242,16 @@ test('a meeting and the settings do not have arrows that go anywhere', () => {
   expect(prevRoute(settings)).toEqual(settings);
 });
 
+test('the meeting list has its own address and no steps', () => {
+  const list: Route = { view: 'besprechungen', key: '' };
+  expect(parseRoute('#/besprechungen')).toEqual(list);
+  expect(routeHash(list)).toBe('#/besprechungen');
+  expect(prevRoute(list)).toEqual(list);
+  expect(nextRoute(list)).toEqual(list);
+  expect(shownDay(list, '2026-10-29')).toBe('2026-10-29');
+  expect(parseRoute('#/besprechungen/x')).toEqual({ view: 'tag', key: '2026-10-29' });
+});
+
 test('the shown day follows the page, and today wins when the page contains it', () => {
   expect(shownDay({ view: 'tag', key: '2026-10-05' }, '2026-10-29')).toBe('2026-10-05');
   // Woche mit heute: heute. Andere Woche: ihr Montag.
