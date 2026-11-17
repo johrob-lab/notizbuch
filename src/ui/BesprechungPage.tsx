@@ -3,7 +3,9 @@ import type { Page } from '../ink/types';
 import { isValidDay } from '../lib/dates';
 import { besprechungPagePath } from '../lib/filenames';
 import {
+  ART_TABELLE,
   firstFreePage,
+  istTabelle,
   isValidTime,
   listMeetings,
   meetingMeta,
@@ -13,7 +15,7 @@ import {
   pageLabel,
   projectNames,
 } from '../lib/meetings';
-import { besprechungLayout } from '../pages/layouts';
+import { meetingLayout } from '../pages/layouts';
 import { meetingPageText } from '../pages/meetingText';
 import type { ListDir } from '../sync/github';
 import { normalizePath } from '../sync/paths';
@@ -38,6 +40,7 @@ type Props = PageProps & {
 
 const PROJECTS = '02 Projekte';
 const QUESTION = 'Seite wirklich löschen?';
+const ART_QUESTION = 'Auf der Seite steht schon etwas. Art trotzdem ändern?';
 const ADD_FAILED = 'Die neue Seite konnte nicht angelegt werden. Bitte noch einmal versuchen.';
 const DELETE_FAILED = 'Die Seite konnte nicht gelöscht werden. Bitte noch einmal versuchen.';
 
@@ -63,9 +66,10 @@ type FormProps = {
   problem: string;
   onAdd(): void;
   onDelete(): void;
+  onArt(select: HTMLSelectElement): void;
 };
 
-function Form({ tools, projects, label, readOnly, locked, problem, onAdd, onDelete }: FormProps) {
+function Form({ tools, projects, label, readOnly, locked, problem, onAdd, onDelete, onArt }: FormProps) {
   const { meta } = tools;
   // Solange die Seite nicht gelesen ist, lässt sich nichts ändern: Sonst entstünde neben einer Seite, die man noch nicht sieht, eine zweite.
   const ready = tools.phase === 'bereit' && !locked;
@@ -128,6 +132,13 @@ function Form({ tools, projects, label, readOnly, locked, problem, onAdd, onDele
               {name}
             </option>
           ))}
+        </select>
+      </div>
+      <div class="feld">
+        <label for="kopf-art">Art</label>
+        <select id="kopf-art" value={istTabelle(meta) ? ART_TABELLE : ''} disabled={!ready} onChange={(e) => onArt(e.currentTarget)}>
+          <option value="">Notizen</option>
+          <option value={ART_TABELLE}>Tabelle Arbeitsvorbereitung</option>
         </select>
       </div>
       <div class="seitenleiste">
@@ -230,20 +241,21 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
     return () => onSteps(null);
   }, [onSteps, base, prev, next]);
 
-  const layout = useMemo(() => ({ ...besprechungLayout(meetingMeta(base, n, {})), key: base }), [base, n]);
+  const layout = useMemo(() => ({ ...meetingLayout(meetingMeta(base, n, {})), key: base }), [base, n]);
   const kopf = useMemo(
     () => ({
       // Der Dateiname bestimmt, welche Besprechung und welche Seite es ist: Der Schlüssel der Seite ist `base`, die Nummer `n`.
       complete: (page: Page): Page => ({ ...page, kind: 'besprechung', key: base, meta: meetingMeta(base, n, page.meta) }),
       layoutFor: (meta: Record<string, string>) => {
-        const { fields, background } = besprechungLayout(meta);
+        const { fields, background } = meetingLayout(meta);
         return { fields, background: background() };
       },
     }),
     [base, n],
   );
 
-  // Eine neue Seite hat die Kopfdaten dieser Seite, wie sie jetzt sind, und die nächste freie Nummer: Eine Seite, die es nur
+  // Eine neue Seite hat die Kopfdaten dieser Seite, wie sie jetzt sind (auch `art`: `meetingMeta` behält Angaben, die es nicht
+  // kennt, darum ist die nächste Seite einer Tabelle wieder eine Tabelle), und die nächste freie Nummer: Eine Seite, die es nur
   // auf diesem Gerät gibt, wird nie überschrieben.
   // Bekannte Grenze: Ob eine Nummer frei ist, sagt `engine.read`. Ohne Netz kennt sie nur Seiten, die dieses Gerät hat, eine
   // Seite, die es nur auf GitHub gibt, gilt dann als frei. Die neue Seite trägt deren Nummer, und beim Abgleich trifft sie
@@ -266,6 +278,20 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
     } finally {
       busy.current = false;
     }
+  };
+
+  // Die Art der Seite (Notizen oder Tabelle) wechselt im Kopf. Steht schon etwas auf der Seite, fragt die App erst: Die Striche
+  // bleiben, kommen aber in andere Felder. Bei „Abbrechen“ zeigt die Auswahl wieder, was die Seite hat: Die Kopfangabe hat
+  // sich nicht geändert, also zeichnet nichts neu.
+  const changeArt = async (tools: KopfTools, select: HTMLSelectElement) => {
+    const wanted = select.value;
+    const restore = () => {
+      select.value = istTabelle(tools.current().meta) ? ART_TABELLE : '';
+    };
+    if (tools.current().strokes.length > 0) {
+      if (!(await confirmDialog({ frage: ART_QUESTION, ja: 'Ändern', signal: away.signal }))) return restore();
+    }
+    tools.edit({ art: wanted });
   };
 
   // Gelöscht wird nur nach der Rückfrage der App und nur mit „Löschen“. Danach geht die Seite davor auf, sonst die nächste,
@@ -308,6 +334,7 @@ export function BesprechungPage({ base: address, n, listDir, onSteps, ...rest }:
         problem={problem}
         onAdd={() => void addPage(tools)}
         onDelete={() => void deletePage(tools)}
+        onArt={(select) => void changeArt(tools, select)}
       />
     ),
   };

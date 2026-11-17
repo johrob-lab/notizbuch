@@ -387,6 +387,7 @@ for (const { name, options } of UNUSABLE) {
   test(`the header can not be changed on a page that is ${name}`, async ({ page }) => {
     const repo = await openSeeded(page, hashOf(BASE, 1), options);
     for (const label of ['Thema', 'Datum', 'Zeit', 'Ort', 'Projekt']) await expect(field(page, label)).toBeDisabled();
+    await expect(field(page, 'Art')).toBeDisabled();
     await expect(button(page, '+ Seite')).toBeDisabled();
     await sendToBackground(page);
     expect(repo.puts).toEqual([]);
