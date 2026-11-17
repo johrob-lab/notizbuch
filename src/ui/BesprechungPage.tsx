@@ -15,7 +15,7 @@ import {
   pageLabel,
   projectNames,
 } from '../lib/meetings';
-import { csvDateiname, KEINE_CSV, neuesterStrich, OHNE_NETZ, standHinweis } from '../lib/tabelleCsv';
+import { csvDateiname, ERNEUT_TIPPEN, KEINE_CSV, neuesterStrich, OHNE_NETZ, standHinweis } from '../lib/tabelleCsv';
 import { meetingLayout } from '../pages/layouts';
 import { meetingPageText } from '../pages/meetingText';
 import { OfflineError, type ListDir, type ReadFile } from '../sync/github';
@@ -344,20 +344,34 @@ export function BesprechungPage({ base: address, n, listDir, readFile, onSteps, 
 
   // Die CSV holt die App von GitHub (die Abendroutine schreibt sie dort) und gibt sie unverändert aus: am Firmen-PC als Download,
   // sonst über das Teilen-Blatt. Hat die Seite neuere Striche als die CSV, kommt die Datei trotzdem, mit einem Hinweis.
+  // Das Teilen braucht den Fingertipp noch frisch (iOS). Dauert das Laden zu lang, scheitert es mit `NotAllowedError`: Dann bleibt
+  // der geladene Text für den nächsten Tipp liegen, der ohne Warten teilt. Er gilt nur für diesen einen Tipp und diese Seite.
   const downloading = useRef(false);
+  const loaded = useRef<string | null>(null);
   const download = async (tools: KopfTools) => {
     if (downloading.current) return;
     downloading.current = true;
+    const kept = loaded.current;
+    loaded.current = null;
     setHinweis('');
     try {
-      const csv = await readFile(tabelleCsvPath(base));
+      const csv = kept ?? (await readFile(tabelleCsvPath(base)));
       if (csv === null) {
         setHinweis(KEINE_CSV);
         return;
       }
-      // Ein fehlender oder unlesbarer Zeilenspeicher ist kein Grund, die Datei zurückzuhalten.
+      try {
+        await csvAusgeben(csv, csvDateiname(base), rest.readOnly ? 'laden' : 'teilen');
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'NotAllowedError') {
+          loaded.current = csv;
+          setHinweis(ERNEUT_TIPPEN);
+          return;
+        }
+        throw error;
+      }
+      // Der Zeilenspeicher kommt erst nach der Ausgabe. Ein fehlender oder unlesbarer ist kein Grund, die Datei zurückzuhalten.
       const store = await readFile(tabelleJsonPath(base)).catch(() => null);
-      await csvAusgeben(csv, csvDateiname(base), rest.readOnly ? 'laden' : 'teilen');
       setHinweis(standHinweis(store, n, neuesterStrich(tools.current())) ?? '');
     } catch (error) {
       if (error instanceof OfflineError) setHinweis(OHNE_NETZ);

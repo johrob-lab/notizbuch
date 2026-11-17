@@ -192,6 +192,32 @@ test('on the iPad the button hands the CSV to the share sheet', async ({ page })
   expect(Buffer.from(shared.bytes)).toEqual(Buffer.from(CSV, 'utf8'));
 });
 
+test('when the tap has expired the second tap shares the loaded CSV', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { shared?: { name: string; bytes: number[] }; calls: number };
+    w.calls = 0;
+    Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true });
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: async (data: ShareData) => {
+        if (++w.calls === 1) throw new DOMException('Der Fingertipp ist abgelaufen.', 'NotAllowedError');
+        const file = data.files![0];
+        w.shared = { name: file.name, bytes: [...new Uint8Array(await file.arrayBuffer())] };
+      },
+    });
+  });
+  const repo = await openSeeded(page, hashOf(BASE, 1), { files: { [PAGE1]: tablePageText(1), [CSV_PATH]: CSV, [JSON_PATH]: STORE } });
+  await button(page, DOWNLOAD).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Die CSV ist geladen. Zum Teilen bitte noch einmal tippen.' })).toBeVisible();
+  // Der zweite Tipp lädt nicht noch einmal: Ohne Netz teilt er trotzdem.
+  repo.offline = true;
+  await button(page, DOWNLOAD).click();
+  await page.waitForFunction(() => 'shared' in window);
+  const shared = await page.evaluate(() => (window as unknown as { shared: { name: string; bytes: number[] } }).shared);
+  expect(shared.name).toBe(CSV_NAME);
+  expect(Buffer.from(shared.bytes)).toEqual(Buffer.from(CSV, 'utf8'));
+});
+
 test('without a CSV the button says it comes with the evening routine', async ({ page }) => {
   await openSeeded(page, hashOf(BASE, 1), { device: 'Firmen-PC', files: { [PAGE1]: tablePageText(1) } });
   let downloads = 0;

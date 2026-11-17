@@ -7,6 +7,9 @@ export const KEINE_CSV = 'Noch nicht abgetippt. Die CSV kommt mit der Abendrouti
 /** Zum Holen der CSV von GitHub braucht die App Netz. */
 export const OHNE_NETZ = 'Zum Herunterladen braucht die App Netz.';
 
+/** Das Teilen ging nicht mehr (der Fingertipp war beim Laden abgelaufen): Die CSV ist da, ein zweiter Tipp teilt sie. */
+export const ERNEUT_TIPPEN = 'Die CSV ist geladen. Zum Teilen bitte noch einmal tippen.';
+
 /** Der Name der Datei, die der Knopf ausgibt: die Besprechung plus ` Tabelle.csv`. */
 export const csvDateiname = (base: string): string => `${base} Tabelle.csv`;
 
