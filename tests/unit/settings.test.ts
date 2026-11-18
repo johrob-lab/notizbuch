@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { forceCloseDatabase, IDBFactory } from 'fake-indexeddb';
 import { unwrap } from 'idb';
 import { afterEach, beforeEach, expect, test } from 'vitest';
-import { loadSettings, saveSettings, updateSettings, vollbildOf, type Settings } from '../../src/lib/settings';
+import { kiModelOf, loadSettings, saveSettings, updateSettings, vollbildOf, type Settings } from '../../src/lib/settings';
 import { openStore, type Store } from '../../src/sync/store';
 
 // Alles hier ist erfunden, auch der Token.
@@ -140,4 +140,11 @@ test('vollbildOf fills gaps and ignores garbage', () => {
   expect(vollbildOf({ vollbild: { an: true } })).toEqual({ an: true, werkzeuge: 'kreis' });
   expect(vollbildOf({ vollbild: { an: 'ja', werkzeuge: 'stern' } })).toEqual({ an: false, werkzeuge: 'kreis' });
   expect(vollbildOf({ vollbild: { an: true, werkzeuge: 'tab' } })).toEqual({ an: true, werkzeuge: 'tab' });
+});
+
+test('kiModelOf falls back to sonnet', () => {
+  expect(kiModelOf(undefined)).toBe('sonnet');
+  expect(kiModelOf({})).toBe('sonnet');
+  expect(kiModelOf({ kiModel: 'opus' })).toBe('sonnet');
+  expect(kiModelOf({ kiModel: 'haiku' })).toBe('haiku');
 });
