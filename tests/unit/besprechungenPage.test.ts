@@ -265,3 +265,45 @@ test('a list that goes away while GitHub has not answered yet leaves no cue behi
   expect(listings(listDir)).toBe(1);
   expect(vi.getTimerCount()).toBe(0);
 });
+
+test('a cue that comes while the very first listing still hangs is not lost: when that listing fails, the next try follows at once', async () => {
+  let asked = 0;
+  const fails: ((error: Error) => void)[] = [];
+  const listDir = vi.fn<ListDir>((folder) => {
+    if (folder !== PAGES_DIR) return repo(folder);
+    asked += 1;
+    if (asked === 1) return new Promise<DirEntry[]>((_, reject) => fails.push(reject));
+    return repo(folder);
+  });
+  await mount(device(HERE), listDir);
+  await wait(0);
+  expect(statuses()).toEqual([LOADING]);
+
+  // Das Netz kommt zurück, während die erste Anfrage noch hängt: Sie startet nichts zweites, wird aber gemerkt.
+  await cue(online);
+  expect(listings(listDir)).toBe(1);
+
+  await act(async () => {
+    fails[0](new TypeError('Load failed'));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(listings(listDir)).toBe(2);
+  expect(statuses()).toEqual([]);
+  expect(links()).toEqual([THERE_LABEL, HERE_LABEL]);
+  await wait(600_000);
+  expect(listings(listDir)).toBe(2);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test('a list that goes away after a cue during its first, still hanging listing starts nothing more', async () => {
+  const listDir = vi.fn<ListDir>(never);
+  await mount(device(HERE), listDir);
+  await wait(10_000);
+  await cue(online); // gemerkt, solange die erste Anfrage hängt
+  await act(() => {
+    render(null, host);
+  });
+  await wait(630_000);
+  expect(listings(listDir)).toBe(1);
+  expect(vi.getTimerCount()).toBe(0);
+});

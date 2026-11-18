@@ -75,9 +75,9 @@ export function BesprechungenPage({ engine, listDir }: Props) {
       if (current) setKnown((now) => ({ ...now, ...patch }));
     };
     // Ein neues Laden lässt stehen, was die Liste zeigt, auch den Hinweis, bis neue Antworten da sind. Es läuft nie mehr als
-    // eines. Ein Anlass, der währenddessen kommt (etwa das Netz zurück, während ein Versuch noch hängt), wird gemerkt: Fehlt
-    // danach die Liste von GitHub, folgt gleich genau ein weiterer Versuch. Scheitert auch der, wartet die Liste auf den
-    // nächsten Anlass; ist die Liste von GitHub da, braucht es keinen mehr.
+    // eines. Die Anlässe zählen von Anfang an: Einer, der während eines Versuchs kommt (etwa das Netz zurück, während die erste
+    // Anfrage noch hängt), wird gemerkt. Fehlt danach die Liste von GitHub, folgt gleich genau ein weiterer Versuch; scheitert
+    // auch der, wartet die Liste auf den nächsten Anlass. Ist die Liste von GitHub da, braucht es keinen Anlass mehr.
     const run = () => {
       if (running) {
         missed = true;
@@ -91,12 +91,12 @@ export function BesprechungenPage({ engine, listDir }: Props) {
         if (online) {
           stopCues?.();
           stopCues = undefined;
-        } else {
-          stopCues ??= retryCues(run);
-          if (missed) run();
+        } else if (missed) {
+          run();
         }
       });
     };
+    stopCues = retryCues(run);
     run();
     return () => {
       current = false;
