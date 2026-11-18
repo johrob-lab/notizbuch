@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test as base, type Locator, type Page } from '@playwright/test';
-import { openSeeded, queued } from './helpers/app';
+import { openSeeded, queued, shareRepos } from './helpers/app';
 import { pen, viewOf } from './helpers/pointer';
 import { touchscreen } from './helpers/touch';
 
@@ -444,7 +444,7 @@ test('as an app from the home screen in fullscreen, the big briefing starts belo
   expect((await boxOf(button(page, 'Fertig'))).y).toBeGreaterThanOrEqual(32);
 });
 
-test('a hint of the page stays above the big briefing, the button Ganze Seite stays under it', async ({ page }) => {
+test('a hint of the page stays above the big briefing, the button Ganze Seite is gone meanwhile', async ({ page }) => {
   // Die Tagesseite selbst lässt sich nicht lesen: Die Bühne zeigt den Hinweis dazu (eine Warnung) und „Ganze Seite“.
   await openSeeded(page, DAY, { files: { [TAG_PAGE]: BROKEN_PAGE } });
   const hint = page.locator('p.hinweis', { hasText: UNREADABLE });
@@ -456,6 +456,96 @@ test('a hint of the page stays above the big briefing, the button Ganze Seite st
   // Ein Hinweis nimmt keine Zeiger an (pointer-events: none), `elementFromPoint` sähe durch ihn hindurch. Für die Prüfung nimmt er sie an.
   await hint.evaluate((el) => void ((el as HTMLElement).style.pointerEvents = 'auto'));
   expect(await onTop(hint), 'der Hinweis liegt über der Karte').toBe(true);
-  // „Ganze Seite“ passt nur die verdeckte Seite ein.
-  expect(await onTop(button(page, 'Ganze Seite')), '„Ganze Seite“ liegt unter der Karte').toBe(false);
+  // „Ganze Seite“ passt nur die verdeckte Seite ein: Solange die Karte groß ist, ist der Knopf weg.
+  await expect(button(page, 'Ganze Seite')).toBeHidden();
+});
+
+test('in fullscreen with the tab at the left edge, the boxes of the big briefing start right of the tab on every height', async ({ page }) => {
+  await page.setViewportSize({ width: 1180, height: 820 });
+  await openSeeded(page, DAY, { settings: { vollbild: { an: true, werkzeuge: 'tab' } } });
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await button(page, 'Briefing durchgehen').click();
+  await expect(button(page, 'Fertig')).toBeVisible();
+  const tab = await boxOf(page.getByRole('button', { name: 'Werkzeuge', exact: true }));
+  // Die Lasche liegt am linken Rand auf halber Höhe. Was links in der Karte steht, beginnt rechts von ihr, mit etwas Luft.
+  const content = await boxOf(briefing(page).locator('.karten-inhalt'));
+  expect(content.x).toBeGreaterThanOrEqual(tab.x + tab.width);
+  for (const name of [NAME1, NAME2]) expect((await boxOf(checkbox(page, name))).x).toBeGreaterThanOrEqual(tab.x + tab.width + 8);
+  expect((await boxOf(section(page, EVENING))).x).toBeGreaterThanOrEqual(tab.x + tab.width);
+});
+
+test('with the wheel there is no tab, and the big briefing keeps its narrow edge on the left', async ({ page }) => {
+  await openSeeded(page, DAY, { settings: { vollbild: { an: true, werkzeuge: 'kreis' } } });
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await button(page, 'Briefing durchgehen').click();
+  await expect(briefing(page)).toHaveCSS('padding-left', '16px');
+});
+
+for (const home of [false, true]) {
+  test(`in fullscreen ${home ? 'as an app from the home screen ' : ''}the status sits in the row of Fertig left of it, and a message right below that row`, async ({ page }) => {
+    if (home) await page.addInitScript(() => Object.defineProperty(Navigator.prototype, 'standalone', { get: () => true, configurable: true }));
+    const repo = await openSeeded(page, DAY, { settings: { vollbild: { an: true, werkzeuge: 'kreis' }, tokenExpiry: '2026-11-08' } });
+    await expect(checkbox(page, NAME1)).toBeVisible();
+    await button(page, 'Briefing durchgehen').click();
+    await expect(button(page, 'Fertig')).toBeVisible();
+    // Ohne Netz bleibt das Häkchen ungesichert. Verlässt man die App, versucht sie es sofort: Der Stand zeigt sich und bleibt.
+    repo.offline = true;
+    await checkbox(page, NAME1).click();
+    await expect(checkbox(page, NAME1)).toBeChecked();
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    const status = page.getByTestId('status');
+    await expect(status).toHaveText('Wartet auf Netz · 1 Änderung');
+    const fertig = await boxOf(button(page, 'Fertig'));
+    const stand = await boxOf(status);
+    expect(stand.x + stand.width, 'der Stand liegt links von „Fertig“').toBeLessThanOrEqual(fertig.x);
+    expect(stand.y, 'der Stand liegt in der Zeile von „Fertig“').toBeGreaterThanOrEqual(fertig.y);
+    expect(stand.y + stand.height).toBeLessThanOrEqual(fertig.y + fertig.height);
+    // Die Meldung schwebt gleich unter dieser Zeile, über keinem der beiden.
+    const message = await boxOf(page.locator('.meldung', { hasText: EXPIRY }));
+    expect(message.y).toBeGreaterThanOrEqual(fertig.y + fertig.height);
+    expect(message.y).toBeLessThanOrEqual(fertig.y + fertig.height + 8);
+    expect(overlap(message, stand)).toBe(false);
+  });
+}
+
+test('in fullscreen in a window that only reads, the row of Fertig starts below the window hint and the message right below that row', async ({ context, page }) => {
+  await openSeeded(page, DAY, { settings: { vollbild: { an: true, werkzeuge: 'kreis' }, tokenExpiry: '2026-11-08' } });
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  const second = await context.newPage();
+  await second.clock.setFixedTime(new Date('2026-10-29T12:00:00+01:00'));
+  await shareRepos(page, second);
+  await second.goto(`/notizbuch/${DAY}`);
+  await second.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await expect(second.locator('main#app')).toHaveClass(/mit-hinweis/);
+  await expect(checkbox(second, NAME1)).toBeVisible();
+  await button(second, 'Briefing durchgehen').click();
+  await expect(button(second, 'Fertig')).toBeVisible();
+  const hint = await boxOf(second.locator('.fensterhinweis'));
+  const fertig = await boxOf(button(second, 'Fertig'));
+  expect(fertig.y).toBeGreaterThanOrEqual(hint.y + hint.height);
+  const message = await boxOf(second.locator('.meldung', { hasText: EXPIRY }));
+  expect(message.y).toBeGreaterThanOrEqual(fertig.y + fertig.height);
+  expect(message.y).toBeLessThanOrEqual(fertig.y + fertig.height + 8);
+  await second.close();
+});
+
+test('on the office PC the Tab key does not reach the button Ganze Seite under the big briefing', async ({ page }) => {
+  await openSeeded(page, DAY, { device: 'Firmen-PC' });
+  await expect(checkbox(page, NAME1)).toBeVisible();
+  await expect(button(page, 'Ganze Seite')).toBeVisible();
+  await button(page, 'Briefing durchgehen').click();
+  await expect(button(page, 'Fertig')).toBeFocused();
+  const reached: string[] = [];
+  for (let i = 0; i < 30; i++) {
+    await page.keyboard.press('Tab');
+    reached.push(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.textContent ?? ''));
+  }
+  expect(reached).toContain('Hinzufügen');
+  expect(reached).not.toContain('Ganze Seite');
+  // Klein ist der Knopf wieder da.
+  await button(page, 'Fertig').click();
+  await expect(button(page, 'Ganze Seite')).toBeVisible();
 });
