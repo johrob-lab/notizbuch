@@ -1461,7 +1461,7 @@ body {
  * verliert so lange ihre Verschiebung und ihre Lage (PageView setzt das `transform` bei jeder Geste am Element neu, darum
  * `!important`). Dann ist der Rahmen der Karten das Rechteck der großen Karte: die Bühne unter Leiste und Werkzeugleiste, im
  * Vollbild das ganze Fenster. Sie ist undurchsichtig und deckt nur die Seite ab: das Papier, die anderen Karten (unsichtbar) und
- * „Ganze Seite“ (1), das nur die verdeckte Seite einpassen würde. Was die App sonst über der Bühne zeigt, bleibt über ihr: die
+ * „Ganze Seite“ (unsichtbar, siehe unten), das nur die verdeckte Seite einpassen würde. Was die App sonst über der Bühne zeigt, bleibt über ihr: die
  * Leiste oben mit Stand und Meldungen (4, auch im Vollbild), die Lasche (4), Rad und Füllfeder (5), die Monatsreiter (2, im DOM
  * danach), die Hinweise der Seite und der Schnellwechsel (unten). Ihre Maße sind jetzt Bildschirmpunkte statt Seiteneinheiten,
  * die Schrift etwas größer als in der Karte. Unten bleibt der Streifen frei, den das iPad ohne Home-Taste für seine Geste braucht.
@@ -1485,11 +1485,21 @@ body {
 
 /*
  * Die Hinweise der Seite (etwa, dass sich die letzte Änderung nicht speichern ließ) und der Schnellwechsel (im Vollbild das Rad)
- * liegen im DOM nach den Karten: Mit gleicher Höhe bleiben sie über der großen Karte. „Ganze Seite“ (1) bleibt darunter.
+ * liegen im DOM nach den Karten: Mit gleicher Höhe bleiben sie über der großen Karte.
  */
 .buehne:has(.karte.gross) > .hinweis,
 .buehne:has(.karte.gross) .schnellwechsel {
   z-index: 2;
+}
+
+/* „Ganze Seite“ (am Firmen-PC) würde nur die verdeckte Seite einpassen: Solange die Karte groß ist, ist der Knopf weg, auch für die Tab-Taste. */
+.buehne:has(.karte.gross) > .ganze-seite {
+  visibility: hidden;
+}
+
+/* Im Vollbild mit der Lasche (am linken Rand, auf halber Höhe, 44 breit) beginnt alles in der großen Karte rechts von ihr. */
+.buehne:has(.lasche) .karte.gross {
+  padding-left: max(56px, env(safe-area-inset-left));
 }
 
 /* Wo die Monatsreiter am rechten Rand liegen, bleibt ihr Streifen frei wie im Kopf der Besprechung: Nichts liegt unter ihnen. */
@@ -1497,19 +1507,46 @@ body {
   padding-right: max(56px, env(safe-area-inset-right));
 }
 
-/* Als App vom Home-Bildschirm beginnt die Bühne im Vollbild am oberen Rand: Der Inhalt rückt unter den Glaseffekt wie die Leiste. */
-.heimbildschirm .vollbild .karte.gross {
-  padding-top: calc(max(8px, env(safe-area-inset-top)) + 24px);
-}
-
 /*
  * Im Vollbild schweben Stand und Meldungen der Leiste oben rechts über der Bühne, genau dort, wo die große Karte „Fertig“ zeigt.
- * Solange sie offen ist, rückt die Leiste um die Zeile mit „Fertig“ tiefer (Knopf 68, Abstand 8): Die Meldungen bleiben über der
- * Karte zu lesen, und „Fertig“ bleibt frei. Ihre Abstände nach oben gelten wie sonst, wie die Karte rücken sie als App vom
- * Home-Bildschirm 24 Punkte tiefer.
+ * Solange sie offen ist, rückt der Stand in die Zeile von „Fertig“, links daneben (dort ist die Karte leer), und die Meldungen
+ * schweben gleich unter dieser Zeile: Nichts liegt auf „Fertig“ oder auf dem Inhalt der ersten Zeile, und die Meldungen bleiben
+ * über der Karte zu lesen. Die Maße der Zeile stehen einmal hier, für die Karte und für die Leiste: der Rand oben (als App vom
+ * Home-Bildschirm 24 Punkte tiefer, unter den Glaseffekt wie die Leiste), die Breite von „Fertig“ (hoch ist es 68, siehe
+ * `.karte .knopf`) und der Rand rechts der Karte. Steht über der Bühne der Hinweis des Fensters (`mit-hinweis`, etwa 44 hoch),
+ * beginnt die Karte darunter, und Stand und Meldungen rücken mit.
  */
-.vollbild:has(.karte.gross) > .topbar {
-  top: 76px;
+.vollbild:has(.karte.gross) {
+  --gross-oben: 8px;
+  --gross-fertig: 120px;
+  --gross-rechts: max(16px, env(safe-area-inset-right));
+  --gross-hinweis: 0px;
+}
+
+.heimbildschirm .vollbild:has(.karte.gross) {
+  --gross-oben: calc(max(8px, env(safe-area-inset-top)) + 24px);
+}
+
+.vollbild.mit-hinweis:has(.karte.gross) {
+  --gross-hinweis: 44px;
+}
+
+.vollbild .karte.gross {
+  padding-top: var(--gross-oben);
+}
+
+.karte.gross .durchgehen {
+  min-width: var(--gross-fertig, 120px);
+}
+
+/* Der Stand ist eine Zeile hoch (etwa 24): in der Mitte der Zeile von „Fertig“. */
+.vollbild:has(.karte.gross) .status {
+  top: calc(var(--gross-hinweis) + var(--gross-oben) + 22px);
+  right: calc(var(--gross-rechts) + var(--gross-fertig) + 12px);
+}
+
+.vollbild:has(.karte.gross) .meldungen {
+  margin-top: calc(var(--gross-hinweis) + var(--gross-oben) + 68px + 4px);
 }
 
 .karte .vorspann {

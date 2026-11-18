@@ -69,27 +69,34 @@ export function BesprechungenPage({ engine, listDir }: Props) {
     // Endet mit der Seite (oder mit einer neuen Engine): Was danach noch ankommt, zeigt die Liste nicht mehr.
     let current = true;
     let running = false;
+    let missed = false;
     let stopCues: (() => void) | undefined;
     const show = (patch: Partial<Known>) => {
       if (current) setKnown((now) => ({ ...now, ...patch }));
     };
     // Ein neues Laden lässt stehen, was die Liste zeigt, auch den Hinweis, bis neue Antworten da sind. Es läuft nie mehr als
-    // eines: Ein Anlass, der währenddessen kommt, startet nichts. Fehlt danach die Liste von GitHub, wartet die Liste auf den
-    // nächsten Anlass; ist sie da, braucht es keinen mehr.
+    // eines. Die Anlässe zählen von Anfang an: Einer, der während eines Versuchs kommt (etwa das Netz zurück, während die erste
+    // Anfrage noch hängt), wird gemerkt. Fehlt danach die Liste von GitHub, folgt gleich genau ein weiterer Versuch; scheitert
+    // auch der, wartet die Liste auf den nächsten Anlass. Ist die Liste von GitHub da, braucht es keinen Anlass mehr.
     const run = () => {
-      if (running) return;
+      if (running) {
+        missed = true;
+        return;
+      }
       running = true;
+      missed = false;
       void load(engine, listDir, show).then((online) => {
         running = false;
         if (!current) return;
         if (online) {
           stopCues?.();
           stopCues = undefined;
-        } else {
-          stopCues ??= retryCues(run);
+        } else if (missed) {
+          run();
         }
       });
     };
+    stopCues = retryCues(run);
     run();
     return () => {
       current = false;
