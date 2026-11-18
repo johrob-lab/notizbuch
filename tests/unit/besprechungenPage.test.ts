@@ -186,3 +186,82 @@ test('a list that goes away without network leaves no cue behind', async () => {
   expect(listings(listDir)).toBe(1);
   expect(vi.getTimerCount()).toBe(0);
 });
+
+test('a cue during a reload that then fails starts exactly one more try right after it, without waiting for the next cue', async () => {
+  // Die erste Liste scheitert, die zweite hängt, bis der Test sie scheitern lässt, die dritte bringt GitHub.
+  let asked = 0;
+  const fails: ((error: Error) => void)[] = [];
+  const listDir = vi.fn<ListDir>((folder) => {
+    if (folder !== PAGES_DIR) return repo(folder);
+    asked += 1;
+    if (asked === 1) return Promise.reject(new TypeError('Failed to fetch'));
+    if (asked === 2) return new Promise<DirEntry[]>((_, reject) => fails.push(reject));
+    return repo(folder);
+  });
+  await mount(device(HERE), listDir);
+  await wait(0);
+  expect(statuses()).toEqual([HINT]);
+
+  // Die App kommt nach vorn, bevor das Netz da ist: Dieser Versuch hängt. Währenddessen kommt das Netz zurück.
+  await cue(() => setVisibility('visible'));
+  expect(listings(listDir)).toBe(2);
+  await cue(online);
+  await cue(online);
+  expect(listings(listDir)).toBe(2);
+  expect(statuses()).toEqual([HINT]);
+
+  await act(async () => {
+    fails[0](new TypeError('Load failed'));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(listings(listDir)).toBe(3);
+  expect(statuses()).toEqual([]);
+  expect(links()).toEqual([THERE_LABEL, HERE_LABEL]);
+
+  await wait(600_000);
+  expect(listings(listDir)).toBe(3);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test('when the one try after a missed cue fails too, the list waits for the next cue again', async () => {
+  let asked = 0;
+  const fails: ((error: Error) => void)[] = [];
+  const listDir = vi.fn<ListDir>((folder) => {
+    if (folder !== PAGES_DIR) return repo(folder);
+    asked += 1;
+    if (asked === 2) return new Promise<DirEntry[]>((_, reject) => fails.push(reject));
+    return Promise.reject(new TypeError('Failed to fetch'));
+  });
+  await mount(device(HERE), listDir);
+  await wait(0);
+  await cue(online);
+  await cue(online);
+  expect(listings(listDir)).toBe(2);
+
+  await act(async () => {
+    fails[0](new TypeError('Load failed'));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  // Genau ein Versuch gleich danach, kein dritter von selbst.
+  expect(listings(listDir)).toBe(3);
+  await wait(0);
+  expect(listings(listDir)).toBe(3);
+  expect(statuses()).toEqual([HINT]);
+
+  // Der nächste Anlass kommt wie sonst: nach drei Minuten.
+  await wait(180_000);
+  expect(listings(listDir)).toBe(4);
+});
+
+test('a list that goes away while GitHub has not answered yet leaves no cue behind', async () => {
+  const listDir = vi.fn<ListDir>(never);
+  await mount(device(HERE), listDir);
+  await wait(10_000);
+  await act(() => {
+    render(null, host);
+  });
+  // Nach 30 Sekunden gibt die Anfrage auf; die Liste ist da schon weg und darf sich für nichts mehr anmelden.
+  await wait(630_000);
+  expect(listings(listDir)).toBe(1);
+  expect(vi.getTimerCount()).toBe(0);
+});
