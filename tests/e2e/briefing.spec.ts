@@ -545,6 +545,17 @@ test('on the office PC the Tab key does not reach the button Ganze Seite under t
   }
   expect(reached).toContain('Hinzufügen');
   expect(reached).not.toContain('Ganze Seite');
+  // Wie die Probe 3.19 (Schritt 8) es sagt: Vom Feld zum Ergänzen aus, nach Esc, kommen der Schalter „Aufgabe“, „Hinzufügen“ und
+  // dann der erste Monatsreiter am rechten Rand.
+  await addField(page).click();
+  await page.keyboard.press('Escape');
+  await expect(button(page, 'Fertig')).toBeVisible();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('switch', { name: 'Aufgabe', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(button(page, 'Hinzufügen')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('link', { name: 'Januar 2026', exact: true })).toBeFocused();
   // Klein ist der Knopf wieder da.
   await button(page, 'Fertig').click();
   await expect(button(page, 'Ganze Seite')).toBeVisible();
