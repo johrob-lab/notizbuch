@@ -8,6 +8,12 @@ export const API_VERSION = '2026-10-21';
 /** Obergrenze für die Länge einer Antwort. Wird sie erreicht, endet die Antwort als `abgeschnitten`. */
 export const MAX_TOKENS = 2048;
 export const MODEL_IDS: Record<KiModel, string> = { sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5' };
+// Ohne Angabe denken beide Modelle vorab, das ist die Vorgabe. Die Denk-Token gehen von max_tokens ab, die Antwort würde kürzer und
+// käme spät. Sie soll sofort kommen. Jedes Modell nimmt nur seinen eigenen Wert, der jeweils andere gibt 400.
+export const THINKING: Record<KiModel, { type: 'between_tools' | 'disabled' }> = {
+  sonnet: { type: 'between_tools' },
+  haiku: { type: 'disabled' },
+};
 
 /** Woran eine Frage scheitern kann: kein Netz, der Schlüssel passt nicht, das Guthaben oder Limit ist erreicht, alles andere. */
 export type KiFailure = 'offline' | 'key' | 'credit' | 'unavailable';
@@ -110,7 +116,14 @@ export async function askClaude(o: {
     const res = await send(API_URL, {
       method: 'POST',
       headers: headers(o.key),
-      body: JSON.stringify({ model: MODEL_IDS[o.model], max_tokens: MAX_TOKENS, stream: true, system: o.system, messages: o.messages }),
+      body: JSON.stringify({
+        model: MODEL_IDS[o.model],
+        max_tokens: MAX_TOKENS,
+        stream: true,
+        thinking: THINKING[o.model],
+        system: o.system,
+        messages: o.messages,
+      }),
       signal: o.signal,
     });
     if (!res.ok) {

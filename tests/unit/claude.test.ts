@@ -21,10 +21,10 @@ test('a question goes to the messages endpoint with the browser headers', async 
   expect(f.calls[0].url).toBe('https://api.anthropic.com/v1/messages');
   expect(f.calls[0].init.method).toBe('POST');
   expect(f.calls[0].init.headers).toEqual(heads);
-  expect(JSON.parse(f.calls[0].init.body as string)).toEqual({ model: 'claude-sonnet-5-5', max_tokens: 2048, stream: true, system: 'S', messages });
+  expect(JSON.parse(f.calls[0].init.body as string)).toEqual({ model: 'claude-sonnet-5-5', max_tokens: 2048, stream: true, thinking: { type: 'between_tools' }, system: 'S', messages });
   const h = streamOf([messageStop()]);
   await askClaude({ ...base(), model: 'haiku', fetchFn: h });
-  expect(JSON.parse(h.calls[0].init.body as string).model).toBe('claude-haiku-5-5');
+  expect(JSON.parse(h.calls[0].init.body as string)).toMatchObject({ model: 'claude-haiku-5-5', thinking: { type: 'disabled' } });
 });
 
 test('text arrives piece by piece and usage adds up', async () => {

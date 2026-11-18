@@ -11,7 +11,7 @@ import { FAILED } from './texts';
 
 // Eine Runde im Fenster „Frag Claude“ (AskWindow.tsx): die Frage, darunter klein die Uhrzeit und die Seite, die mitging, dann die
 // Antwort mit ihren Hinweisen und den Kosten. Die Antwort erscheint wie eine Notiz in der Karte Morgenbriefing (`renderNote` und
-// `noteToVNodes`): nur bekannte Elemente ohne Attribute, nie HTML aus dem Text.
+// `noteToVNodes`): nur bekannte Elemente, nie HTML aus dem Text. Links auf einen Tag der App und mit http oder https bleiben Links (die ins Netz mit `noopener`), jede andere Adresse wird Text.
 
 /**
  * Eine Runde des Gesprächs. `label` ist der Name der Seite, die mit der Frage ging, `null` ohne Seite. `noteDay` ist der Tag der

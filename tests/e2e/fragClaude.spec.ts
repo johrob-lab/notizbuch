@@ -326,7 +326,7 @@ test('a question about the day page goes out with picture, note and meetings', a
     'anthropic-version': '2026-10-21',
     'anthropic-dangerous-direct-browser-access': 'true',
   });
-  expect(request.body).toMatchObject({ model: 'claude-sonnet-5-5', max_tokens: 2048, stream: true });
+  expect(request.body).toMatchObject({ model: 'claude-sonnet-5-5', max_tokens: 2048, stream: true, thinking: { type: 'between_tools' } });
   expect(request.body.system).toContain('Keine Gedankenstriche');
   expect(request.body.messages).toHaveLength(1);
   const [image, ...rest] = lastBlocks(request.body);
