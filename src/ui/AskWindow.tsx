@@ -1,8 +1,14 @@
-import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { GestureFilter } from '../ink/gestures';
+import { askClaude, FAILURE_TEXT, KiError } from '../ki/claude';
+import { costCents } from '../ki/cost';
+import { pageImage } from '../ki/pageImage';
+import { buildMessages, systemPrompt, type SentTurn } from '../ki/prompt';
+import { todayVienna } from '../lib/dates';
 import type { KiModel } from '../lib/settings';
 import type { SyncEngine } from '../sync/engine';
 import type { AskPage } from './ask';
+import { Round, type Turn } from './askRound';
 import { keepFocusAfterTap, watchHand } from './palmGuard';
 import { useActivation, type Pressable } from './pointerBits';
 
@@ -11,6 +17,7 @@ import { useActivation, type Pressable } from './pointerBits';
 // Einstellungen und in der Liste der Besprechungen ist es versteckt (`away`) und behält, was im Feld steht. Es liegt außerhalb der
 // Bühne: Die Schreibfläche sieht nie, was auf ihm geschieht. Ein Stiftstrich darauf wird also nie Tinte, Finger und Rad bewegen
 // die Seite nicht. Vor der Hand, die beim Schreiben aufliegt, schützt es dasselbe Tor wie die Seite (`watchHand` in palmGuard.ts).
+// Gefragt wird nur mit „Fragen“ oder Enter: Öffnen, Tippen, der Schalter und Blättern schicken nichts an Claude.
 
 /** Was die App mit dem Fenster tun kann. */
 export type AskControl = {
@@ -36,17 +43,34 @@ type Props = {
 /** Ein Knopf des Fensters und was er tut. */
 type Knopf = Pressable & { run(): void };
 
+/** Die Frage mit der Seite: ihre Angaben als Text und ihr Bild, beides zugleich gelesen. Ohne Bild ist `image` `null`. */
+async function questionWithPage(page: AskPage, question: string): Promise<SentTurn> {
+  const [text, image] = await Promise.all([page.describe(), pageImage(page.svg())]);
+  return { question, page: { text, image } };
+}
+
 /**
  * Das Fenster: oben „Frag Claude“ und „Schließen“, darunter das Feld für die Frage, der Schalter „Seite mitschicken“ mit dem Namen der
- * offenen Seite, „Fragen“ und „Neue Frage“, die Zeile für Fehler und der Verlauf. Alle Knöpfe und der Schalter laufen über
- * `useActivation` mit dem Tor der offenen Seite, ohne Seite mit einem eigenen.
+ * offenen Seite, „Fragen“ (während einer Antwort „Stopp“) und „Neue Frage“, die Zeile für Fehler und der Verlauf mit der neuesten
+ * Runde oben. Alle Knöpfe und der Schalter laufen über `useActivation` mit dem Tor der offenen Seite, ohne Seite mit einem eigenen.
  */
-export function AskWindow({ page, away, control }: Props) {
+export function AskWindow({ kiKey, model, page, away, control }: Props) {
   const root = useRef<HTMLElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState('');
   const [withPage, setWithPage] = useState(true);
+  /** Das Gespräch, die neueste Runde zuerst. */
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [failure, setFailure] = useState('');
+  // Die Runden, wie sie zuletzt gezeichnet wurden: Eine Nachfrage schickt die früheren mit.
+  const turnsNow = useRef(turns);
+  turnsNow.current = turns;
+  const lastId = useRef(0);
+  // Die laufende Anfrage, `null` ohne. „Neue Frage“, „Schließen“ und der Abbau des Fensters beenden das Gespräch (`endTalk`): Die
+  // Anfrage bricht ab, und `talk` zählt weiter. Was danach noch von ihr kommt, gehört zu einem Gespräch, das es nicht mehr gibt.
+  const request = useRef<AbortController | null>(null);
+  const talk = useRef(0);
   // Ohne offene Seite gibt es auch keinen Stift auf ihr: Dann gilt ein eigenes Tor, das nur hört, was auf dem Fenster geschieht.
   const [ownGate] = useState(() => new GestureFilter());
   const gate = page?.filter ?? ownGate;
@@ -85,16 +109,111 @@ export function AskWindow({ page, away, control }: Props) {
     };
   }, [control]);
 
+  /** Beendet das Gespräch: Eine laufende Anfrage bricht ab, und was sie danach noch bringt, ändert nichts mehr. */
+  const endTalk = () => {
+    talk.current += 1;
+    request.current?.abort();
+    request.current = null;
+  };
+  // Geht das Fenster (kein Schlüssel mehr, Firmen-PC, das Fenster der App darf nicht mehr schreiben), endet auch die Anfrage.
+  useEffect(() => () => endTalk(), []);
+
+  /**
+   * Stellt die Frage im Feld, mit der Seite, die jetzt offen ist, wenn der Schalter an ist. Die Frage steht sofort oben als neue Runde,
+   * die Antwort kommt Wort für Wort dazu. Scheitert sie, oder endet sie mit „Stopp“, bevor Text kam, verschwindet die Runde wieder,
+   * und die Frage steht wieder im Feld.
+   */
+  const ask = async (): Promise<void> => {
+    const text = question.trim();
+    if (text === '' || request.current) return;
+    const stop = new AbortController();
+    request.current = stop;
+    const mine = talk.current;
+    const at = new Date();
+    const sending = withPage ? page : null;
+    const id = ++lastId.current;
+    // Frühere Runden mit Text, die älteste zuerst: So kennt Claude das Gespräch.
+    const earlier: SentTurn[] = turnsNow.current
+      .filter((turn) => turn.answer.trim() !== '')
+      .reverse()
+      .map((turn) => ({ ...turn.sent, answer: turn.answer }));
+    const turn: Turn = {
+      id,
+      question: text,
+      at,
+      label: sending?.label ?? null,
+      noteDay: page?.day ?? todayVienna(at),
+      sent: { question: text, page: null },
+      answer: '',
+      state: 'laeuft',
+      cost: null,
+      imageFailed: false,
+    };
+    setQuestion('');
+    setFailure('');
+    field.current?.blur(); // am iPad geht die Tastatur zu
+    setTurns((all) => [turn, ...all]);
+
+    /** Ändert diese Runde, solange ihr Gespräch noch läuft. */
+    const change = (next: (now: Turn) => Partial<Turn>) => {
+      if (talk.current === mine) setTurns((all) => all.map((t) => (t.id === id ? { ...t, ...next(t) } : t)));
+    };
+    /** Die Runde verschwindet, und die Frage kommt zurück ins Feld, wenn dort nicht schon etwas Neues steht. */
+    const giveBack = () => {
+      setTurns((all) => all.filter((t) => t.id !== id));
+      setQuestion((now) => (now.trim() === '' ? text : now));
+    };
+
+    try {
+      const sent = sending ? await questionWithPage(sending, text) : turn.sent;
+      if (sent !== turn.sent) change(() => ({ sent, imageFailed: sent.page?.image === null }));
+      // „Stopp“, während die Seite noch beschrieben wurde: Dann geht gar nichts hinaus.
+      const reply = stop.signal.aborted
+        ? null
+        : await askClaude({
+            key: kiKey,
+            model,
+            system: systemPrompt(at),
+            messages: buildMessages([...earlier, sent]),
+            signal: stop.signal,
+            onText: (delta) => change((now) => ({ answer: now.answer + delta })),
+          });
+      if (talk.current !== mine) return;
+      if (reply === null || (reply.end === 'gestoppt' && reply.text.trim() === '')) return giveBack();
+      const cost = reply.end !== 'gestoppt' && reply.usage ? costCents(model, reply.usage) : null;
+      change(() => ({ answer: reply.text, state: reply.end, cost }));
+    } catch (error) {
+      if (talk.current !== mine) return;
+      giveBack();
+      // Nach „Stopp“ ist ein Fehler keiner mehr. Alles, was kein Fehler der Schnittstelle ist, zählt wie „nicht erreichbar“.
+      if (!stop.signal.aborted) setFailure(FAILURE_TEXT[error instanceof KiError ? error.reason : 'unavailable']);
+    } finally {
+      if (request.current === stop) request.current = null;
+    }
+  };
+
+  /** „Neue Frage“: Das Gespräch beginnt von vorn. Was im Feld steht, bleibt, und der Fokus geht hinein. */
+  const startOver = () => {
+    endTalk();
+    setTurns([]);
+    setFailure('');
+    focusField();
+  };
+
   /** Schließen leert alles: Das nächste Öffnen beginnt von vorn, mit der Seite. */
   const close = () => {
+    endTalk();
     field.current?.blur();
     setOpen(false);
     setQuestion('');
     setWithPage(true);
+    setTurns([]);
+    setFailure('');
   };
 
   const press = useActivation(gate, (b: Knopf) => b.run());
   const empty = question.trim() === '';
+  const busy = turns.some((turn) => turn.state === 'laeuft');
   const pageName = page?.label ?? 'keine Seite offen';
 
   return (
@@ -106,7 +225,20 @@ export function AskWindow({ page, away, control }: Props) {
         </button>
       </div>
       <label for="frag-feld">Was willst du wissen?</label>
-      <textarea id="frag-feld" ref={field} rows={3} value={question} onInput={(e) => setQuestion(e.currentTarget.value)} />
+      <textarea
+        id="frag-feld"
+        ref={field}
+        rows={3}
+        enterkeyhint="send"
+        value={question}
+        onInput={(e) => setQuestion(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          // Enter schickt die Frage, Umschalt+Enter macht eine neue Zeile. Während einer Eingabe mit Vorschlägen gehört Enter ihr.
+          if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+          e.preventDefault();
+          void ask();
+        }}
+      />
       <div class="frag-knoepfe">
         <button
           type="button"
@@ -123,16 +255,27 @@ export function AskWindow({ page, away, control }: Props) {
             <small>{pageName}</small>
           </span>
         </button>
-        {/* Das Fragen selbst kommt im nächsten Schritt dazu: Bis dahin ist der Knopf da und tut nichts. */}
-        <button type="button" class="knopf primaer" disabled={empty} {...press({ key: 'fragen', disabled: empty, run: () => undefined })}>
-          Fragen
+        {/* Ein Knopf: Während eine Antwort läuft, heißt er „Stopp“. Ein Tipp, der auf „Fragen“ begann, stoppt nichts. */}
+        <button
+          type="button"
+          class="knopf primaer"
+          disabled={!busy && empty}
+          {...press(busy ? { key: 'stopp', run: () => request.current?.abort() } : { key: 'fragen', disabled: empty, run: () => void ask() })}
+        >
+          {busy ? 'Stopp' : 'Fragen'}
         </button>
-        <button type="button" class="knopf" {...press({ key: 'neu', run: focusField })}>
+        <button type="button" class="knopf" {...press({ key: 'neu', run: startOver })}>
           Neue Frage
         </button>
       </div>
-      <p class="frag-fehler" role="alert" />
-      <ol class="frag-verlauf" />
+      <p class="frag-fehler" role="alert">
+        {failure}
+      </p>
+      <ol class="frag-verlauf">
+        {turns.map((turn) => (
+          <Round key={turn.id} turn={turn} />
+        ))}
+      </ol>
     </section>
   );
 }

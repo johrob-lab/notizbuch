@@ -27,6 +27,8 @@ type Props = {
   rect: Rect;
   termine: Termin[];
   listDir: ListDir;
+  /** Bekommt die Einträge der Karte, sooft sie sich ändern: „Frag Claude“ schickt sie mit der Tagesseite mit. */
+  onEntries?(entries: DayEntry[]): void;
 };
 
 /** Eine Besprechung wird geöffnet: bei ihrer ersten Seite. */
@@ -34,7 +36,7 @@ function open(meeting: MeetingRef): void {
   window.location.hash = routeHash({ view: 'besprechung', key: meeting.base, n: meeting.pages[0] ?? 1 });
 }
 
-export function MeetingsCard({ engine, day, rect, termine, listDir }: Props) {
+export function MeetingsCard({ engine, day, rect, termine, listDir, onEntries }: Props) {
   // Das zweite Fenster eines Geräts darf keine Besprechung anlegen. Vorhandene lassen sich öffnen und lesen.
   const locked = engine.readOnly;
   // Die Seiten der Besprechungen eines Tages liegen im Ordner seines Jahres.
@@ -77,6 +79,9 @@ export function MeetingsCard({ engine, day, rect, termine, listDir }: Props) {
     () => dayEntries(day, termine, mergeMeetings({ listed: listed ?? [], local: local.present, deleted: local.deleted })),
     [day, termine, listed, local],
   );
+  useEffect(() => {
+    onEntries?.(entries);
+  }, [entries, onEntries]);
 
   /**
    * Legt die erste Seite einer Besprechung an und gibt ihren Namen zurück, oder einen Hinweis für die Person, wenn Tag, Zeit

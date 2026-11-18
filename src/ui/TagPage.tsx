@@ -1,6 +1,8 @@
-import { useCallback, useMemo, useState } from 'preact/hooks';
+import { useCallback, useMemo, useRef, useState } from 'preact/hooks';
+import { dayExtras } from '../ki/pageInfo';
 import { todayVienna, type Day } from '../lib/dates';
-import { tagPagePath } from '../lib/filenames';
+import type { DayEntry } from '../lib/dayMeetings';
+import { dailyNotePath, tagPagePath } from '../lib/filenames';
 import { geburtstageAm } from '../lib/geburtstage';
 import { agendaMarks, tagLayout, type Layout, type Rect } from '../pages/layouts';
 import type { ListDir } from '../sync/github';
@@ -39,6 +41,13 @@ export function TagPage({ day, listDir, ...rest }: PageProps & { day: Day; listD
   // Darüber der Tag davor, darunter der Tag danach. Ihre Vorschau zeigt wie diese Seite die Geburtstage im Kopf, die Karten aber
   // erst, wenn sie offen sind.
   const neighbors = useMemo(() => withMarks(neighborsOf({ view: 'tag', key: day }), headMarks), [day, headMarks]);
+  // „Frag Claude“ schickt mit der Tagesseite die Notiz des Tages und die Einträge der Karte „Besprechungen“ mit, so wie sie beim
+  // Fragen sind. Die Notiz wird dafür nur gelesen (`peek`): Die Seite bleibt an ihre eigene Datei gebunden.
+  const entries = useRef<DayEntry[]>([]);
+  const onEntries = useCallback((list: DayEntry[]) => {
+    entries.current = list;
+  }, []);
+  const askExtra = useCallback(async () => dayExtras(day, await rest.engine.peek(dailyNotePath(day)), entries.current), [day, rest.engine]);
 
   return (
     <PageView
@@ -47,11 +56,12 @@ export function TagPage({ day, listDir, ...rest }: PageProps & { day: Day; listD
       {...rest}
       marks={marks}
       neighbors={neighbors}
+      askExtra={askExtra}
       overlay={
         <>
           {briefing && <BriefingCard engine={rest.engine} day={day} rect={briefing} />}
           {calendar && <MiniCalendar rect={calendar} day={day} today={today} termine={termine} geburtstage={geburtstage} />}
-          {meetings && <MeetingsCard engine={rest.engine} day={day} rect={meetings} termine={termine} listDir={listDir} />}
+          {meetings && <MeetingsCard engine={rest.engine} day={day} rect={meetings} termine={termine} listDir={listDir} onEntries={onEntries} />}
         </>
       }
     />

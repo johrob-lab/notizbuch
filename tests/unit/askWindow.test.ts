@@ -1,16 +1,22 @@
 import { h, render } from 'preact';
 import { act } from 'preact/test-utils';
-import { afterEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { GestureFilter } from '../../src/ink/gestures';
+import { pageImage } from '../../src/ki/pageImage';
+import { EARLIER_IMAGE } from '../../src/ki/prompt';
 import type { KiModel } from '../../src/lib/settings';
 import type { SyncEngine } from '../../src/sync/engine';
 import type { AskPage } from '../../src/ui/ask';
 import { AskWindow, type AskControl } from '../../src/ui/AskWindow';
+import { messageDelta, messageStart, messageStop, streamOf, textDelta, type Call } from './helpers';
 
-// Das Fenster „Frag Claude“ mit einer erfundenen Seite und einer erfundenen Engine. Hier geht es um die Hülle: Öffnen, Schließen,
-// der Schalter „Seite mitschicken“ und die Hand, die beim Schreiben aufliegt. Die Zeit der Zeigerereignisse gibt der Test vor.
-// happy-dom rechnet keine Größen aus: Jedes Element liegt bei 0, 0, und dort tippen die Zeiger. Der Weg durch den Browser ist
-// Sache von tests/e2e/fragClaude.spec.ts.
+// Das Fenster „Frag Claude“ mit einer erfundenen Seite und einer erfundenen Engine. Zuerst die Hülle: Öffnen, Schließen, der
+// Schalter „Seite mitschicken“ und die Hand, die beim Schreiben aufliegt. Danach das Fragen: `fetch` ist ein erfundener Strom
+// (`streamOf`), das Bild der Seite ein fester Text. Die Zeit der Zeigerereignisse gibt der Test vor. happy-dom rechnet keine
+// Größen aus: Jedes Element liegt bei 0, 0, und dort tippen die Zeiger. Der Weg durch den Browser ist Sache von
+// tests/e2e/fragClaude.spec.ts.
+
+vi.mock('../../src/ki/pageImage', () => ({ pageImage: vi.fn(async () => 'AAAA') }));
 
 type Kind = 'pen' | 'touch' | 'mouse';
 
@@ -25,19 +31,26 @@ function fakePage(o: Partial<AskPage> = {}): AskPage {
   };
 }
 
-/** Eine Engine, die nichts kann: Die Hülle des Fensters liest und schreibt nichts. */
+/** Eine Engine, die nichts kann: Fragen und Antworten lesen und schreiben keine Notiz. */
 const fakeEngine = { readOnly: false } as unknown as SyncEngine;
 
 type WindowProps = { engine: SyncEngine; kiKey: string; model: KiModel; page: AskPage | null; away: boolean; control: { current: AskControl | null } };
 
 const hosts: HTMLElement[] = [];
 
-function mount(o: { page?: AskPage | null } = {}) {
+function mount(o: { page?: AskPage | null; engine?: SyncEngine } = {}) {
   const host = document.createElement('div');
   document.body.append(host);
   hosts.push(host);
   const control: { current: AskControl | null } = { current: null };
-  let props: WindowProps = { engine: fakeEngine, kiKey: 'sk-ant-test-0000', model: 'sonnet', page: o.page === undefined ? fakePage() : o.page, away: false, control };
+  let props: WindowProps = {
+    engine: o.engine ?? fakeEngine,
+    kiKey: 'sk-ant-test-0000',
+    model: 'sonnet',
+    page: o.page === undefined ? fakePage() : o.page,
+    away: false,
+    control,
+  };
   const draw = () => render(h(AskWindow, props), host);
   draw();
   return {
@@ -52,11 +65,16 @@ function mount(o: { page?: AskPage | null } = {}) {
   };
 }
 
+beforeEach(() => {
+  vi.mocked(pageImage).mockClear();
+});
+
 afterEach(() => {
   for (const host of hosts.splice(0)) {
     render(null, host);
     host.remove();
   }
+  vi.unstubAllGlobals();
 });
 
 const win = (host: HTMLElement) => host.querySelector<HTMLElement>('.frag-fenster')!;
@@ -272,4 +290,387 @@ test('Strg and the wheel over the window do not zoom the browser', () => {
   const scroll = new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true });
   field(host).dispatchEvent(scroll);
   expect(scroll.defaultPrevented).toBe(false);
+});
+
+// ---------- Fragen und Antworten ----------
+
+const rounds = (host: HTMLElement) => host.querySelectorAll('.frag-verlauf > .frag-runde');
+/** Der Text jeder Antwort, die neueste zuerst. Der Zeilenumbruch nach dem letzten Absatz ist nicht zu sehen und zählt nicht. */
+const answers = (host: HTMLElement) => [...host.querySelectorAll('.frag-antwort')].map((el) => el.textContent!.trim());
+const errorLine = (host: HTMLElement) => host.querySelector('.frag-fehler')!.textContent;
+const costs = (host: HTMLElement) => [...host.querySelectorAll('.frag-kosten')].map((el) => el.textContent);
+
+/** Eine ganze Antwort in einem Stück, mit 5000 Token hinein und 100 hinaus. */
+const reply = (text: string) => [messageStart(5000, 1), textDelta(text), messageDelta('end_turn', 100), messageStop()];
+/** Erst `Hal`, dann der Rest `lo` mit dem Ende der Antwort. */
+const halThenLo = () => [messageStart(5000, 1) + textDelta('Hal'), textDelta('lo') + messageDelta('end_turn', 100) + messageStop()];
+
+/** Der Körper einer Anfrage an Claude. */
+const bodyOf = (call: Call) => JSON.parse(call.init.body as string);
+
+/** Ein Versprechen, das der Test selbst erfüllt: So lange hält ein Strom mit `release` nach dem ersten Stück an. */
+function gate(): { promise: Promise<void>; open(): void } {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => (open = resolve));
+  return { promise, open };
+}
+
+/** Wartet, bis die Bedingung gilt: Die Antwort kommt über Versprechen und Zeichnen in mehreren Runden der Ereignisschleife. */
+async function until(cond: () => boolean, what = 'Bedingung'): Promise<void> {
+  for (let i = 0; i < 500; i++) {
+    if (cond()) return;
+    await act(() => wait(1));
+  }
+  throw new Error(`${what} wurde nie erfüllt`);
+}
+
+const press = (host: HTMLElement, name: string) => act(() => tap(button(host, name), 'mouse', performance.now()));
+
+/** Die Frage ins Feld, dann „Fragen“. */
+async function ask(host: HTMLElement, text: string): Promise<void> {
+  await type(host, text);
+  await press(host, 'Fragen');
+}
+
+/** Öffnet ein neues Fenster mit der Seite `page`. */
+async function opened(o: { page?: AskPage | null; engine?: SyncEngine } = {}) {
+  const mounted = mount(o);
+  await act(() => mounted.control.current!.open());
+  return mounted;
+}
+
+const IMAGE_BLOCK = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } };
+
+test('a question streams in and ends with its cost', async () => {
+  const later = gate();
+  const f = streamOf(halThenLo(), { release: later.promise });
+  vi.stubGlobal('fetch', f);
+  const { host } = await opened();
+  await ask(host, 'Was steht an?');
+  // Das Feld ist leer und verlassen, oben steht die neue Runde mit der Frage.
+  expect(field(host).value).toBe('');
+  expect(document.activeElement).not.toBe(field(host));
+  expect(rounds(host)).toHaveLength(1);
+  expect(host.querySelector('.frag-frage')!.textContent).toBe('Was steht an?');
+
+  await until(() => answers(host)[0] === 'Hal', 'Hal');
+  expect(button(host, 'Stopp')).toBeDefined();
+  expect(button(host, 'Fragen')).toBeUndefined();
+  expect(costs(host)).toEqual([]);
+
+  later.open();
+  await until(() => costs(host).length === 1, 'Kosten');
+  expect(answers(host)).toEqual(['Hallo']);
+  expect(costs(host)).toEqual(['≈ 1,1 Cent']);
+  expect(field(host).value).toBe('');
+  expect(button(host, 'Fragen')).toBeDefined();
+  expect(f.calls).toHaveLength(1);
+});
+
+test('the page goes along when the switch is on', async () => {
+  const f = streamOf(reply('Hallo'));
+  vi.stubGlobal('fetch', f);
+  const page = fakePage();
+  const { host } = await opened({ page });
+  await ask(host, 'Was steht an?');
+  await until(() => costs(host).length === 1, 'Antwort');
+  const body = bodyOf(f.calls[0]);
+  expect(body.messages).toHaveLength(1);
+  expect(body.messages.at(-1).content).toEqual([IMAGE_BLOCK, { type: 'text', text: 'Offene Seite: Tagesseite Do 29.10.2026\n\nFrage: Was steht an?' }]);
+  expect(body.system.startsWith('Du bist Claude')).toBe(true);
+  expect(body.model).toBe('claude-sonnet-5-5');
+  expect((f.calls[0].init.headers as Record<string, string>)['x-api-key']).toBe('sk-ant-test-0000');
+  expect(page.describe).toHaveBeenCalledTimes(1);
+  expect(pageImage).toHaveBeenCalledWith('<svg xmlns="http://www.w3.org/2000/svg"/>');
+  expect(host.querySelector('.frag-wann')!.textContent).toMatch(/^\d\d:\d\d · Do 29\.10\.2026$/);
+});
+
+test('without the switch only the question goes', async () => {
+  const f = streamOf(reply('Hallo'));
+  vi.stubGlobal('fetch', f);
+  const page = fakePage();
+  const { host } = await opened({ page });
+  await act(() => tap(toggle(host), 'mouse', performance.now()));
+  expect(toggle(host).getAttribute('aria-checked')).toBe('false');
+  await ask(host, 'Was steht an?');
+  await until(() => costs(host).length === 1, 'Antwort');
+  expect(bodyOf(f.calls[0]).messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'Frage: Was steht an?' }] }]);
+  expect(page.describe).not.toHaveBeenCalled();
+  expect(pageImage).not.toHaveBeenCalled();
+  expect(host.querySelector('.frag-wann')!.textContent).toMatch(/^\d\d:\d\d · ohne Seite$/);
+});
+
+test('a failed picture still sends the text and says so', async () => {
+  vi.mocked(pageImage).mockResolvedValueOnce(null);
+  const f = streamOf(reply('Hallo'));
+  vi.stubGlobal('fetch', f);
+  const { host } = await opened();
+  await ask(host, 'Was steht an?');
+  await until(() => costs(host).length === 1, 'Antwort');
+  expect(bodyOf(f.calls[0]).messages.at(-1).content).toEqual([{ type: 'text', text: 'Offene Seite: Tagesseite Do 29.10.2026\n\nFrage: Was steht an?' }]);
+  expect(host.querySelector('.frag-runde')!.textContent).toContain('Das Bild der Seite ließ sich nicht erstellen. Claude bekam nur die Angaben zur Seite.');
+  expect(answers(host)).toEqual(['Hallo']);
+});
+
+test('a cut answer says so, an answer without numbers has no cost line', async () => {
+  vi.stubGlobal('fetch', streamOf([messageStart(5000, 1), textDelta('Erster Teil'), messageDelta('max_tokens', 100), messageStop()]));
+  const { host } = await opened();
+  await ask(host, 'Was steht an?');
+  await until(() => costs(host).length === 1, 'Antwort');
+  expect(answers(host)).toEqual(['Erster Teil']);
+  expect(host.querySelector('.frag-runde')!.textContent).toContain('Die Antwort war zu lang und ist hier abgeschnitten.');
+  expect(costs(host)).toEqual(['≈ 1,1 Cent']);
+
+  vi.stubGlobal('fetch', streamOf([textDelta('Ohne Zahlen'), messageStop()]));
+  await ask(host, 'Und jetzt?');
+  await until(() => answers(host)[0] === 'Ohne Zahlen' && button(host, 'Fragen') !== undefined, 'zweite Antwort');
+  expect(costs(host)).toEqual(['≈ 1,1 Cent']);
+  expect(rounds(host)[0].querySelector('.frag-kosten')).toBeNull();
+  expect(rounds(host)[0].textContent).not.toContain('abgeschnitten');
+});
+
+test('every failure has its sentence and the question comes back', async () => {
+  const errorBody = (type: string, message: string) => JSON.stringify({ type: 'error', error: { type, message } });
+  const offline = (async () => {
+    throw new TypeError('Failed to fetch');
+  }) as typeof fetch;
+  const failures: [typeof fetch, string][] = [
+    [streamOf([errorBody('authentication_error', 'invalid x-api-key')], { status: 401 }), 'Der KI-Schlüssel passt nicht. Bitte in den Einstellungen prüfen.'],
+    [
+      streamOf([errorBody('invalid_request_error', 'You have reached your specified workspace API usage limits.')], { status: 400 }),
+      'Das KI-Guthaben ist für diesen Monat aufgebraucht oder das Limit ist erreicht.',
+    ],
+    [streamOf([errorBody('overloaded_error', 'Overloaded')], { status: 529 }), 'Claude ist gerade nicht erreichbar. Bitte gleich noch einmal.'],
+    [offline, 'Ohne Netz kann Claude nicht antworten.'],
+  ];
+  const { host } = await opened();
+  await type(host, 'Was steht an?');
+  for (const [fetchFn, sentence] of failures) {
+    vi.stubGlobal('fetch', fetchFn);
+    await press(host, 'Fragen');
+    await until(() => errorLine(host) === sentence, sentence);
+    expect(field(host).value).toBe('Was steht an?');
+    expect(rounds(host)).toHaveLength(0);
+    expect(button(host, 'Fragen').disabled).toBe(false);
+  }
+  // Ein neues „Fragen“ leert den Fehler.
+  vi.stubGlobal('fetch', streamOf(reply('Hallo')));
+  await press(host, 'Fragen');
+  await until(() => answers(host)[0] === 'Hallo', 'Antwort');
+  expect(errorLine(host)).toBe('');
+});
+
+test('Stopp keeps what arrived', async () => {
+  const f = streamOf([messageStart(5000, 1) + textDelta('Hal'), textDelta('lo')], { hold: true });
+  vi.stubGlobal('fetch', f);
+  const { host } = await opened();
+  await ask(host, 'Was steht an?');
+  await until(() => answers(host)[0] === 'Hal', 'Hal');
+  await press(host, 'Stopp');
+  await until(() => button(host, 'Fragen') !== undefined, 'Fragen');
+  expect(f.calls[0].init.signal!.aborted).toBe(true);
+  expect(answers(host)).toEqual(['Hal']);
+  expect(host.querySelector('.frag-runde')!.textContent).toContain('Gestoppt.');
+  expect(costs(host)).toEqual([]);
+  expect(field(host).value).toBe('');
+
+  // Vor dem ersten Text: Die Runde verschwindet, und die Frage steht wieder im Feld.
+  const empty = streamOf([messageStart(5000, 1), textDelta('x')], { hold: true });
+  vi.stubGlobal('fetch', empty);
+  const other = await opened();
+  await ask(other.host, 'Was steht an?');
+  await until(() => empty.calls.length === 1 && answers(other.host)[0] === '…', 'Anfrage');
+  await press(other.host, 'Stopp');
+  await until(() => button(other.host, 'Fragen') !== undefined, 'Fragen');
+  expect(rounds(other.host)).toHaveLength(0);
+  expect(field(other.host).value).toBe('Was steht an?');
+  expect(errorLine(other.host)).toBe('');
+});
+
+test('Stopp while the page is read sends nothing', async () => {
+  const f = vi.fn();
+  vi.stubGlobal('fetch', f);
+  const read = gate();
+  // Die Seite wird noch beschrieben (Notiz und Termine lesen), als „Stopp“ kommt.
+  const page = fakePage({
+    describe: vi.fn(async () => {
+      await read.promise;
+      return 'Offene Seite: Tagesseite Do 29.10.2026';
+    }),
+  });
+  const { host } = await opened({ page });
+  await ask(host, 'Was steht an?');
+  expect(answers(host)).toEqual(['…']);
+  await press(host, 'Stopp');
+  read.open();
+  await until(() => button(host, 'Fragen') !== undefined, 'Fragen');
+  await act(() => wait(10));
+  expect(f).not.toHaveBeenCalled();
+  expect(rounds(host)).toHaveLength(0);
+  expect(field(host).value).toBe('Was steht an?');
+  expect(errorLine(host)).toBe('');
+});
+
+test('a follow-up knows the conversation and sends the page open now', async () => {
+  const f = streamOf(reply('Hallo'));
+  vi.stubGlobal('fetch', f);
+  const b = fakePage({ label: 'Fr 30.10.2026', day: '2026-10-30', describe: vi.fn(async () => 'Offene Seite: Tagesseite Fr 30.10.2026') });
+  const { host, set } = await opened();
+  await ask(host, 'Was steht an?');
+  await until(() => costs(host).length === 1, 'erste Antwort');
+  await set({ page: b });
+  await ask(host, 'Und morgen?');
+  await until(() => costs(host).length === 2, 'zweite Antwort');
+
+  const { messages } = bodyOf(f.calls[1]);
+  expect(messages).toHaveLength(3);
+  const blocks = messages.flatMap((m: { content: unknown }) => (Array.isArray(m.content) ? m.content : []));
+  expect(blocks.filter((block: { type: string }) => block.type === 'image')).toHaveLength(1);
+  expect(messages[2]).toEqual({ role: 'user', content: [IMAGE_BLOCK, { type: 'text', text: 'Offene Seite: Tagesseite Fr 30.10.2026\n\nFrage: Und morgen?' }] });
+  expect(messages[0]).toEqual({ role: 'user', content: [{ type: 'text', text: `Offene Seite: Tagesseite Do 29.10.2026\n\n${EARLIER_IMAGE}\n\nFrage: Was steht an?` }] });
+  expect(messages[1]).toEqual({ role: 'assistant', content: 'Hallo' });
+  // Die neueste Runde steht oben, mit der Seite, die mit ihr ging.
+  expect([...host.querySelectorAll('.frag-frage')].map((el) => el.textContent)).toEqual(['Und morgen?', 'Was steht an?']);
+  expect([...host.querySelectorAll('.frag-wann')].map((el) => el.textContent!.slice(5))).toEqual([' · Fr 30.10.2026', ' · Do 29.10.2026']);
+
+  // Noch eine Frage: Das ganze Gespräch geht mit, die älteste Runde zuerst.
+  const third = streamOf(reply('Drei'));
+  vi.stubGlobal('fetch', third);
+  await ask(host, 'Und dann?');
+  await until(() => costs(host).length === 3, 'dritte Antwort');
+  const all = bodyOf(third.calls[0]).messages;
+  expect(all.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user']);
+  expect(all[0].content.at(-1).text.endsWith('Frage: Was steht an?')).toBe(true);
+  expect(all[2].content.at(-1).text).toBe(`Offene Seite: Tagesseite Fr 30.10.2026\n\n${EARLIER_IMAGE}\n\nFrage: Und morgen?`);
+  expect(all[4].content.at(-1).text.endsWith('Frage: Und dann?')).toBe(true);
+});
+
+test('paging during an answer keeps the answer with its page', async () => {
+  const later = gate();
+  vi.stubGlobal('fetch', streamOf(halThenLo(), { release: later.promise }));
+  const { host, set } = await opened();
+  await ask(host, 'Was steht an?');
+  await until(() => answers(host)[0] === 'Hal', 'Hal');
+  await set({ page: fakePage({ label: 'Fr 30.10.2026', day: '2026-10-30' }) });
+  later.open();
+  await until(() => costs(host).length === 1, 'Ende der Antwort');
+  expect(answers(host)).toEqual(['Hallo']);
+  expect(host.querySelector('.frag-wann')!.textContent).toMatch(/^\d\d:\d\d · Do 29\.10\.2026$/);
+  expect(toggle(host).getAttribute('aria-label')).toBe('Seite mitschicken: Fr 30.10.2026');
+});
+
+test('Neue Frage starts over and Schließen forgets', async () => {
+  const f = streamOf(reply('Hallo'));
+  vi.stubGlobal('fetch', f);
+  const { host, control } = await opened();
+  await ask(host, 'Was steht an?');
+  await until(() => costs(host).length === 1, 'Antwort');
+  await type(host, 'Und morgen?');
+  await press(host, 'Neue Frage');
+  expect(rounds(host)).toHaveLength(0);
+  expect(field(host).value).toBe('Und morgen?');
+  expect(document.activeElement).toBe(field(host));
+  await press(host, 'Fragen');
+  await until(() => costs(host).length === 1, 'zweite Antwort');
+  expect(bodyOf(f.calls[1]).messages).toHaveLength(1);
+
+  // „Schließen“ während einer Antwort, noch vor ihrem ersten Text: Sie bricht ab, und das Fenster beginnt beim nächsten Öffnen leer,
+  // mit dem Schalter an. Die Frage kommt nicht zurück ins Feld, sie gehört zu einem Gespräch, das es nicht mehr gibt.
+  const held = streamOf([messageStart(5000, 1), textDelta('Hal')], { hold: true });
+  vi.stubGlobal('fetch', held);
+  await act(() => tap(toggle(host), 'mouse', performance.now()));
+  await ask(host, 'Noch was?');
+  await until(() => held.calls.length === 1 && answers(host)[0] === '…', 'Anfrage');
+  await press(host, 'Schließen');
+  expect(held.calls[0].init.signal!.aborted).toBe(true);
+  expect(win(host).hidden).toBe(true);
+  await act(() => wait(20)); // was nach dem Abbruch noch von der Anfrage kommt, ändert nichts mehr
+  await act(() => control.current!.open());
+  expect(rounds(host)).toHaveLength(0);
+  expect(field(host).value).toBe('');
+  expect(errorLine(host)).toBe('');
+  expect(toggle(host).getAttribute('aria-checked')).toBe('true');
+  expect(button(host, 'Fragen')).toBeDefined();
+});
+
+test('leaving the app aborts the answer', async () => {
+  const f = streamOf([messageStart(5000, 1) + textDelta('Hal'), textDelta('lo')], { hold: true });
+  vi.stubGlobal('fetch', f);
+  const engine = { readOnly: false, write: vi.fn(async () => undefined), lookupFresh: vi.fn(async () => ({ text: null, unknown: false })) };
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const { host } = await opened({ engine: engine as unknown as SyncEngine });
+    await ask(host, 'Was steht an?');
+    await until(() => answers(host)[0] === 'Hal', 'Hal');
+    // Der Schlüssel ist weg, das Gerät ist ein Firmen-PC oder das Fenster darf nicht mehr schreiben: Die App baut das Fenster ab.
+    await act(() => render(null, host));
+    expect(f.calls[0].init.signal!.aborted).toBe(true);
+    await act(() => wait(20));
+    expect(engine.write).not.toHaveBeenCalled();
+    expect(engine.lookupFresh).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+  } finally {
+    errors.mockRestore();
+  }
+});
+
+test('an answer stays text', async () => {
+  const text = '---\n<img src=x onerror="alert(1)"><script>alert(2)</script> **fett** %%sichtbar%%\n---\nEnde';
+  vi.stubGlobal('fetch', streamOf(reply(text)));
+  const { host } = await opened();
+  await ask(host, 'Was steht an?');
+  await until(() => costs(host).length === 1, 'Antwort');
+  const answer = host.querySelector('.frag-antwort')!;
+  expect(host.querySelector('img')).toBeNull();
+  expect(host.querySelector('script')).toBeNull();
+  expect(answer.querySelector('strong')!.textContent).toBe('fett');
+  expect(answer.textContent).toContain('<img src=x onerror="alert(1)"><script>alert(2)</script>');
+  expect(answer.textContent).toContain('sichtbar');
+  expect(answer.textContent).toContain('Ende');
+});
+
+test('Enter sends, Shift+Enter makes a new line', async () => {
+  const f = streamOf(reply('Hallo'));
+  vi.stubGlobal('fetch', f);
+  const { host } = await opened();
+  const enter = (o: KeyboardEventInit = {}) => {
+    const ev = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...o });
+    field(host).dispatchEvent(ev);
+    return ev;
+  };
+  await type(host, 'Was steht an?');
+  const newLine = enter({ shiftKey: true });
+  await act(() => wait(10));
+  expect(newLine.defaultPrevented).toBe(false);
+  expect(f.calls).toHaveLength(0);
+  expect(field(host).value).toBe('Was steht an?');
+
+  const sent = enter();
+  expect(sent.defaultPrevented).toBe(true);
+  await until(() => costs(host).length === 1, 'Antwort');
+  expect(f.calls).toHaveLength(1);
+  expect(bodyOf(f.calls[0]).messages.at(-1).content.at(-1).text).toBe('Offene Seite: Tagesseite Do 29.10.2026\n\nFrage: Was steht an?');
+  expect(field(host).value).toBe('');
+
+  // Ohne Frage im Feld schickt Enter nichts.
+  enter();
+  await act(() => wait(10));
+  expect(f.calls).toHaveLength(1);
+});
+
+test('nothing goes out without Fragen', async () => {
+  const f = vi.fn();
+  vi.stubGlobal('fetch', f);
+  const page = fakePage();
+  const { host, set } = await opened({ page });
+  await type(host, 'Was steht an?');
+  await act(() => tap(toggle(host), 'mouse', performance.now()));
+  await act(() => tap(toggle(host), 'mouse', performance.now()));
+  await set({ page: fakePage({ label: 'Fr 30.10.2026', day: '2026-10-30' }) });
+  await set({ page: null });
+  await press(host, 'Neue Frage');
+  await act(() => wait(20));
+  expect(f).not.toHaveBeenCalled();
+  expect(page.describe).not.toHaveBeenCalled();
+  expect(pageImage).not.toHaveBeenCalled();
 });

@@ -22,9 +22,10 @@ export type Call = { url: string; init: RequestInit };
 /**
  * Ein falsches `fetch`, das einen Strom aus `chunks` liefert (Text, als UTF-8 in Stücken). `status` ist der Status der Antwort
  * (`ok` folgt daraus). Mit `hold` hält der Strom nach dem ersten Stück an, bis das Signal der Anfrage abbricht, und endet dann
- * mit einem Fehler wie ein abgebrochener Abruf. Gemerkt werden URL und `init` jeder Anfrage in `calls`.
+ * mit einem Fehler wie ein abgebrochener Abruf. Mit `release` hält er dort nur an, bis `release` erfüllt ist, und liefert dann
+ * den Rest. Bricht das Signal vorher ab, endet er wie bei `hold`. Gemerkt werden URL und `init` jeder Anfrage in `calls`.
  */
-export function streamOf(chunks: string[], o: { status?: number; hold?: boolean } = {}): typeof fetch & { calls: Call[] } {
+export function streamOf(chunks: string[], o: { status?: number; hold?: boolean; release?: Promise<void> } = {}): typeof fetch & { calls: Call[] } {
   const calls: Call[] = [];
   const status = o.status ?? 200;
   const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -32,13 +33,18 @@ export function streamOf(chunks: string[], o: { status?: number; hold?: boolean 
     const signal = init?.signal ?? undefined;
     const enc = new TextEncoder();
     let i = 0;
+    let released = false;
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
-        if (o.hold && i >= 1) {
-          return new Promise<void>((_, reject) => {
+        if (i === 1 && (o.hold || (o.release && !released))) {
+          return new Promise<void>((resolve, reject) => {
             const abort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
-            if (signal?.aborted) abort();
-            else signal?.addEventListener('abort', abort, { once: true });
+            if (signal?.aborted) return abort();
+            signal?.addEventListener('abort', abort, { once: true });
+            void o.release?.then(() => {
+              released = true;
+              resolve();
+            });
           });
         }
         if (i < chunks.length) controller.enqueue(enc.encode(chunks[i++]));

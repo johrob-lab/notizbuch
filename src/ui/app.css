@@ -2337,3 +2337,125 @@ body {
   overscroll-behavior: contain;
   touch-action: pan-y;
 }
+
+/* Eine Runde (askRound.tsx): die Frage, darunter klein Uhrzeit und Seite, dann die Antwort mit Hinweisen und Kosten. */
+.frag-runde {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--linie);
+}
+
+/* Zeilenumbrüche, die beim Tippen mit Umschalt+Enter entstanden, bleiben stehen. */
+.frag-frage {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.frag-wann {
+  margin: 2px 0 6px;
+  color: #5f6862;
+  font-size: 13px;
+}
+
+/* Die Antwort wie eine Notiz, nur kleiner als in der Karte Morgenbriefing. */
+.frag-antwort {
+  font-size: 16px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.frag-antwort p,
+.frag-antwort h4 {
+  margin: 0 0 6px;
+}
+
+.frag-antwort h4 {
+  font-size: 16px;
+}
+
+.frag-antwort ul,
+.frag-antwort ol {
+  margin: 0 0 6px;
+  padding-left: 22px;
+}
+
+/* Punkte mit Strich und Aufgaben: Den Punkt oder das gesperrte Kästchen zeichnet die App dort, wo sonst das Aufzählungszeichen steht. */
+.frag-antwort li.eintrag {
+  list-style: none;
+}
+
+.frag-antwort .punkt,
+.frag-antwort .haken-flaeche {
+  display: inline-block;
+  width: 22px;
+  margin-left: -22px;
+}
+
+.frag-antwort .punkt::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #7d877f;
+  vertical-align: middle;
+}
+
+.frag-antwort .haken-flaeche input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  vertical-align: middle;
+  accent-color: var(--gruen);
+}
+
+.frag-antwort blockquote {
+  margin: 0 0 6px;
+  padding-left: 12px;
+  border-left: 3px solid #c9d3cb;
+  color: #5f6862;
+}
+
+.frag-antwort pre {
+  margin: 0 0 6px;
+  overflow-x: auto;
+}
+
+.frag-antwort code {
+  font-size: 14px;
+}
+
+.frag-antwort table {
+  margin: 0 0 6px;
+  border-collapse: collapse;
+}
+
+.frag-antwort th,
+.frag-antwort td {
+  padding: 2px 6px;
+  border: 1px solid #c9d3cb;
+}
+
+.frag-antwort hr {
+  border: 0;
+  border-top: 1px solid #c9d3cb;
+}
+
+.frag-antwort a {
+  color: #2f5f7a;
+}
+
+.frag-hinweis {
+  margin: 6px 0 0;
+  color: #5f6862;
+  font-size: 14px;
+}
+
+.frag-kosten {
+  margin: 4px 0 0;
+  color: #7d877f;
+  font-size: 13px;
+}

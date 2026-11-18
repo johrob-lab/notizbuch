@@ -1,6 +1,6 @@
 import { expect, test as base, type Page } from '@playwright/test';
 import { changeStoredSettings, openSeeded, shareRepos } from './helpers/app';
-import { mockClaude } from './helpers/claude';
+import { mockClaude, pngSize } from './helpers/claude';
 import { centerOf, pen, touch, viewOf } from './helpers/pointer';
 import { touchscreen, type Pt } from './helpers/touch';
 
@@ -55,6 +55,10 @@ const PALM_RADIUS = 100;
 
 const askButton = (page: Page) => page.getByRole('button', { name: 'Frag Claude', exact: true });
 const askWindow = (page: Page) => page.locator(FENSTER);
+const fragen = (page: Page) => askWindow(page).getByRole('button', { name: 'Fragen', exact: true });
+const answers = (page: Page) => askWindow(page).locator('.frag-antwort');
+const costs = (page: Page) => askWindow(page).locator('.frag-kosten');
+const errorLine = (page: Page) => askWindow(page).locator('.frag-fehler');
 const pageSwitch = (page: Page) => page.locator('.frag-seite');
 const field = (page: Page) => page.locator('#frag-feld');
 const link = (page: Page, name: string) => page.getByRole('link', { name, exact: true });
@@ -277,4 +281,136 @@ test('Vollbild offers Frag Claude in the ring and the Lasche', async ({ page }) 
   expect(await view.evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')))).toEqual(['Ganze Seite', 'Frag Claude', 'Vollbild aus']);
   await touch(page).tapOn('.lasche-knopf[aria-label="Frag Claude"]');
   await expect(askWindow(page)).toBeVisible();
+});
+
+// ---------- Fragen und Antworten ----------
+
+type Block = { type: string; text?: string; source?: { media_type: string; data: string } };
+type Message = { role: string; content: string | Block[] };
+
+/** Die Blöcke der letzten Nachricht einer Anfrage. */
+const lastBlocks = (body: { messages: Message[] }): Block[] => body.messages.at(-1)!.content as Block[];
+const textOf = (blocks: Block[]): string => blocks.find((block) => block.type === 'text')!.text!;
+
+/** Öffnet das Fenster mit dem Knopf, sobald die offene Seite angemeldet ist: Der Schalter nennt sie (`label`). */
+async function openAsk(page: Page, label: string): Promise<void> {
+  await touch(page).tapOn(KNOPF);
+  await expect(askWindow(page)).toBeVisible();
+  await expect(pageSwitch(page)).toHaveAccessibleName(`Seite mitschicken: ${label}`);
+}
+
+/** Tippt ins Feld, schreibt die Frage und schickt sie mit Enter. */
+async function askWithEnter(page: Page, question: string): Promise<void> {
+  await field(page).click();
+  await page.keyboard.type(question);
+  await page.keyboard.press('Enter');
+}
+
+test('a question about the day page goes out with picture, note and meetings', async ({ page }) => {
+  const claude = await mockClaude(page);
+  await openSeeded(page, DAY, WITH_KEY);
+  // Die Karte „Besprechungen“ kennt den Termin des Tages: Er geht mit der Frage hinaus.
+  await expect(page.locator('.karte.besprechungen')).toContainText('Abstimmung Beispiel 2027');
+  await openAsk(page, 'Do 29.10.2026');
+  await askWithEnter(page, 'Was steht heute an?');
+  await expect(answers(page)).toHaveText(['Hallo.']);
+  await expect(costs(page)).toHaveText(['≈ 1,1 Cent']);
+  await expect(field(page)).toHaveValue('');
+
+  expect(claude.requests).toHaveLength(1);
+  const [request] = claude.requests;
+  expect(request.url).toBe('https://api.anthropic.com/v1/messages');
+  expect(request.headers).toMatchObject({
+    'content-type': 'application/json',
+    'x-api-key': KI_KEY,
+    'anthropic-version': '2026-10-21',
+    'anthropic-dangerous-direct-browser-access': 'true',
+  });
+  expect(request.body).toMatchObject({ model: 'claude-sonnet-5-5', max_tokens: 2048, stream: true });
+  expect(request.body.system).toContain('Keine Gedankenstriche');
+  expect(request.body.messages).toHaveLength(1);
+  const [image, ...rest] = lastBlocks(request.body);
+  expect(image.type).toBe('image');
+  expect(image.source!.media_type).toBe('image/png');
+  expect(pngSize(image.source!.data)).toEqual({ w: 1658, h: 2212 });
+  const text = textOf(rest);
+  expect(text.startsWith('Offene Seite: Tagesseite Do 29.10.2026\n\n')).toBe(true);
+  expect(text).toContain('Tagesnotiz 2026-10-29, Anfang:');
+  expect(text).toContain('- [ ] Liste Planobjekte ergänzen (fällig 30.10.)');
+  expect(text).toContain('Karte „Besprechungen“ dieses Tages:\n- 08:00 · Abstimmung Beispiel 2027 · Musterstadt');
+  expect(text.endsWith('\n\nFrage: Was steht heute an?')).toBe(true);
+});
+
+test('Haiku answers when chosen', async ({ page }) => {
+  const claude = await mockClaude(page);
+  await openSeeded(page, DAY, { settings: { kiKey: KI_KEY, kiModel: 'haiku' } });
+  await openAsk(page, 'Do 29.10.2026');
+  await askWithEnter(page, 'Was steht an?');
+  await expect(answers(page)).toHaveText(['Hallo.']);
+  await expect(costs(page)).toHaveText(['unter 0,1 Cent']);
+  expect(claude.requests.map((request) => request.body.model)).toEqual(['claude-haiku-5-5']);
+});
+
+test('errors keep the question', async ({ page }) => {
+  const claude = await mockClaude(page);
+  await openSeeded(page, DAY, WITH_KEY);
+  claude.next = { status: 401, type: 'authentication_error', message: 'invalid x-api-key' };
+  await openAsk(page, 'Do 29.10.2026');
+  await askWithEnter(page, 'Was steht an?');
+  await expect(errorLine(page)).toHaveText('Der KI-Schlüssel passt nicht. Bitte in den Einstellungen prüfen.');
+  await expect(field(page)).toHaveValue('Was steht an?');
+  await expect(answers(page)).toHaveCount(0);
+
+  claude.next = 'offline';
+  await fragen(page).click();
+  await expect(errorLine(page)).toHaveText('Ohne Netz kann Claude nicht antworten.');
+  await expect(field(page)).toHaveValue('Was steht an?');
+  await expect(answers(page)).toHaveCount(0);
+
+  claude.next = { text: 'Jetzt.' };
+  await fragen(page).click();
+  await expect(answers(page)).toHaveText(['Jetzt.']);
+  await expect(errorLine(page)).toHaveText('');
+  await expect(field(page)).toHaveValue('');
+  expect(claude.requests).toHaveLength(3);
+});
+
+test('a follow-up after paging sends the new page', async ({ page }) => {
+  const claude = await mockClaude(page);
+  await openSeeded(page, DAY, WITH_KEY);
+  await openAsk(page, 'Do 29.10.2026');
+  await askWithEnter(page, 'Was steht an?');
+  await expect(costs(page)).toHaveCount(1);
+  await link(page, 'Nächster Tag').click();
+  await expect(pageSwitch(page)).toHaveAccessibleName('Seite mitschicken: Fr 30.10.2026');
+  await askWithEnter(page, 'Und morgen?');
+  await expect(costs(page)).toHaveCount(2);
+
+  expect(claude.requests).toHaveLength(2);
+  const { messages } = claude.requests[1].body as { messages: Message[] };
+  expect(messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+  const blocks = messages.flatMap((message) => (Array.isArray(message.content) ? message.content : []));
+  expect(blocks.filter((block) => block.type === 'image')).toHaveLength(1);
+  const last = messages[2].content as Block[];
+  expect(last[0].type).toBe('image');
+  expect(textOf(last).startsWith('Offene Seite: Tagesseite Fr 30.10.2026')).toBe(true);
+  expect(textOf(last).endsWith('Frage: Und morgen?')).toBe(true);
+  expect(textOf(messages[0].content as Block[]).startsWith('Offene Seite: Tagesseite Do 29.10.2026')).toBe(true);
+  expect(messages[1].content).toBe('Hallo.');
+  // Jede Runde nennt die Seite, die mit ihr ging, die neueste steht oben.
+  await expect(askWindow(page).locator('.frag-wann')).toHaveText([/ · Fr 30\.10\.2026$/, / · Do 29\.10\.2026$/]);
+});
+
+test('a meeting page sends topic and time and no note', async ({ page }) => {
+  const claude = await mockClaude(page);
+  await openSeeded(page, DAY, WITH_KEY);
+  await go(page, MEETING);
+  await waitForPageOf(page, BASE);
+  await openAsk(page, 'Abstimmung Beispiel 2027, Seite 1');
+  await askWithEnter(page, 'Worum ging es?');
+  await expect(costs(page)).toHaveCount(1);
+  const text = textOf(lastBlocks(claude.requests[0].body));
+  expect(text.startsWith('Offene Seite: Besprechung „Abstimmung Beispiel 2027“ am Do 29.10.2026 um 08:00, Seite 1')).toBe(true);
+  expect(text).not.toContain('Tagesnotiz');
+  expect(text.endsWith('Frage: Worum ging es?')).toBe(true);
 });
