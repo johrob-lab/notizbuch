@@ -1,10 +1,13 @@
-import type { ComponentChildren } from 'preact';
+import type { ComponentChildren, JSX } from 'preact';
 import { useMemo } from 'preact/hooks';
 import { costLabel } from '../ki/cost';
 import type { SentTurn } from '../ki/prompt';
 import { timeVienna, type Day } from '../lib/dates';
 import { renderNote } from '../lib/markdown';
+import type { CopyState, TakeState } from './askTakeover';
 import { noteToVNodes, type NoteContext } from './noteView';
+import type { Pressable } from './pointerBits';
+import { FAILED } from './texts';
 
 // Eine Runde im Fenster „Frag Claude“ (AskWindow.tsx): die Frage, darunter klein die Uhrzeit und die Seite, die mitging, dann die
 // Antwort mit ihren Hinweisen und den Kosten. Die Antwort erscheint wie eine Notiz in der Karte Morgenbriefing (`renderNote` und
@@ -43,6 +46,18 @@ function visibleMarkdown(answer: string): string {
   return `\n${answer.replace(/%(?=%)/g, '%\u2060')}`;
 }
 
+/** Was die Knöpfe unter der Antwort brauchen: die Stände dieser Runde, ihre Aktionen und `press` des Fensters (Tor gegen Handballen). */
+export type RoundActions = {
+  take: TakeState;
+  copy: CopyState;
+  onTake(): void;
+  onCopy(): void;
+  press(b: Pressable & { run(): void }): JSX.IntrinsicElements['button'];
+};
+
+const TAKE_LABEL: Record<TakeState, string> = { nein: 'In Ergänzungen übernehmen', laeuft: 'Wird übernommen …', fertig: 'Übernommen', fehler: 'In Ergänzungen übernehmen' };
+const COPY_LABEL: Record<CopyState, string> = { nein: 'Kopieren', kopiert: 'Kopiert', fehler: 'Kopieren ging nicht.' };
+
 const ignore = (): void => undefined;
 
 /** Die Antwort als Bauteile, nur zum Lesen: Aufgaben haben ein gesperrtes Kästchen, es gibt keinen Stift und nichts zu bearbeiten. */
@@ -63,9 +78,12 @@ function answerNodes(answer: string): ComponentChildren {
 }
 
 /** Eine Runde. Die Antwort wird nur neu zerlegt, wenn ihr Text sich ändert: Während eine Antwort läuft, bleiben die älteren, wie sie sind. */
-export function Round({ turn }: { turn: Turn }) {
+export function Round({ turn, actions }: { turn: Turn; actions: RoundActions }) {
   const answer = useMemo(() => answerNodes(turn.answer), [turn.answer]);
   const waiting = turn.state === 'laeuft' && turn.answer === '';
+  // Knöpfe gibt es nur für eine Runde mit Text, nicht, solange sie noch läuft.
+  const hasText = turn.state !== 'laeuft' && turn.answer.trim() !== '';
+  const { take, copy, press } = actions;
   return (
     <li class="frag-runde">
       <p class="frag-frage">{turn.question}</p>
@@ -74,6 +92,26 @@ export function Round({ turn }: { turn: Turn }) {
       {turn.imageFailed && <p class="frag-hinweis">{IMAGE_FAILED}</p>}
       {turn.state === 'gestoppt' && <p class="frag-hinweis">{STOPPED}</p>}
       {turn.state === 'abgeschnitten' && <p class="frag-hinweis">{CUT}</p>}
+      {hasText && (
+        <div class="frag-aktionen">
+          <button type="button" class="knopf" {...press({ key: `kopieren-${turn.id}`, run: actions.onCopy })}>
+            {COPY_LABEL[copy]}
+          </button>
+          <button
+            type="button"
+            class="knopf"
+            disabled={take === 'laeuft' || take === 'fertig'}
+            {...press({ key: `uebernehmen-${turn.id}`, disabled: take === 'laeuft' || take === 'fertig', run: actions.onTake })}
+          >
+            {TAKE_LABEL[take]}
+          </button>
+        </div>
+      )}
+      {hasText && take === 'fehler' && (
+        <p class="frag-hinweis" role="alert">
+          {FAILED}
+        </p>
+      )}
       {turn.cost !== null && <p class="frag-kosten">{costLabel(turn.cost)}</p>}
     </li>
   );

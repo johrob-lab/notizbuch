@@ -1,5 +1,5 @@
 import { expect, test as base, type Page } from '@playwright/test';
-import { changeStoredSettings, openSeeded, shareRepos } from './helpers/app';
+import { changeStoredSettings, openSeeded, queued, shareRepos } from './helpers/app';
 import { mockClaude, pngSize } from './helpers/claude';
 import { centerOf, pen, touch, viewOf } from './helpers/pointer';
 import { touchscreen, type Pt } from './helpers/touch';
@@ -413,4 +413,70 @@ test('a meeting page sends topic and time and no note', async ({ page }) => {
   expect(text.startsWith('Offene Seite: Besprechung „Abstimmung Beispiel 2027“ am Do 29.10.2026 um 08:00, Seite 1')).toBe(true);
   expect(text).not.toContain('Tagesnotiz');
   expect(text.endsWith('Frage: Worum ging es?')).toBe(true);
+});
+
+// „In Ergänzungen übernehmen“: Die Zeilen kommen an „Ergänzungen“ der Tagesnotiz der Antwort, und nur dieser Tipp ändert eine Notiz.
+
+const NOTE29 = '05 Daily Notes/2026-10-29.md';
+const NOTE30 = '05 Daily Notes/2026-10-30.md';
+const WEEK = '#/woche/2026-W44';
+const ANSWER = 'Zwei Punkte:\n- [ ] Angebot prüfen\n- Termin mit Muster';
+const take = (page: Page) => askWindow(page).getByRole('button', { name: 'In Ergänzungen übernehmen', exact: true });
+const taken = (page: Page) => askWindow(page).getByRole('button', { name: 'Übernommen', exact: true });
+/** Der Abschnitt „Ergänzungen“ einer Notiz als Zeilen ohne Leerzeilen. */
+const ergaenzungen = (text: string) =>
+  text
+    .split(/^## /m)
+    .find((part) => part.startsWith('Ergänzungen'))!
+    .split('\n')
+    .slice(1)
+    .filter((line) => line.trim() !== '');
+const expected = ['- Claude, 12:00: Was steht an?', '- Zwei Punkte:', '- [ ] Angebot prüfen', '- Termin mit Muster'];
+
+test('Übernehmen writes into Ergänzungen and the card shows it', async ({ page }) => {
+  const claude = await mockClaude(page);
+  await openSeeded(page, DAY, WITH_KEY);
+  claude.next = { text: ANSWER };
+  await openAsk(page, 'Do 29.10.2026');
+  await askWithEnter(page, 'Was steht an?');
+  await expect(costs(page)).toHaveCount(1);
+  // Bis zum Tipp ändert sich nichts an der Notiz.
+  expect((await queued(page))[NOTE29]).toBeUndefined();
+  await take(page).click();
+  await expect(taken(page)).toBeDisabled();
+  const written = (await queued(page))[NOTE29];
+  expect(ergaenzungen(written).slice(-4)).toEqual(expected);
+  const card = page.getByRole('region', { name: 'Morgenbriefing' });
+  await expect(card.getByRole('checkbox', { name: 'Angebot prüfen' })).toBeVisible();
+  await expect(card).toContainText('Termin mit Muster');
+});
+
+test('after paging the answer still goes to its own day', async ({ page }) => {
+  const claude = await mockClaude(page);
+  await openSeeded(page, DAY, WITH_KEY);
+  claude.next = { text: ANSWER };
+  await openAsk(page, 'Do 29.10.2026');
+  await askWithEnter(page, 'Was steht an?');
+  await expect(costs(page)).toHaveCount(1);
+  await link(page, 'Nächster Tag').click();
+  await waitForPageOf(page, '2026-10-30');
+  await take(page).click();
+  await expect(taken(page)).toBeDisabled();
+  const changes = await queued(page);
+  expect(ergaenzungen(changes[NOTE29]).slice(-4)).toEqual(expected);
+  expect(changes[NOTE30]).toBeUndefined();
+});
+
+test('on a week page the answer goes to today', async ({ page }) => {
+  const claude = await mockClaude(page);
+  await openSeeded(page, DAY, WITH_KEY);
+  await go(page, WEEK);
+  await waitForPageOf(page, '2026-W44');
+  claude.next = { text: ANSWER };
+  await openAsk(page, 'KW 44 2026');
+  await askWithEnter(page, 'Was steht an?');
+  await expect(costs(page)).toHaveCount(1);
+  await take(page).click();
+  await expect(taken(page)).toBeDisabled();
+  expect(ergaenzungen((await queued(page))[NOTE29]).slice(-4)).toEqual(expected);
 });

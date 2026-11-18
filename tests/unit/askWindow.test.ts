@@ -4,10 +4,13 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { GestureFilter } from '../../src/ink/gestures';
 import { pageImage } from '../../src/ki/pageImage';
 import { EARLIER_IMAGE } from '../../src/ki/prompt';
+import { timeVienna } from '../../src/lib/dates';
 import type { KiModel } from '../../src/lib/settings';
 import type { SyncEngine } from '../../src/sync/engine';
 import type { AskPage } from '../../src/ui/ask';
 import { AskWindow, type AskControl } from '../../src/ui/AskWindow';
+import { onNoteWrite } from '../../src/ui/noteQueue';
+import { FAILED } from '../../src/ui/texts';
 import { messageDelta, messageStart, messageStop, streamOf, textDelta, type Call } from './helpers';
 
 // Das Fenster „Frag Claude“ mit einer erfundenen Seite und einer erfundenen Engine. Zuerst die Hülle: Öffnen, Schließen, der
@@ -673,4 +676,132 @@ test('nothing goes out without Fragen', async () => {
   expect(f).not.toHaveBeenCalled();
   expect(page.describe).not.toHaveBeenCalled();
   expect(pageImage).not.toHaveBeenCalled();
+});
+
+// Unter der Antwort: „Kopieren“ und „In Ergänzungen übernehmen“. Nur das Übernehmen ändert eine Notiz.
+
+const TAKE = 'In Ergänzungen übernehmen';
+const NOTE_PATH = '05 Daily Notes/2026-10-29.md';
+
+/** Eine Engine mit einer Notiz, die sich merkt, was geschrieben wird. */
+function noteEngine(first: { text: string | null; unknown: boolean }) {
+  const state = { answer: first };
+  const engine = {
+    readOnly: false,
+    lookupFresh: vi.fn(async (_path: string) => state.answer),
+    write: vi.fn(async (_path: string, text: string, _kind: string) => {
+      state.answer = { text, unknown: false };
+    }),
+  };
+  return { engine, state, as: engine as unknown as SyncEngine };
+}
+
+/** Eine fertige Runde mit dieser Antwort. */
+async function answered(o: { page?: AskPage | null; engine: SyncEngine; answer: string; question?: string }) {
+  vi.stubGlobal('fetch', streamOf(reply(o.answer)));
+  const mounted = await opened({ page: o.page, engine: o.engine });
+  await ask(mounted.host, o.question ?? 'Was steht an?');
+  await until(() => costs(mounted.host).length === 1, 'Antwort');
+  return mounted;
+}
+
+test('taking over writes the answer once into its day', async () => {
+  const notes = noteEngine({ text: '---\ndate: 2026-10-29\n---\n# 2026-10-29\n', unknown: false });
+  const { host } = await answered({ engine: notes.as, answer: 'Zwei Punkte:\n- [ ] Angebot prüfen' });
+  const at = timeVienna(new Date());
+  const heard = vi.fn();
+  onNoteWrite(notes.as, heard);
+  // Zwei schnelle Tipps hintereinander.
+  act(() => {
+    tap(button(host, TAKE), 'mouse', performance.now());
+    tap(button(host, TAKE), 'mouse', performance.now() + 100);
+  });
+  await until(() => button(host, 'Übernommen') !== undefined, 'Übernommen');
+  expect(notes.engine.write).toHaveBeenCalledTimes(1);
+  expect(notes.engine.write.mock.calls[0][0]).toBe(NOTE_PATH);
+  expect(notes.engine.write.mock.calls[0][2]).toBe('md');
+  const written = notes.engine.write.mock.calls[0][1];
+  const order = [`- Claude, ${at}: Was steht an?`, '- Zwei Punkte:', '- [ ] Angebot prüfen'].map((line) => written.indexOf(line));
+  expect(order.every((i) => i >= 0)).toBe(true);
+  expect(order).toEqual([...order].sort((a, b) => a - b));
+  expect((button(host, 'Übernommen') as HTMLButtonElement).disabled).toBe(true);
+  expect(heard).toHaveBeenCalledWith(NOTE_PATH);
+});
+
+test('offline nothing is written and it says so', async () => {
+  const notes = noteEngine({ text: null, unknown: true });
+  const { host } = await answered({ engine: notes.as, answer: 'Ok' });
+  await press(host, TAKE);
+  await until(() => host.querySelector('.frag-runde')!.textContent!.includes(FAILED), 'Fehlertext');
+  expect(notes.engine.write).not.toHaveBeenCalled();
+  expect(button(host, TAKE)).toBeDefined();
+  expect((button(host, TAKE) as HTMLButtonElement).disabled).toBe(false);
+});
+
+test('the answer goes to the day it belongs to', async () => {
+  const notes = noteEngine({ text: null, unknown: false });
+  const pageA = fakePage();
+  const { host, set } = await answered({ engine: notes.as, page: pageA, answer: 'Ok' });
+  // Seite B: Die Antwort gehört trotzdem zum 29.10.
+  await set({ page: fakePage({ day: '2026-10-30', label: 'Fr 30.10.2026' }) });
+  await press(host, TAKE);
+  await until(() => notes.engine.write.mock.calls.length === 1, 'Schreiben');
+  expect(notes.engine.write.mock.calls[0][0]).toBe(NOTE_PATH);
+});
+
+test('an answer on the week goes to the day of the question', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    vi.setSystemTime(new Date('2026-10-29T12:00:00+01:00'));
+    const notes = noteEngine({ text: null, unknown: false });
+    const { host } = await answered({ engine: notes.as, page: fakePage({ day: null, label: 'KW 44 2026' }), answer: 'Ok' });
+    await press(host, TAKE);
+    await until(() => notes.engine.write.mock.calls.length === 1, 'Schreiben');
+    expect(notes.engine.write.mock.calls[0][0]).toBe(NOTE_PATH);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('copy takes the answer as written', async () => {
+  const writeText = vi.fn(async (_text: string) => undefined);
+  vi.stubGlobal('navigator', { clipboard: { writeText } });
+  const { host } = await answered({ engine: fakeEngine, answer: '## Titel\n- **fett**' });
+  await press(host, 'Kopieren');
+  await until(() => button(host, 'Kopiert') !== undefined, 'Kopiert');
+  expect(writeText).toHaveBeenCalledWith('## Titel\n- **fett**');
+  expect(button(host, 'Kopieren')).toBeUndefined();
+  await act(() => wait(2100));
+  expect(button(host, 'Kopieren')).toBeDefined();
+});
+
+test('a failed copy says so', async () => {
+  vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(async () => Promise.reject(new Error('nein'))) } });
+  const { host } = await answered({ engine: fakeEngine, answer: 'Ok' });
+  await press(host, 'Kopieren');
+  await until(() => button(host, 'Kopieren ging nicht.') !== undefined, 'Fehlertext');
+});
+
+test('a running round shows neither button', async () => {
+  const later = gate();
+  vi.stubGlobal('fetch', streamOf(halThenLo(), { release: later.promise }));
+  const { host } = await opened();
+  await ask(host, 'Was steht an?');
+  await until(() => answers(host)[0] === 'Hal', 'Hal');
+  expect(button(host, 'Kopieren')).toBeUndefined();
+  expect(button(host, TAKE)).toBeUndefined();
+  later.open();
+  await until(() => button(host, TAKE) !== undefined, 'Knöpfe');
+  expect(button(host, 'Kopieren')).toBeDefined();
+});
+
+test('a resting hand takes nothing over', async () => {
+  const notes = noteEngine({ text: null, unknown: false });
+  const page = fakePage();
+  const { host } = await answered({ engine: notes.as, page, answer: 'Ok' });
+  page.filter.penDown(performance.now());
+  await act(() => tap(button(host, TAKE), 'touch', performance.now(), 10));
+  await act(() => wait(20));
+  expect(notes.engine.write).not.toHaveBeenCalled();
+  expect(notes.engine.lookupFresh).not.toHaveBeenCalled();
 });

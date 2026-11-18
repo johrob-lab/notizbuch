@@ -2454,6 +2454,13 @@ body {
   font-size: 14px;
 }
 
+.frag-aktionen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+
 .frag-kosten {
   margin: 4px 0 0;
   color: #7d877f;

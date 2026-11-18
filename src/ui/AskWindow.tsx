@@ -9,6 +9,7 @@ import type { KiModel } from '../lib/settings';
 import type { SyncEngine } from '../sync/engine';
 import type { AskPage } from './ask';
 import { Round, type Turn } from './askRound';
+import { useRoundActions } from './askTakeover';
 import { keepFocusAfterTap, watchHand } from './palmGuard';
 import { useActivation, type Pressable } from './pointerBits';
 
@@ -54,7 +55,7 @@ async function questionWithPage(page: AskPage, question: string): Promise<SentTu
  * offenen Seite, „Fragen“ (während einer Antwort „Stopp“) und „Neue Frage“, die Zeile für Fehler und der Verlauf mit der neuesten
  * Runde oben. Alle Knöpfe und der Schalter laufen über `useActivation` mit dem Tor der offenen Seite, ohne Seite mit einem eigenen.
  */
-export function AskWindow({ kiKey, model, page, away, control }: Props) {
+export function AskWindow({ engine, kiKey, model, page, away, control }: Props) {
   const root = useRef<HTMLElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const [open, setOpen] = useState(false);
@@ -212,6 +213,7 @@ export function AskWindow({ kiKey, model, page, away, control }: Props) {
   };
 
   const press = useActivation(gate, (b: Knopf) => b.run());
+  const round = useRoundActions(engine);
   const empty = question.trim() === '';
   const busy = turns.some((turn) => turn.state === 'laeuft');
   const pageName = page?.label ?? 'keine Seite offen';
@@ -273,7 +275,17 @@ export function AskWindow({ kiKey, model, page, away, control }: Props) {
       </p>
       <ol class="frag-verlauf">
         {turns.map((turn) => (
-          <Round key={turn.id} turn={turn} />
+          <Round
+            key={turn.id}
+            turn={turn}
+            actions={{
+              take: round.taking[turn.id] ?? 'nein',
+              copy: round.copying[turn.id] ?? 'nein',
+              onTake: () => void round.take(turn),
+              onCopy: () => void round.copy(turn),
+              press,
+            }}
+          />
         ))}
       </ol>
     </section>

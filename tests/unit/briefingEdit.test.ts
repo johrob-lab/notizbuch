@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { appendErgaenzung, newDailyNote } from '../../src/lib/dailyNote';
-import { addToNote, editLine, findLine, idsOf, relocate, STALE_NOTICE, tickLine } from '../../src/lib/briefingEdit';
+import { addItemsToNote, addToNote, editLine, findLine, idsOf, relocate, STALE_NOTICE, tickLine } from '../../src/lib/briefingEdit';
 import { fixture, lineOf } from './helpers';
 
 // Die Entscheidungen hinter der Karte „Morgenbriefing“: Jede Änderung geht vom neuesten Text aus, trifft nur die Zeile, die man
@@ -164,4 +164,33 @@ test('relocate gives up when the line is gone, has no id and changed, or the id 
   expect(relocate(null, lines[task1], task1)).toBeNull();
   // Eine Zeile mit derselben Kennung, die kein Listenpunkt ist, ist nicht die gesuchte.
   expect(relocate('## Titel %%todo:AAMkTEST1%%\n', lines[task1], 0)).toBeNull();
+});
+
+test('answer items go to the end of Ergänzungen in order', () => {
+  const base = '---\ndate: 2026-10-29\n---\n# 2026-10-29\n\n## Ergänzungen\n\n- alt\n';
+  const next = addItemsToNote(base, '2026-10-29', [
+    { text: 'Claude, 14:05: Frage', asTask: false },
+    { text: 'Angebot prüfen', asTask: true },
+    { text: 'Termin', asTask: false },
+  ])!;
+  const at = ['- alt', '- Claude, 14:05: Frage', '- [ ] Angebot prüfen', '- Termin'].map((line) => next.indexOf(line));
+  expect(at.every((i) => i >= 0)).toBe(true);
+  expect(at).toEqual([...at].sort((a, b) => a - b));
+});
+
+test('a missing section or note is created', () => {
+  const items = [{ text: 'Eins', asTask: false }, { text: 'Zwei', asTask: true }];
+  const bare = '---\ndate: 2026-10-29\n---\n# 2026-10-29\n';
+  const withSection = addItemsToNote(bare, '2026-10-29', items)!;
+  expect(withSection).toBe(appendErgaenzung(appendErgaenzung(bare, 'Eins', false), 'Zwei', true));
+  expect(withSection).toContain('## Ergänzungen');
+  const fresh = addItemsToNote(null, '2026-10-29', items)!;
+  expect(fresh.startsWith(newDailyNote('2026-10-29'))).toBe(true);
+  expect(fresh).toContain('- Eins');
+  expect(fresh).toContain('- [ ] Zwei');
+});
+
+test('no items, no change', () => {
+  expect(addItemsToNote(note, '2026-10-29', [])).toBeNull();
+  expect(addItemsToNote(null, '2026-10-29', [])).toBeNull();
 });

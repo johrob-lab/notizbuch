@@ -13,16 +13,16 @@ import { AddForm } from './AddForm';
 import { cardStyle } from './cardStyle';
 import { noteToVNodes, type NoteContext } from './noteView';
 import { retryCues } from './retryCues';
-import { serialQueue } from './serialQueue';
+import { noteQueue, onNoteWrite } from './noteQueue';
 import { FAILED } from './texts';
 
 // Die Karte „Morgenbriefing“ der Tagesseite: die Tagesnotiz (`05 Daily Notes/<Tag>.md`) zum Lesen, Abhaken, Bearbeiten und
 // Ergänzen. Was die Karte schreibt, geht immer vom neuesten Text der Notiz aus, trifft nur die Zeile, die man angetippt hat,
 // und lässt alles andere unberührt, auch die Marker `%%…%%`. Geschrieben wird erst, wenn die Notiz einmal gelesen ist.
 //
-// Jeder Tipp zählt: Was während eines Vorgangs angetippt wird, reiht sich hinter ihn ein (`serialQueue`) und geht vom Ergebnis
-// des vorigen aus. Ein Haken zeigt sich sofort, ob er stimmt, entscheidet der neueste Text. Ändert sich die Zeile, die man gerade
-// bearbeitet, woanders, bleibt das Feld mit dem Getippten offen (die Zeile wird an ihrer Kennung wiedergefunden). Nur wenn es
+// Jeder Tipp zählt: Was während eines Vorgangs angetippt wird, reiht sich hinter ihn ein (`noteQueue`, dieselbe Warteschlange wie
+// beim Fenster „Frag Claude“) und geht vom Ergebnis des vorigen aus. Ein Haken zeigt sich sofort, ob er
+// stimmt, entscheidet der neueste Text. Ändert sich die Zeile, die man gerade bearbeitet, woanders, bleibt das Feld mit dem Getippten offen (die Zeile wird an ihrer Kennung wiedergefunden). Nur wenn es
 // die Zeile nicht mehr gibt, bleibt der Text sichtbar zum Kopieren stehen.
 //
 // „Briefing durchgehen“ macht die Karte groß: Sie füllt die Bühne unter den Leisten (Klasse `gross`, siehe app.css) und wird mit
@@ -115,7 +115,6 @@ export function BriefingCard({ engine, day, rect }: Props) {
   const [state, setState] = useState<State>(START);
   // Der Zustand auch außerhalb des Zeichnens: Ein Vorgang, der auf die Platte wartet, liest und ändert ihn danach.
   const current = useRef(state);
-  const queue = useRef(serialQueue());
   const gone = useRef(false);
   const root = useRef<HTMLElement>(null);
   /** Was im Eingabefeld der Bearbeitung steht. Das Feld hält es selbst, die Karte erfährt es hier, ohne neu zu zeichnen. */
@@ -131,7 +130,7 @@ export function BriefingCard({ engine, day, rect }: Props) {
 
   /** Liest die Notiz neu und zeigt sie. Läuft nach allem, was schon wartet, damit es nie einen neueren Stand überholt. */
   const reload = () =>
-    queue.current(async () => {
+    noteQueue(engine, path)(async () => {
       try {
         const { text, unknown } = await engine.lookup(path);
         update((now) => {
@@ -156,9 +155,12 @@ export function BriefingCard({ engine, day, rect }: Props) {
     const stop = engine.addRemoteChangeListener((paths) => {
       if (paths.some((changed) => normalizePath(changed) === path)) void reload();
     });
+    // Das Fenster „Frag Claude“ hat in dieselbe Notiz geschrieben: ebenso neu lesen.
+    const stopWrites = onNoteWrite(engine, (written) => written === path && void reload());
     return () => {
       gone.current = true;
       stop();
+      stopWrites();
     };
     // `reload` hängt nur von `engine` und `path` ab.
   }, [engine, path]);
@@ -208,7 +210,7 @@ export function BriefingCard({ engine, day, rect }: Props) {
    */
   const act = (change: Change, o: { after?: () => Partial<State>; saves?: boolean } = {}): Promise<Outcome> => {
     update((now) => ({ pending: now.pending + 1, notice: null }));
-    return queue.current(async (): Promise<Outcome> => {
+    return noteQueue(engine, path)(async (): Promise<Outcome> => {
       try {
         const { text: latest, unknown } = await engine.lookupFresh(path);
         if (unknown) {
