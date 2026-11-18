@@ -12,6 +12,8 @@ import { GitHubClient, type ListDir, type ReadFile } from '../sync/github';
 import { openStore, type Store } from '../sync/store';
 import { acquireActiveWindow, type ActiveWindow } from './activeWindow';
 import type { AccessValues } from './AccessForm';
+import type { AskHooks, AskPage } from './ask';
+import { AskWindow, type AskControl } from './AskWindow';
 import { BesprechungenPage } from './BesprechungenPage';
 import { BesprechungPage } from './BesprechungPage';
 import { MonatPage } from './MonatPage';
@@ -120,6 +122,10 @@ export function App() {
   // Ein Tipp auf „Besprechungen“, während die Liste offen ist, zählt hoch. Die Zahl gehört zum Schlüssel der Liste: Sie entsteht
   // neu und lädt alles noch einmal.
   const [listRound, setListRound] = useState(0);
+  // „Frag Claude“: Das Fenster gehört der App und bleibt beim Blättern offen. Die offene Seite meldet sich an (`askPage`), der Knopf
+  // öffnet es über `askControl`.
+  const askControl = useRef<AskControl | null>(null);
+  const [askPage, setAskPage] = useState<AskPage | null>(null);
 
   // Der Hinweis zum Start: Er kommt mit dem Start der Sitzung und, wenn sich dadurch ein anderer Text ergibt, noch einmal an einem anderen
   // Tag, sobald die App wieder sichtbar wird. Derselbe Text kommt nicht wieder, auch wenn man ihn geschlossen hat. (`today` stößt nur
@@ -449,6 +455,23 @@ export function App() {
   // Seite des Kalenders und haben keine.
   const shown = shownMonth(route);
 
+  // „Frag Claude“ gibt es nur am iPad mit gespeichertem Schlüssel, in dem Fenster, das schreiben darf, und nicht, während der Zugang
+  // umgestellt wird. Sonst gibt es weder Knopf noch Fenster.
+  const askKey = boot.phase === 'bereit' && boot.settings.device === 'iPad' && boot.window.active && !switching ? boot.settings.kiKey : undefined;
+  const canAsk = askKey !== undefined && askKey !== '';
+  // Dieselben Haken, solange es „Frag Claude“ gibt: Sonst meldete sich die Seite bei jedem Zeichnen der App ab und wieder an. Die
+  // Abmeldung räumt nur die Seite weg, die sich angemeldet hat, nicht eine, die schon nach ihr kam.
+  const askHooks = useMemo<AskHooks>(
+    () => ({
+      open: () => askControl.current?.open(),
+      register: (page) => {
+        setAskPage(page);
+        return () => setAskPage((now) => (now === page ? null : now));
+      },
+    }),
+    [canAsk],
+  );
+
   // Was gleich unter der Leiste steht und bleibt: Das zweite Fenster eines Geräts liest nur, oder der Zugang wird umgestellt.
   const banner = boot.phase !== 'bereit' ? null : !boot.window.active ? OTHER_WINDOW : switching ? SWITCHING : null;
   const classes = [banner !== null ? 'mit-hinweis' : '', switching ? 'umstellen' : '', fullscreen ? 'vollbild' : ''].filter(Boolean).join(' ');
@@ -505,9 +528,21 @@ export function App() {
                 vollbild={fullscreen ? vollbild.werkzeuge : null}
                 nav={nav}
                 onVollbildAus={() => setVollbild({ an: false })}
+                ask={canAsk ? askHooks : undefined}
               />
             )}
             {route.view !== 'einstellungen' && route.view !== 'besprechungen' && !fullscreen && <MonthTabs year={Number(shown.slice(0, 4))} current={shown} />}
+            {/* Außerhalb der Seite: Beim Blättern bleibt es offen. In den Einstellungen und der Liste der Besprechungen ist es versteckt. */}
+            {canAsk && (
+              <AskWindow
+                engine={boot.engine}
+                kiKey={askKey}
+                model={kiModelOf(boot.settings)}
+                page={askPage}
+                away={route.view === 'einstellungen' || route.view === 'besprechungen'}
+                control={askControl}
+              />
+            )}
           </div>
         </>
       ) : boot.phase === 'einrichten' ? (

@@ -48,10 +48,10 @@ export type CardLayer = {
   filter: GestureFilter;
 };
 
-/** So lange nach dem Tipp eines Handballens wird der Klick verworfen, den der Browser daraus macht. */
-const PALM_CLICK_MS = 1000;
+/** So lange nach dem Tipp eines Handballens wird der Klick verworfen, den der Browser daraus macht. Ebenso im Fenster „Frag Claude“. */
+export const PALM_CLICK_MS = 1000;
 /** So nah am Tipp eines Handballens liegt der Klick, der daraus entstand. Ein Klick der Tastatur hat gar keinen Ort. */
-const PALM_CLICK_RADIUS_PX = 40;
+export const PALM_CLICK_RADIUS_PX = 40;
 
 /**
  * `offen`: Der Finger tippt noch, die Karte hat ihn. `seite`: Die Seite hat ihn. `karte`: Die Karte blättert mit ihm.

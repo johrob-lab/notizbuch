@@ -44,3 +44,13 @@ test('keys are unique', () => {
   const keys = [...inner, ...outer].map((b) => b.key);
   expect(new Set(keys).size).toBe(keys.length);
 });
+
+test('Frag Claude sits right after Ganze Seite', () => {
+  const { outer } = toolActions({ ...base, canAsk: true });
+  const fit = outer.findIndex((b) => b.key === 'fit');
+  expect(outer[fit + 1]).toEqual({ key: 'ask', action: { kind: 'ask' }, group: 'ansicht', label: 'Frag Claude' });
+  const hasAsk = (o: Parameters<typeof toolActions>[0]) => toolActions(o).outer.some((b) => b.key === 'ask');
+  expect(hasAsk({ ...base, canAsk: false })).toBe(false);
+  expect(hasAsk(base)).toBe(false);
+  expect(hasAsk({ ...base, canWrite: false, canAsk: true })).toBe(false);
+});

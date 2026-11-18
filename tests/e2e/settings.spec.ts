@@ -866,6 +866,7 @@ const KI_KEY = 'sk-ant-test-0000';
 const kiSection = (page: Page) => page.locator('section.ki');
 const kiField = (page: Page) => page.getByLabel('KI-Schlüssel', { exact: true });
 const kiSubmit = (page: Page) => kiSection(page).getByRole('button', { name: 'Prüfen und speichern' });
+const askButton = (page: Page) => page.getByRole('button', { name: 'Frag Claude', exact: true });
 
 test('a KI key is checked with the token counter and then saved', async ({ page }) => {
   const claude = await mockClaude(page);
@@ -887,6 +888,10 @@ test('a KI key is checked with the token counter and then saved', async ({ page 
   await expect.poll(() => saved(page, 'kiKey')).toBe(KI_KEY);
   await expect(kiSection(page)).toContainText('Schlüssel: gespeichert');
   await expect(kiField(page)).toHaveValue('');
+  // Mit dem Schlüssel gibt es auf der Tagesseite den Knopf „Frag Claude“.
+  await toDay(page);
+  expect(await hash(page)).toBe(DAY);
+  await expect(askButton(page)).toHaveCount(1);
 });
 
 test('a key that does not fit is not saved', async ({ page }) => {
@@ -904,6 +909,7 @@ test('a key that does not fit is not saved', async ({ page }) => {
 test('removing the key asks and forgets it', async ({ page }) => {
   await mockClaude(page);
   await open(page, { settings: { kiKey: KI_KEY } });
+  await expect(askButton(page)).toHaveCount(1);
   await toSettings(page);
   await expect(kiSection(page)).toContainText('Schlüssel: gespeichert');
   await kiSection(page).getByRole('button', { name: 'Schlüssel entfernen' }).click();
@@ -911,6 +917,12 @@ test('removing the key asks and forgets it', async ({ page }) => {
   await page.getByRole('button', { name: 'Entfernen', exact: true }).click();
   await expect(kiSection(page)).toContainText('Schlüssel: keiner');
   await expect.poll(async () => (await savedSettings(page)) !== null && !('kiKey' in (await savedSettings(page))!)).toBe(true);
+  // Ohne Schlüssel ist der Knopf „Frag Claude“ weg.
+  await toDay(page);
+  expect(await hash(page)).toBe(DAY);
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await expect(page.getByRole('toolbar', { name: 'Werkzeuge' })).toBeVisible();
+  await expect(askButton(page)).toHaveCount(0);
 });
 
 test('Haiku is remembered', async ({ page }) => {

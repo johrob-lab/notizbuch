@@ -8,7 +8,7 @@ import { COLORS, ERASER_MODES, ERASER_SIZES, WIDTHS, mm, type Tool } from './too
 export type ToolAction =
   | { kind: 'tool'; tool: Tool } | { kind: 'pen'; pen: PenKind } | { kind: 'color'; color: InkColor } | { kind: 'width'; width: WidthName }
   | { kind: 'eraserSize'; size: EraserSize } | { kind: 'eraserMode'; mode: EraserMode }
-  | { kind: 'undo' } | { kind: 'redo' } | { kind: 'back' } | { kind: 'today' } | { kind: 'forward' } | { kind: 'fit' } | { kind: 'exit' };
+  | { kind: 'undo' } | { kind: 'redo' } | { kind: 'back' } | { kind: 'today' } | { kind: 'forward' } | { kind: 'fit' } | { kind: 'ask' } | { kind: 'exit' };
 
 export type ActionGroup = 'werkzeug' | 'farbe' | 'breite' | 'radiergroesse' | 'radierart' | 'verlauf' | 'blaettern' | 'ansicht';
 
@@ -34,6 +34,8 @@ type Options = {
   canForward: boolean;
   /** Beschriftung von ‹ und › der Ansicht (`STEP_LABELS`). */
   stepLabels: [string, string];
+  /** „Frag Claude“ gibt es (iPad mit Schlüssel, siehe `App`). Wie die Werkzeuge nur, wo geschrieben werden kann. */
+  canAsk?: boolean;
 };
 
 export function toolActions(o: Options): { inner: ActionButton[]; outer: ActionButton[] } {
@@ -73,7 +75,8 @@ export function toolActions(o: Options): { inner: ActionButton[]; outer: ActionB
     { key: 'today', action: { kind: 'today' }, group: 'blaettern', label: 'Heute' },
     { key: 'forward', action: { kind: 'forward' }, group: 'blaettern', label: o.stepLabels[1], disabled: !o.canForward },
     { key: 'fit', action: { kind: 'fit' }, group: 'ansicht', label: 'Ganze Seite' },
-    { key: 'exit', action: { kind: 'exit' }, group: 'ansicht', label: 'Vollbild aus' },
   );
+  if (o.canWrite && o.canAsk) outer.push({ key: 'ask', action: { kind: 'ask' }, group: 'ansicht', label: 'Frag Claude' });
+  outer.push({ key: 'exit', action: { kind: 'exit' }, group: 'ansicht', label: 'Vollbild aus' });
   return { inner, outer };
 }
