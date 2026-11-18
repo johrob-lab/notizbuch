@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { dayEntries, mergeMeetings, meetingRequest, namesIn, type DayEntry, type MeetingRef } from '../lib/dayMeetings';
+import { dayEntries, mergeMeetings, meetingRequest, namesIn, pagesLabel, type DayEntry, type MeetingRef } from '../lib/dayMeetings';
 import { nextFullHour, type Day } from '../lib/dates';
 import { tagPagePath } from '../lib/filenames';
 import { createMeeting, listMeetings } from '../lib/meetings';
@@ -32,10 +32,6 @@ type Props = {
 /** Eine Besprechung wird geöffnet: bei ihrer ersten Seite. */
 function open(meeting: MeetingRef): void {
   window.location.hash = routeHash({ view: 'besprechung', key: meeting.base, n: meeting.pages[0] ?? 1 });
-}
-
-function pagesText(count: number): string {
-  return count === 1 ? 'Besprechung' : `Besprechung · ${count} Seiten`;
 }
 
 export function MeetingsCard({ engine, day, rect, termine, listDir }: Props) {
@@ -159,7 +155,7 @@ export function MeetingsCard({ engine, day, rect, termine, listDir }: Props) {
           <a class="eintrag-zeile" href={routeHash({ view: 'besprechung', key: entry.meeting.base, n: entry.meeting.pages[0] ?? 1 })}>
             <span class="zeit">{entry.zeit}</span>
             <span class="titel">{entry.thema}</span>
-            <span class="zusatz">{pagesText(entry.meeting.pages.length)}</span>
+            <span class="zusatz">{pagesLabel(entry.meeting.pages.length)}</span>
           </a>
         </li>
       );
@@ -171,7 +167,7 @@ export function MeetingsCard({ engine, day, rect, termine, listDir }: Props) {
           <span class="zeit">{termin.allDay ? 'ganztägig' : termin.start}</span>
           <span class="titel">{termin.title}</span>
           {termin.place && <span class="zusatz">{termin.place}</span>}
-          {meeting && <span class="zusatz">{pagesText(meeting.pages.length)}</span>}
+          {meeting && <span class="zusatz">{pagesLabel(meeting.pages.length)}</span>}
         </button>
       </li>
     );

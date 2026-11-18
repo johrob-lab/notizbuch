@@ -10,6 +10,7 @@ import {
   mondayOf,
   monthGrid,
   monthKey,
+  timeVienna,
   nextFullHour,
   todayVienna,
   weekDays,
@@ -264,4 +265,9 @@ test('formatStand shows the build time in Vienna, in winter and in summer', () =
 test('formatDayShort gives weekday and day', () => {
   expect(formatDayShort('2026-11-17')).toBe('Di 17.11.');
   expect(formatDayShort('2026-10-29')).toBe('Do 29.10.');
+});
+
+test('timeVienna gives the wall clock in Vienna', () => {
+  expect(timeVienna(new Date('2026-11-18T14:05:00Z'))).toBe('15:05');
+  expect(timeVienna(new Date('2026-07-01T22:30:00Z'))).toBe('00:30');
 });

@@ -16,6 +16,11 @@ export type DayEntry =
   // `zeit` ist die Uhrzeit der Besprechung als `HH:MM`.
   | { kind: 'besprechung'; zeit: string; thema: string; meeting: MeetingRef };
 
+/** Was die Karte hinter einem Eintrag zeigt: `Besprechung` bei einer Seite, sonst `Besprechung · <n> Seiten`. */
+export function pagesLabel(count: number): string {
+  return count === 1 ? 'Besprechung' : `Besprechung · ${count} Seiten`;
+}
+
 /** Das Thema, das `createMeeting` aus dem Titel eines Termins macht: wie im Dateinamen, mit Umlauten als ein Zeichen. */
 function topicOf(title: string): string {
   return sanitizeThema(title.trim().normalize('NFC')) || 'Besprechung';

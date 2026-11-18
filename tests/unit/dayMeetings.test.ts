@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { dayEntries, meetingRequest, mergeMeetings, namesIn, type MeetingRef } from '../../src/lib/dayMeetings';
+import { dayEntries, meetingRequest, mergeMeetings, namesIn, pagesLabel, type MeetingRef } from '../../src/lib/dayMeetings';
 import { parseTermine } from '../../src/lib/termine';
 
 const D = '2026-10-29';
@@ -146,4 +146,9 @@ test('names in a folder are the files directly in it, not those in a subfolder o
 
 test('names in a folder do not depend on how the umlauts are written', () => {
   expect(namesIn('07 Anha\u0308nge/Notizbuch/2026', ['07 Anh\u00e4nge/Notizbuch/2026/M\u00fcller S1.svg'])).toEqual(['M\u00fcller S1.svg']);
+});
+
+test('pagesLabel counts pages like the card', () => {
+  expect(pagesLabel(1)).toBe('Besprechung');
+  expect(pagesLabel(3)).toBe('Besprechung · 3 Seiten');
 });
