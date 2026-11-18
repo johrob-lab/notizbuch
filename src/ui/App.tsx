@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { SMOOTHING } from '../ink/types';
+import { checkKey, FAILURE_TEXT } from '../ki/claude';
 import { AccessChangedError, accessProblem, PendingChangesError, saveAccess, waitingText } from '../lib/access';
 import { todayVienna, type Day } from '../lib/dates';
 import { expiryWarning, knownExpiry } from '../lib/expiry';
 import { pageName } from '../lib/filenames';
-import { loadSettings, updateSettings, vollbildOf, type Settings, type Vollbild } from '../lib/settings';
+import { kiModelOf, loadSettings, updateSettings, vollbildOf, type Settings, type Vollbild } from '../lib/settings';
 import { initInkPrefs } from './inkPrefs';
 import { SyncEngine } from '../sync/engine';
 import { GitHubClient, type ListDir, type ReadFile } from '../sync/github';
@@ -286,7 +287,7 @@ export function App() {
   // ---------- Einstellungen ----------
 
   /** Eine Wahl der Einstellungen gilt sofort und wird gespeichert, ausgehend vom Stand im Speicher: Nichts anderes geht dabei verloren. */
-  const choose = async (patch: Partial<Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung' | 'vollbild'>>): Promise<void> => {
+  const choose = async (patch: Partial<Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung' | 'vollbild' | 'kiModel'>>): Promise<void> => {
     const now = bootNow.current;
     if (now.phase !== 'bereit' || !now.window.active) return;
     const before = Object.fromEntries(Object.keys(patch).map((key) => [key, now.settings[key as keyof Settings]])) as Partial<Settings>;
@@ -359,6 +360,41 @@ export function App() {
     void engine.flush();
     void engine.pollRemote();
     return null;
+  };
+
+  /**
+   * Prüft den KI-Schlüssel (der Zähler für Token bei Claude kostet nichts) und speichert ihn nur, wenn er passt. Gibt den Text
+   * zurück, was nicht passt, sonst `null`. Der Schlüssel steht in keinem Text und keinem Fehler.
+   */
+  const saveKiKey = async (input: string): Promise<string | null> => {
+    const now = bootNow.current;
+    if (now.phase !== 'bereit' || !now.window.active) return FAILED;
+    const kiKey = input.trim();
+    const failure = await checkKey(kiKey, kiModelOf(now.settings));
+    if (failure !== null) return failure === 'key' ? 'Dieser Schlüssel passt nicht.' : failure === 'offline' ? 'Ohne Netz lässt sich der Schlüssel nicht prüfen.' : FAILURE_TEXT[failure];
+    if (live.current.gone) return null;
+    try {
+      await updateSettings(now.store, (saved) => ({ ...saved, kiKey }));
+    } catch {
+      return FAILED;
+    }
+    setBoot((current) => (current.phase === 'bereit' ? { ...current, settings: { ...current.settings, kiKey } } : current));
+    return null;
+  };
+
+  /** Vergisst den KI-Schlüssel: Das Feld verschwindet aus den Einstellungen, es wird nicht leer gespeichert. */
+  const removeKiKey = async (): Promise<void> => {
+    const now = bootNow.current;
+    if (now.phase !== 'bereit' || !now.window.active) return;
+    await updateSettings(now.store, (saved) => {
+      const { kiKey: _removed, ...rest } = saved;
+      return rest;
+    });
+    setBoot((current) => {
+      if (current.phase !== 'bereit') return current;
+      const { kiKey: _removed, ...rest } = current.settings;
+      return { ...current, settings: rest };
+    });
   };
 
   /**
@@ -447,6 +483,8 @@ export function App() {
                 passive={!boot.window.active}
                 onChange={choose}
                 onAccess={changeAccess}
+                onKiKey={saveKiKey}
+                onKiRemove={removeKiKey}
               />
             ) : route.view === 'besprechungen' ? (
               <BesprechungenPage key={`${here} ${listRound}`} engine={boot.engine} listDir={boot.listDir} />

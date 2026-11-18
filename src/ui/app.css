@@ -711,6 +711,37 @@ body {
   font-size: 15px;
 }
 
+.ki {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--linie);
+}
+
+.ki h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.ki-stand {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+/* Wie die Meldung des Zugangs: leer nimmt sie keinen Platz, bleibt aber im Baum. */
+.ki-meldung {
+  margin: 0;
+  font-size: 15px;
+  color: #4a5160;
+}
+
+.ki-meldung:empty {
+  display: none;
+}
+
+.ki .wahl {
+  margin-top: 16px;
+}
+
 .zugang-formular {
   display: flex;
   flex-direction: column;
