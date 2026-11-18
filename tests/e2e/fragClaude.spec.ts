@@ -114,7 +114,7 @@ test('the toolbar stays one row with Frag Claude', async ({ page }) => {
   await mockClaude(page);
   await page.setViewportSize({ width: 744, height: 1133 });
   await openSeeded(page, DAY, WITH_KEY);
-  for (const width of [744, 768, 820, 834, 1180]) {
+  for (const width of [744, 768, 810, 820, 834, 1180]) {
     await page.setViewportSize({ width, height: 1133 });
     for (const tool of ['Radierer', 'Kugelschreiber']) {
       const chosen = page.locator('.werkzeuge').getByRole('button', { name: tool, exact: true });

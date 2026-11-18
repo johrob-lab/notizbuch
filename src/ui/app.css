@@ -172,10 +172,11 @@ body {
 }
 
 /*
- * Mit „Frag Claude“ braucht die Zeile der Werkzeuge 56 Punkte mehr. Bis 800 Punkte Breite (iPad mini und kleine iPads im
- * Hochformat) rücken Rand und Abstände zusammen, damit alles in einer Zeile bleibt. Die Knöpfe bleiben 44 x 44.
+ * Mit „Frag Claude“ braucht die Zeile der Werkzeuge 56 Punkte mehr, mit dem Radierer (Wörter statt Zeichen) bis etwa 810 Punkte
+ * Breite. Bis 819 Punkte (iPad mini und das 10,2-Zoll-iPad im Hochformat) rücken darum Rand und Abstände zusammen, damit alles in
+ * einer Zeile bleibt. Die Knöpfe bleiben 44 x 44.
  */
-@media (max-width: 800px) {
+@media (max-width: 819px) {
   .leiste:has(> .frag-claude) {
     column-gap: 8px;
     padding-right: max(8px, env(safe-area-inset-right));
