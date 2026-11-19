@@ -734,7 +734,7 @@ test('when the app goes on with a new engine, the day left behind is read again'
   await page.getByRole('link', { name: 'Einstellungen', exact: true }).click();
   await page.getByRole('button', { name: 'Zugang ändern' }).click();
   await page.getByLabel('Token', { exact: true }).fill('test-zugang-erneuert-0123456789');
-  await page.getByRole('button', { name: 'Prüfen und speichern' }).click();
+  await page.locator('section.zugang').getByRole('button', { name: 'Prüfen und speichern' }).click();
   await expect.poll(() => repo.requests.filter((request) => request === `GET /repos/${repo.name}`)).toHaveLength(1);
   await goTo(page, DAY);
   await waitForPageOf(page, 'tag', '2026-10-29');
@@ -953,7 +953,7 @@ async function switchRepository(page: Page, repo: string) {
   await page.getByRole('button', { name: 'Zugang ändern' }).click();
   await page.getByLabel('Token', { exact: true }).fill(SWITCH_TOKEN);
   await page.getByLabel('Repository', { exact: true }).selectOption(repo);
-  await page.getByRole('button', { name: 'Prüfen und speichern' }).click();
+  await page.locator('section.zugang').getByRole('button', { name: 'Prüfen und speichern' }).click();
 }
 
 test('the repository does not change while a stroke waits on a day that could not be loaded', async ({ page }) => {

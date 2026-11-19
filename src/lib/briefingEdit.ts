@@ -45,6 +45,19 @@ export function addToNote(latest: string | null, day: Day, text: string, asTask:
   return next === base ? null : next;
 }
 
+/** Ein Punkt für „Ergänzungen“: sein Text, und ob er ein Kästchen bekommt. */
+export type NoteItem = { text: string; asTask: boolean };
+
+/**
+ * Hängt mehrere Punkte der Reihe nach an „Ergänzungen“ an (wie `addToNote` je Punkt). Gibt es für den Tag noch keine Notiz, beginnt
+ * eine neue. `null`, wenn sich nichts ändert (keine Punkte oder nur Punkte ohne sichtbaren Text): Dann entsteht auch keine Notiz.
+ */
+export function addItemsToNote(latest: string | null, day: Day, items: NoteItem[]): string | null {
+  const base = latest ?? newDailyNote(day);
+  const next = items.reduce((md, item) => appendErgaenzung(md, item.text, item.asTask), base);
+  return next === base ? null : next;
+}
+
 /**
  * Wo steht die Zeile `expected` jetzt? An der Stelle `hint`, wenn sie dort noch steht, sonst an der einzigen Stelle, an der
  * es genau diese Zeile gibt. `null`, wenn sie fehlt, sich geändert hat oder mehrfach vorkommt: Dann lässt sich nicht sagen,

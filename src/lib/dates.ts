@@ -52,6 +52,13 @@ const viennaHour = new Intl.DateTimeFormat('en-GB', {
   hourCycle: 'h23',
 });
 
+const viennaClock = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Vienna',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
 /**
  * Die nächste volle Stunde als `HH:00`, nach der Uhr in Wien: Um 12:20 ist es `13:00`, um 12:00 genau auch, um 23:30
  * `00:00`. Gerechnet wird mit der Uhrzeit an der Wand und nicht mit Millisekunden, darum gibt es auch am Tag der
@@ -61,6 +68,13 @@ const viennaHour = new Intl.DateTimeFormat('en-GB', {
 export function nextFullHour(now: Date = new Date()): string {
   const hour = Number(viennaHour.formatToParts(now).find((part) => part.type === 'hour')?.value ?? '0');
   return `${pad2((hour + 1) % 24)}:00`;
+}
+
+/** Die Uhrzeit in Wien als `HH:MM`, unabhängig von der Zeitzone des Geräts. */
+export function timeVienna(now: Date = new Date()): string {
+  const parts = viennaClock.formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? '00';
+  return `${part('hour')}:${part('minute')}`;
 }
 
 /** Heutiger Tag in Wiener Zeit, unabhängig von der Zeitzone des Geräts. */

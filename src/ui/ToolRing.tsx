@@ -55,6 +55,8 @@ export function ActionFace({ action }: { action: ToolAction }) {
       return <span class="zeichen">›</span>;
     case 'today':
       return <span class="wort">Heute</span>;
+    case 'ask':
+      return <Icon name="funken" />;
     case 'exit':
       return (
         <svg viewBox="0 0 24 24" aria-hidden="true">

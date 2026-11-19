@@ -51,6 +51,8 @@ export const ICONS = {
   fit: 'M4 9V5a1 1 0 0 1 1-1h4 M15 4h4a1 1 0 0 1 1 1v4 M20 15v4a1 1 0 0 1-1 1h-4 M9 20H5a1 1 0 0 1-1-1v-4',
   // drei Punkte: mehr dahinter (das Rad, wenn es kein Werkzeug zu wechseln gibt)
   menu: 'M4.8 12a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0 M10.8 12a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0 M16.8 12a1.2 1.2 0 1 0 2.4 0a1.2 1.2 0 1 0-2.4 0',
+  // „Frag Claude“: ein großer und zwei kleine Funken, nicht das Logo von Claude
+  funken: 'M10 6Q10 13 17 13Q10 13 10 20Q10 13 3 13Q10 13 10 6Z M18 2Q18 5 21 5Q18 5 18 8Q18 5 15 5Q18 5 18 2Z M19.5 16Q19.5 18.5 22 18.5Q19.5 18.5 19.5 21Q19.5 18.5 17 18.5Q19.5 18.5 19.5 16Z',
 };
 
 export type IconName = keyof typeof ICONS;

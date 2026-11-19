@@ -1,15 +1,18 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { looksLikeKey } from '../ki/claude';
 import { formatDay, formatStand } from '../lib/dates';
-import { vollbildOf, type Settings } from '../lib/settings';
+import { kiModelOf, vollbildOf, type KiModel, type Settings } from '../lib/settings';
 import { AccessForm, type AccessValues } from './AccessForm';
+import { confirmDialog } from './Dialog';
 import { FAILED } from './texts';
 import { inkPrefs, setInkPrefs } from './inkPrefs';
 
 // Die Einstellungen dieses Geräts: Glättung des Stifts, Vorhersage, Gerät und der Zugang zu GitHub. Eine Wahl gilt sofort
 // (der nächste Strich schreibt damit) und wird gespeichert. Der Token steht hier nie: nur, dass er gespeichert ist und bis
-// wann er gilt. „Zugang ändern“ öffnet dasselbe Formular wie die Einrichtung, immer leer.
+// wann er gilt. „Zugang ändern“ öffnet dasselbe Formular wie die Einrichtung, immer leer. Auf dem iPad kommt der Abschnitt „KI“
+// dazu: Der Schlüssel für Claude steht ebenso nie da, nur ob er gespeichert ist.
 
-type Choices = Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung' | 'vollbild'>;
+type Choices = Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung' | 'vollbild' | 'kiModel'>;
 
 type Props = {
   settings: Settings;
@@ -21,6 +24,10 @@ type Props = {
   onChange(patch: Partial<Choices>): Promise<void>;
   /** Prüft den neuen Zugang und speichert ihn. Liefert den Text, was nicht geklappt hat, oder `null`. */
   onAccess(values: AccessValues): Promise<string | null>;
+  /** Prüft den KI-Schlüssel und speichert ihn. Liefert den Text, was nicht passt, oder `null`. */
+  onKiKey(key: string): Promise<string | null>;
+  /** Vergisst den KI-Schlüssel. */
+  onKiRemove(): Promise<void>;
 };
 
 type Option<T extends string> = { value: T; label: string };
@@ -40,6 +47,10 @@ const ON_OFF: Option<'an' | 'aus'>[] = [
 const VOLLBILD_TOOLS: Option<'kreis' | 'tab'>[] = [
   { value: 'kreis', label: 'Kreis' },
   { value: 'tab', label: 'Tab' },
+];
+const KI_MODELS: Option<KiModel>[] = [
+  { value: 'sonnet', label: 'Sonnet (genauer)' },
+  { value: 'haiku', label: 'Haiku (sparsam)' },
 ];
 const DEVICES: Option<Settings['device']>[] = [
   { value: 'iPad', label: 'iPad' },
@@ -83,7 +94,110 @@ function Choice<T extends string>({
   );
 }
 
-export function SettingsPage({ settings, warning, passive, onChange, onAccess }: Props) {
+/**
+ * Der Abschnitt „KI“: Stand des Schlüssels, das Feld dafür, das Modell. Der Schlüssel wird erst auf die Form geprüft, dann bei
+ * Claude (kostenlos) und erst danach gespeichert. Er bleibt nur im Feld, solange er nicht gespeichert ist, und steht nie in der Anzeige.
+ */
+function KiSection({
+  settings,
+  onKiKey,
+  onKiRemove,
+  onPick,
+}: {
+  settings: Settings;
+  onKiKey(key: string): Promise<string | null>;
+  onKiRemove(): Promise<void>;
+  onPick(patch: Partial<Choices>): void;
+}) {
+  const [key, setKey] = useState('');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const working = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const submit = async (event: Event) => {
+    event.preventDefault();
+    if (working.current) return; // ein zweiter Tipp, während geprüft wird, tut nichts
+    const clean = key.trim();
+    if (!looksLikeKey(clean)) {
+      setMessage('Das ist kein KI-Schlüssel. Er beginnt mit sk-ant-.');
+      return;
+    }
+    working.current = true;
+    setBusy(true);
+    setMessage('');
+    try {
+      const result = await onKiKey(clean);
+      if (!mounted.current) return;
+      if (result === null) {
+        setKey(''); // gespeichert: Der Schlüssel bleibt nicht im Feld stehen
+        setMessage('Gespeichert.');
+      } else setMessage(result);
+    } catch {
+      // Kein Text aus dem Fehler: Er könnte Teile der Anfrage enthalten.
+      if (mounted.current) setMessage(FAILED);
+    } finally {
+      working.current = false;
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!(await confirmDialog({ frage: 'Den KI-Schlüssel von diesem iPad entfernen?', ja: 'Entfernen' }))) return;
+    try {
+      await onKiRemove();
+      if (mounted.current) setMessage('');
+    } catch {
+      if (mounted.current) setMessage(FAILED);
+    }
+  };
+
+  return (
+    <section class="ki" aria-labelledby="ki-titel">
+      <h2 id="ki-titel">KI</h2>
+      <p class="ki-stand">Schlüssel: {settings.kiKey ? 'gespeichert' : 'keiner'}</p>
+      <form class="zugang-formular" noValidate aria-busy={busy} onSubmit={submit}>
+        <div class="feld">
+          <label for="ki-schluessel">KI-Schlüssel</label>
+          <input
+            id="ki-schluessel"
+            type="password"
+            autoComplete="off"
+            autoCapitalize="off"
+            autocorrect="off"
+            spellcheck={false}
+            value={key}
+            onInput={(e) => setKey(e.currentTarget.value)}
+          />
+        </div>
+        {/* Auch leer im Baum: Eine Meldung, die erst später erscheint, liest die Sprachausgabe nur dann vor. */}
+        <p class="ki-meldung" role="status">
+          {message}
+        </p>
+        <div class="zugang-knoepfe">
+          <button type="submit" class="knopf primaer" disabled={busy}>
+            {busy ? 'Wird geprüft …' : 'Prüfen und speichern'}
+          </button>
+          {settings.kiKey && (
+            <button type="button" class="knopf" disabled={busy} onClick={() => void remove()}>
+              Schlüssel entfernen
+            </button>
+          )}
+        </div>
+      </form>
+      <Choice title="Modell" name="modell" value={kiModelOf(settings)} options={KI_MODELS} onPick={(kiModel) => onPick({ kiModel })} />
+      <p class="wahl-hinweis">Der Schlüssel bleibt auf diesem iPad, bezahlt wird aus dem API-Guthaben, das Limit steht in der Claude Console.</p>
+    </section>
+  );
+}
+
+export function SettingsPage({ settings, warning, passive, onChange, onAccess, onKiKey, onKiRemove }: Props) {
   const [changing, setChanging] = useState(false);
   const [problem, setProblem] = useState('');
 
@@ -160,6 +274,8 @@ export function SettingsPage({ settings, warning, passive, onChange, onAccess }:
             </button>
           )}
         </section>
+
+        {settings.device === 'iPad' && <KiSection settings={settings} onKiKey={onKiKey} onKiRemove={onKiRemove} onPick={pick} />}
       </fieldset>
       {/* Woran man am Gerät sieht, ob die neue Version schon läuft. */}
       <p class="version">Version vom {formatStand(__STAND__)}</p>

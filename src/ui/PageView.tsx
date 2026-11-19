@@ -8,16 +8,20 @@ import { FuellerPanel, fuellerPanel } from './FuellerPanel';
 import { inkPrefs } from './inkPrefs';
 import { inkTools } from './inkTools';
 import { InkSurface, type NeighborPage } from '../ink/surface';
+import { serializePage } from '../ink/svg';
 import type { FieldBox, Page, Stroke } from '../ink/types';
+import { noteDayOf, pageHeader, pageLabel } from '../ki/pageInfo';
 import { todayVienna, type Day } from '../lib/dates';
 import type { VollbildWerkzeuge } from '../lib/settings';
 import { calendarTargets, tapTargetAt, tapTargets, todayMarks, type Layout } from '../pages/layouts';
 import type { SyncEngine } from '../sync/engine';
 import { normalizePath } from '../sync/paths';
+import type { AskHooks } from './ask';
 import { watchCards } from './cardGestures';
 import { offerHandoff, takeHandoff, updateHandoff, type Handoff } from './handoff';
 import type { Neighbors, NeighborSpec } from './neighbors';
 import { PageSession, previewStrokes, type Phase } from './pageSession';
+import { useActivation } from './pointerBits';
 import { QuickSwitch } from './QuickSwitch';
 import { retryCues } from './retryCues';
 import { routeHash, type Route } from './router';
@@ -49,6 +53,11 @@ export type PageProps = {
   nav?: { back: Route; forward: Route; labels: [string, string]; canBack: boolean; canForward: boolean };
   /** Schaltet das Vollbild aus (der Knopf „Vollbild aus“ im Rad). */
   onVollbildAus?(): void;
+  /**
+   * „Frag Claude“, nur am iPad mit Schlüssel (siehe `App`): Die Seite meldet sich an, sobald sie gelesen ist, und ihr Knopf in
+   * Werkzeugleiste, Rad und Lasche öffnet das Fenster. Ohne diese Angabe gibt es den Knopf nicht.
+   */
+  ask?: AskHooks;
 };
 
 /** Was das Formular über einer Seite mit Kopfdaten von der Seite bekommt. */
@@ -105,6 +114,8 @@ type Props = PageProps & {
   marks?: string;
   /** Zusatz zum Namen eines Tages in der Liste „Tage dieser Seite“, zum Beispiel `2 Termine, 1 Priorität`. Leer heißt: keiner. */
   dayInfo?: (day: Day) => string;
+  /** Text, den „Frag Claude“ auf dieser Seite nach ihrer Kopfzeile mitschickt. Gelesen wird er erst beim Fragen. */
+  askExtra?: () => Promise<string>;
   /**
    * Die Seiten über und unter dieser (Tag, Woche, Monat, siehe `neighborsOf`), jede mit ihrem `marks` (`withMarks`): Die Fläche
    * zeigt sie als Vorschau, man scrollt in sie hinein, und wer loslässt, während eine die Mitte bedeckt, hat sie offen. Ihre
@@ -124,6 +135,9 @@ type ShownNeighbors = Record<Side, ShownNeighbor | null>;
 const pagesOf = (n: ShownNeighbors) => ({ above: n.above?.page ?? null, below: n.below?.page ?? null });
 /** Wird ein Nachbar zur offenen Seite, liegt die bisherige von ihm aus auf der anderen Seite. */
 const ACROSS: Record<Side, Side> = { above: 'below', below: 'above' };
+
+/** Die Kopfdaten einer Seite ohne Kopf. */
+const NO_META: Record<string, string> = {};
 
 const UNREADABLE = 'Diese Seite lässt sich nicht lesen und wird nicht verändert.';
 const TOO_NEW = 'Diese Seite stammt aus einer neueren Version der App. Bitte neu laden.';
@@ -470,6 +484,42 @@ export function PageView(p: Props) {
     },
     [full, canWrite],
   );
+  // „Frag Claude“: Die Seite meldet sich beim Fenster an, sobald sie gelesen ist, mit ihrem Namen für den Schalter, dem Tag ihrer
+  // Notiz und ihrem Tor gegen Handballen. Ändert sich Name oder Tag (der Kopf einer Besprechung), meldet sie sich neu an. Text und
+  // Bild liefert sie erst beim Fragen, so wie sie dann ist.
+  const ask = p.ask;
+  const askExtra = useRef(p.askExtra);
+  askExtra.current = p.askExtra;
+  const meta = kopf ? kopfMeta : NO_META;
+  const metaNow = useRef(meta);
+  metaNow.current = meta;
+  const askLabel = pageLabel(layout.kind, layout.key, meta);
+  const noteDay = noteDayOf(layout.kind, layout.key, meta);
+  useEffect(() => {
+    if (!ask || phase !== 'bereit') return;
+    return ask.register({
+      label: askLabel,
+      day: noteDay,
+      describe: async () => {
+        const head = `Offene Seite: ${pageHeader(layout.kind, layout.key, metaNow.current)}`;
+        let extra = '';
+        try {
+          extra = (await askExtra.current?.()) ?? '';
+        } catch {
+          // Scheitert der Zusatz, fehlt nur er: Die Frage geht trotzdem hinaus.
+        }
+        return extra ? `${head}\n\n${extra}` : head;
+      },
+      svg: () => {
+        const view = surface.current;
+        return view ? serializePage(view.getPage(), [], view.shownBackground) : '';
+      },
+      filter: palm,
+    });
+  }, [ask, phase, askLabel, noteDay, palm]);
+  // Der Knopf in der Werkzeugleiste wirkt wie die Knöpfe von Rad und Lasche: Die Hand, die beim Schreiben aufliegt, löst ihn nicht aus.
+  const askPress = useActivation(palm, () => ask?.open());
+
   const wheel = p.vollbild === 'kreis';
   const ink = inkTools({
     surface,
@@ -482,6 +532,7 @@ export function PageView(p: Props) {
     quickSwitchPos: p.quickSwitchPos,
     onQuickSwitchMove: p.onQuickSwitchMove,
     filter: palm,
+    onAsk: canWrite ? ask?.open : undefined,
   });
   const { actions, quick } = ink;
 
@@ -530,6 +581,12 @@ export function PageView(p: Props) {
               onRedo={() => surface.current?.redo()}
               onFit={() => surface.current?.zoomToFit()}
             />
+          )}
+          {/* Rechts außen in der Zeile der Werkzeuge: Oben in der Leiste ist im Hochformat kein Platz. */}
+          {canWrite && ask && (
+            <button type="button" class="tb frag-claude" aria-label="Frag Claude" title="Frag Claude" {...askPress({ key: 'frag-claude' })}>
+              <Icon name="funken" />
+            </button>
           )}
         </div>
       )}

@@ -14,6 +14,7 @@ import {
   sendToBackground,
   type OpenOptions,
 } from './helpers/app';
+import { mockClaude } from './helpers/claude';
 import { pen } from './helpers/pointer';
 
 // Die Einstellungen: Glättung, Vorhersage, Gerät und der Zugang. GitHub antwortet aus Repos im Speicher
@@ -99,7 +100,7 @@ const saved = async (page: Page, key: string) => (await savedSettings(page))?.[k
 const token = (page: Page) => page.getByLabel('Token', { exact: true });
 const repository = (page: Page) => page.getByLabel('Repository', { exact: true });
 const until = (page: Page) => page.getByLabel('Gültig bis', { exact: true });
-const submit = (page: Page) => page.getByRole('button', { name: 'Prüfen und speichern' });
+const submit = (page: Page) => page.locator('section.zugang').getByRole('button', { name: 'Prüfen und speichern' });
 const change = (page: Page) => page.getByRole('button', { name: 'Zugang ändern' });
 const problem = (page: Page) => page.getByRole('alert').filter({ hasText: /\S/ });
 const notice = (page: Page, text: string) => page.locator('.meldung', { hasText: text });
@@ -130,7 +131,7 @@ test('the settings page shows the choices of this device and the access, without
   // Kein Token, kein Feld für ihn und keine Warnung, solange das Ablaufdatum weit weg ist
   expect(await page.content()).not.toContain(OLD_TOKEN);
   expect(await page.evaluate(() => document.body.innerText)).not.toContain(OLD_TOKEN);
-  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await expect(page.locator('section.zugang input[type="password"]')).toHaveCount(0);
   await expect(page.locator('.einstellungen .ablauf')).toHaveCount(0);
   // Die Seite hat keine Schreibfläche und keine Monatsreiter
   await expect(page.getByTestId('surface')).toHaveCount(0);
@@ -665,7 +666,7 @@ test('a switch of the repository can not be cancelled while GitHub is asked, and
   // GitHub hat noch nicht geantwortet: Der Wechsel lässt sich nicht abbrechen, und die App sagt, dass sie wartet
   await expect(page.getByText(SWITCHING, { exact: true })).toBeVisible();
   await expect(page.locator('.zugang-knoepfe button', { hasText: 'Abbrechen' })).toBeDisabled();
-  await expect(page.locator('.zugang-knoepfe button', { hasText: 'Prüfen und speichern' })).toBeDisabled();
+  await expect(page.locator('section.zugang .zugang-knoepfe button', { hasText: 'Prüfen und speichern' })).toBeDisabled();
 
   answer();
   await expect(page.getByText(NEW_REPO, { exact: true })).toBeVisible();
@@ -857,4 +858,106 @@ test('the settings page shows when this version of the app was built', async ({ 
   await open(page);
   await toSettings(page);
   await expect(page.getByText(/^Version vom \d{2}\.\d{2}\.\d{4}, \d{2}:\d{2}$/)).toBeVisible();
+});
+
+// ---------- KI ----------
+
+const KI_KEY = 'sk-ant-test-0000';
+const kiSection = (page: Page) => page.locator('section.ki');
+const kiField = (page: Page) => page.getByLabel('KI-Schlüssel', { exact: true });
+const kiSubmit = (page: Page) => kiSection(page).getByRole('button', { name: 'Prüfen und speichern' });
+const askButton = (page: Page) => page.getByRole('button', { name: 'Frag Claude', exact: true });
+
+test('a KI key is checked with the token counter and then saved', async ({ page }) => {
+  const claude = await mockClaude(page);
+  await open(page);
+  await toSettings(page);
+  await kiField(page).fill(KI_KEY);
+  await kiSubmit(page).click();
+  await expect(kiSection(page).getByRole('status')).toHaveText('Gespeichert.');
+  expect(claude.requests).toHaveLength(1);
+  const [request] = claude.requests;
+  expect(request.url).toBe('https://api.anthropic.com/v1/messages/count_tokens');
+  expect(request.body.model).toBe('claude-sonnet-5-5');
+  expect(request.headers).toMatchObject({
+    'content-type': 'application/json',
+    'x-api-key': KI_KEY,
+    'anthropic-version': '2026-10-21',
+    'anthropic-dangerous-direct-browser-access': 'true',
+  });
+  await expect.poll(() => saved(page, 'kiKey')).toBe(KI_KEY);
+  await expect(kiSection(page)).toContainText('Schlüssel: gespeichert');
+  await expect(kiField(page)).toHaveValue('');
+  // Mit dem Schlüssel gibt es auf der Tagesseite den Knopf „Frag Claude“.
+  await toDay(page);
+  expect(await hash(page)).toBe(DAY);
+  await expect(askButton(page)).toHaveCount(1);
+});
+
+test('a key that does not fit is not saved', async ({ page }) => {
+  const claude = await mockClaude(page);
+  claude.count = { status: 401, type: 'authentication_error', message: 'invalid x-api-key' };
+  await open(page);
+  await toSettings(page);
+  await kiField(page).fill(KI_KEY);
+  await kiSubmit(page).click();
+  await expect(kiSection(page).getByRole('status')).toHaveText('Dieser Schlüssel passt nicht.');
+  expect(await saved(page, 'kiKey')).toBeUndefined();
+  await expect(kiSection(page)).toContainText('Schlüssel: keiner');
+});
+
+test('removing the key asks and forgets it', async ({ page }) => {
+  await mockClaude(page);
+  await open(page, { settings: { kiKey: KI_KEY } });
+  await expect(askButton(page)).toHaveCount(1);
+  await toSettings(page);
+  await expect(kiSection(page)).toContainText('Schlüssel: gespeichert');
+  await kiSection(page).getByRole('button', { name: 'Schlüssel entfernen' }).click();
+  await expect(page.getByText('Den KI-Schlüssel von diesem iPad entfernen?')).toBeVisible();
+  await page.getByRole('button', { name: 'Entfernen', exact: true }).click();
+  await expect(kiSection(page)).toContainText('Schlüssel: keiner');
+  await expect.poll(async () => (await savedSettings(page)) !== null && !('kiKey' in (await savedSettings(page))!)).toBe(true);
+  // Ohne Schlüssel ist der Knopf „Frag Claude“ weg.
+  await toDay(page);
+  expect(await hash(page)).toBe(DAY);
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await expect(page.getByRole('toolbar', { name: 'Werkzeuge' })).toBeVisible();
+  await expect(askButton(page)).toHaveCount(0);
+});
+
+test('Haiku is remembered', async ({ page }) => {
+  await mockClaude(page);
+  await open(page);
+  await toSettings(page);
+  await expect(group(page, 'Modell').getByRole('radio', { name: 'Sonnet (genauer)' })).toBeChecked();
+  await choose(page, 'Modell', 'Haiku (sparsam)');
+  await expect.poll(() => saved(page, 'kiModel')).toBe('haiku');
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Einstellungen' })).toBeVisible();
+  await expect(group(page, 'Modell').getByRole('radio', { name: 'Haiku (sparsam)' })).toBeChecked();
+});
+
+test('the KI section is only on the iPad', async ({ page }) => {
+  await mockClaude(page);
+  await open(page, { device: 'Firmen-PC' });
+  await toSettings(page);
+  await expect(page.getByRole('heading', { name: 'KI', exact: true })).toHaveCount(0);
+});
+
+test('the key never goes to GitHub', async ({ page }) => {
+  const claude = await mockClaude(page);
+  const repo = await open(page);
+  await toSettings(page);
+  await kiField(page).fill(KI_KEY);
+  await kiSubmit(page).click();
+  await expect(kiSection(page).getByRole('status')).toHaveText('Gespeichert.');
+  expect(claude.requests).toHaveLength(1);
+  await toDay(page);
+  await page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
+  await expect(page.getByRole('toolbar', { name: 'Werkzeuge' })).toBeVisible();
+  await pen(page).stroke(LINE);
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.map((p) => p.path)).toEqual([TAG]);
+  expect(repo.puts.filter((p) => p.text.includes('sk-ant'))).toEqual([]);
+  expect(Object.values(await queued(page)).filter((text) => text.includes('sk-ant'))).toEqual([]);
 });

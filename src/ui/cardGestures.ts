@@ -1,4 +1,5 @@
 import { TAP_SLOP_PX, type GestureFilter } from '../ink/gestures';
+import { palmClicks, watchPens } from './palmGuard';
 
 // Die Karten der Tagesseite liegen über der Schreibfläche und fangen jede Berührung ab, die auf ihnen beginnt: Die Fläche darunter
 // sieht sie nie. Damit die Seite trotzdem mit Fingern und Rad zu bedienen ist, wo immer sie beginnen, entscheidet dieses Modul,
@@ -15,7 +16,8 @@ import { TAP_SLOP_PX, type GestureFilter } from '../ink/gestures';
 // auslöst: Ein Handballen neben dem Stift hakt nichts ab und öffnet nichts. Das gilt auch für einen Finger, der schon auf der
 // Karte lag, als der Stift aufsetzte: Er war die Hand, sein Tipp zählt nicht, wann immer er abhebt. Der Stift auf einer Karte
 // meldet sich beim Tor wie auf der Fläche, und er meldet sich auch ab, wenn er woanders abhebt (über der Leiste oben): Sonst
-// bliebe das Tor zu und jeder Finger abgewiesen, bis der nächste Strich es öffnet.
+// bliebe das Tor zu und jeder Finger abgewiesen, bis der nächste Strich es öffnet. Diese Regeln für den Klick aus dem Tipp eines
+// Handballens und für das Abheben des Stifts stehen in `palmGuard.ts`: Das Fenster „Frag Claude“ hält es genauso.
 //
 // Rad: Strg (oder Cmd) mit Rad zoomt, sonst wandert die Seite. Ohne das zoomte der Browser die ganze Oberfläche. Nur wo die
 // Karte selbst noch in diese Richtung scrollen kann, scrollt sie.
@@ -48,11 +50,6 @@ export type CardLayer = {
   filter: GestureFilter;
 };
 
-/** So lange nach dem Tipp eines Handballens wird der Klick verworfen, den der Browser daraus macht. */
-const PALM_CLICK_MS = 1000;
-/** So nah am Tipp eines Handballens liegt der Klick, der daraus entstand. Ein Klick der Tastatur hat gar keinen Ort. */
-const PALM_CLICK_RADIUS_PX = 40;
-
 /**
  * `offen`: Der Finger tippt noch, die Karte hat ihn. `seite`: Die Seite hat ihn. `karte`: Die Karte blättert mit ihm.
  * `ignoriert`: Er ist weder Finger der Seite noch der Karte (Handballen, die Fläche hat ihn nicht angenommen, der Stift kam).
@@ -82,10 +79,10 @@ export function watchCards(o: CardLayer): () => void {
   const tracks = new Map<number, Track>();
   /** Berührungen auf Karten, die das Tor als Handballen abgewiesen hat. */
   const palms = new Set<number>();
-  /** Stifte, die auf einer Karte aufliegen. */
-  const pens = new Set<number>();
-  /** Nach dem Tipp eines Handballens: Wo er war und bis wann ein Klick dort von ihm stammt. */
-  let palmTap: { x: number; y: number; until: number } | null = null;
+  /** Stifte, die auf einer Karte aufsetzten: Das Tor hört ihr Abheben, wo auch immer es ankommt. */
+  const pens = watchPens();
+  /** Aus dem Tipp eines Handballens macht der Browser einen Klick. Er trifft nichts, der Handballen soll nichts auslösen. */
+  const clicks = palmClicks();
 
   const onCard = (target: EventTarget | null): boolean => target instanceof Node && frame.contains(target);
   const onPaper = (target: EventTarget | null): boolean => target instanceof Node && host.contains(target);
@@ -113,15 +110,12 @@ export function watchCards(o: CardLayer): () => void {
         track.owner = 'ignoriert';
         palms.add(id);
       }
-      if (onCard(e.target)) {
-        filter.penDown(e.timeStamp);
-        pens.add(e.pointerId);
-      }
-      palmTap = null;
+      if (onCard(e.target)) pens.down(e.pointerId, filter, e.timeStamp);
+      clicks.disarm();
       return;
     }
     if (e.pointerType !== 'touch') {
-      palmTap = null;
+      clicks.disarm();
       return;
     }
     const card = onCard(e.target);
@@ -130,7 +124,7 @@ export function watchCards(o: CardLayer): () => void {
       if (card) palms.add(e.pointerId);
       return;
     }
-    palmTap = null;
+    clicks.disarm();
     if (!card) {
       // Ein Finger auf dem Papier, während einer auf einer Karte liegt: beide gehören der Seite. Die Fläche nimmt den neuen selbst an.
       handOverAll();
@@ -163,28 +157,7 @@ export function watchCards(o: CardLayer): () => void {
 
   function onEnd(e: PointerEvent): void {
     tracks.delete(e.pointerId);
-    if (palms.delete(e.pointerId) && e.type === 'pointerup') {
-      palmTap = { x: e.clientX, y: e.clientY, until: e.timeStamp + PALM_CLICK_MS };
-    }
-  }
-
-  // Den Stift hört nicht nur die Bühne: Hebt er über der Leiste oben oder den Reitern ab, kommt sein Ende nie bei den Karten an.
-  // Das Fenster hört alles, und das Tor wird auf jeden Fall wieder geöffnet.
-  function onPenEnd(e: PointerEvent): void {
-    if (pens.delete(e.pointerId)) filter.penUp(e.timeStamp);
-  }
-
-  // Aus dem Tipp eines Handballens macht der Browser einen Klick. Er trifft nichts, der Handballen soll nichts auslösen.
-  function onClick(e: MouseEvent): void {
-    const tap = palmTap;
-    if (!tap) return;
-    if (e.timeStamp > tap.until) {
-      palmTap = null;
-      return;
-    }
-    if (Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > PALM_CLICK_RADIUS_PX) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
+    if (palms.delete(e.pointerId) && e.type === 'pointerup') clicks.arm(e.clientX, e.clientY, e.timeStamp);
   }
 
   // Solange die Seite einen Finger hat, scrollt der Browser nichts: Sonst nähme er die Geste weg (`pointercancel`).
@@ -219,9 +192,7 @@ export function watchCards(o: CardLayer): () => void {
   stage.addEventListener('pointermove', onMove, true);
   stage.addEventListener('pointerup', onEnd, true);
   stage.addEventListener('pointercancel', onEnd, true);
-  window.addEventListener('pointerup', onPenEnd, true);
-  window.addEventListener('pointercancel', onPenEnd, true);
-  frame.addEventListener('click', onClick, true);
+  frame.addEventListener('click', clicks.swallow, true);
   frame.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
   frame.addEventListener('wheel', onWheel, { passive: false });
   return () => {
@@ -229,15 +200,10 @@ export function watchCards(o: CardLayer): () => void {
     stage.removeEventListener('pointermove', onMove, true);
     stage.removeEventListener('pointerup', onEnd, true);
     stage.removeEventListener('pointercancel', onEnd, true);
-    window.removeEventListener('pointerup', onPenEnd, true);
-    window.removeEventListener('pointercancel', onPenEnd, true);
-    frame.removeEventListener('click', onClick, true);
+    frame.removeEventListener('click', clicks.swallow, true);
     frame.removeEventListener('touchmove', onTouchMove, true);
     frame.removeEventListener('wheel', onWheel);
     // Ein Stift, der noch auf einer Karte aufliegt, während die Karten gehen, hielte das Tor sonst für immer zu.
-    for (const id of pens) {
-      pens.delete(id);
-      filter.penUp(performance.now());
-    }
+    pens.stop();
   };
 }

@@ -166,6 +166,36 @@ body {
   background: var(--linie);
 }
 
+/* „Frag Claude“ steht rechts außen in der Zeile der Werkzeuge. */
+.leiste > .frag-claude {
+  margin-left: auto;
+}
+
+/*
+ * Mit „Frag Claude“ braucht die Zeile der Werkzeuge 56 Punkte mehr, mit dem Radierer (Wörter statt Zeichen) bis etwa 810 Punkte
+ * Breite. Bis 819 Punkte (iPad mini und das 10,2-Zoll-iPad im Hochformat) rücken darum Rand und Abstände zusammen, damit alles in
+ * einer Zeile bleibt. Die Knöpfe bleiben 44 x 44.
+ */
+@media (max-width: 819px) {
+  .leiste:has(> .frag-claude) {
+    column-gap: 8px;
+    padding-right: max(8px, env(safe-area-inset-right));
+    padding-left: max(8px, env(safe-area-inset-left));
+  }
+
+  .leiste:has(> .frag-claude) .werkzeuge {
+    gap: 2px;
+  }
+
+  .leiste:has(> .frag-claude) .grp {
+    gap: 0;
+  }
+
+  .leiste:has(> .frag-claude) .sep {
+    margin: 0 2px;
+  }
+}
+
 .tb {
   display: inline-flex;
   align-items: center;
@@ -709,6 +739,37 @@ body {
   border-radius: 10px;
   background: var(--hinweis);
   font-size: 15px;
+}
+
+.ki {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--linie);
+}
+
+.ki h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.ki-stand {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+/* Wie die Meldung des Zugangs: leer nimmt sie keinen Platz, bleibt aber im Baum. */
+.ki-meldung {
+  margin: 0;
+  font-size: 15px;
+  color: #4a5160;
+}
+
+.ki-meldung:empty {
+  display: none;
+}
+
+.ki .wahl {
+  margin-top: 16px;
 }
 
 .zugang-formular {
@@ -2084,4 +2145,324 @@ body {
   color: inherit;
   font-size: 16px;
   text-decoration: none;
+}
+
+/*
+ * Das Fenster „Frag Claude“ (AskWindow.tsx). Es gehört der App und liegt rechts oben über der Seite, unter der Werkzeugleiste und
+ * links neben den Monatsreitern: Beide bleiben frei. Mit z-index 3 liegt es unter der Leiste oben mit ihren Meldungen (4) und unter
+ * Lasche, Rad und Füllfeder (4 und 5), aber über Seite, Karten und Monatsreitern (2). Ist es höher als der Platz, blättert der
+ * Verlauf darin, nicht die Seite.
+ */
+.frag-fenster {
+  position: absolute;
+  top: 69px;
+  right: max(12px, env(safe-area-inset-right));
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(460px, calc(100% - 80px));
+  max-height: calc(100% - 81px);
+  padding: 12px 16px 16px;
+  border: 1px solid var(--linie);
+  border-radius: 12px;
+  background: #fff;
+  color: #2e3630;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.25);
+  touch-action: manipulation;
+}
+
+/* Sonst hebt `display: flex` das Attribut `hidden` auf, und das Fenster bliebe zu sehen. */
+.frag-fenster[hidden] {
+  display: none;
+}
+
+.inhalt:has(> .monatsreiter) > .frag-fenster {
+  right: max(56px, env(safe-area-inset-right));
+}
+
+/* Im Vollbild gibt es keine Werkzeugleiste: Das Fenster beginnt unter dem Stand oben rechts. */
+.vollbild .frag-fenster {
+  top: max(60px, calc(env(safe-area-inset-top) + 52px));
+  max-height: calc(100% - 72px);
+}
+
+.frag-kopf {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.frag-kopf h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.frag-fenster > label {
+  margin-top: 8px;
+  font-size: 14px;
+  color: #4a5160;
+}
+
+/* 16 Punkte: Darunter zoomt Safari beim Antippen in die Seite. Der Text lässt sich markieren, auch wenn die App es sonst sperrt. */
+#frag-feld {
+  box-sizing: border-box;
+  flex: none;
+  width: 100%;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--linie);
+  border-radius: 10px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.4;
+  resize: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+#frag-feld:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 1px;
+}
+
+.frag-knoepfe {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Der Schalter „Seite mitschicken“: eine Spur mit Knopf wie beim Schalter „Aufgabe“ der Karte, daneben der Name der offenen Seite. */
+.frag-seite {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.frag-seite:disabled {
+  cursor: default;
+}
+
+.frag-seite:focus-visible {
+  outline: 2px solid var(--gruen);
+  outline-offset: 2px;
+}
+
+.frag-spur {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background: #b3bdb5;
+}
+
+.frag-spur::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+}
+
+.frag-seite[aria-checked='true'] .frag-spur {
+  background: var(--gruen);
+}
+
+.frag-seite[aria-checked='true'] .frag-spur::after {
+  transform: translateX(18px);
+}
+
+.frag-seite:disabled .frag-spur {
+  opacity: 0.4;
+}
+
+.frag-schaltertext {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.frag-schaltertext small {
+  overflow: hidden;
+  color: #5f6862;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Leer nimmt die Zeile keinen Platz, bleibt aber im Baum: Ein Fehler, der erst später erscheint, wird so vorgelesen. */
+.frag-fehler {
+  flex: none;
+  margin: 8px 0 0;
+  color: #a32a24;
+  font-size: 15px;
+}
+
+.frag-fehler:empty {
+  margin: 0;
+}
+
+.frag-verlauf {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+/* Eine Runde (askRound.tsx): die Frage, darunter klein Uhrzeit und Seite, dann die Antwort mit Hinweisen und Kosten. */
+.frag-runde {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--linie);
+}
+
+/* Zeilenumbrüche, die beim Tippen mit Umschalt+Enter entstanden, bleiben stehen. */
+.frag-frage {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.frag-wann {
+  margin: 2px 0 6px;
+  color: #5f6862;
+  font-size: 13px;
+}
+
+/* Die Antwort wie eine Notiz, nur kleiner als in der Karte Morgenbriefing. */
+.frag-antwort {
+  font-size: 16px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.frag-antwort p,
+.frag-antwort h4 {
+  margin: 0 0 6px;
+}
+
+.frag-antwort h4 {
+  font-size: 16px;
+}
+
+.frag-antwort ul,
+.frag-antwort ol {
+  margin: 0 0 6px;
+  padding-left: 22px;
+}
+
+/* Punkte mit Strich und Aufgaben: Den Punkt oder das gesperrte Kästchen zeichnet die App dort, wo sonst das Aufzählungszeichen steht. */
+.frag-antwort li.eintrag {
+  list-style: none;
+}
+
+.frag-antwort .punkt,
+.frag-antwort .haken-flaeche {
+  display: inline-block;
+  width: 22px;
+  margin-left: -22px;
+}
+
+.frag-antwort .punkt::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #7d877f;
+  vertical-align: middle;
+}
+
+.frag-antwort .haken-flaeche input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  vertical-align: middle;
+  accent-color: var(--gruen);
+}
+
+.frag-antwort blockquote {
+  margin: 0 0 6px;
+  padding-left: 12px;
+  border-left: 3px solid #c9d3cb;
+  color: #5f6862;
+}
+
+.frag-antwort pre {
+  margin: 0 0 6px;
+  overflow-x: auto;
+}
+
+.frag-antwort code {
+  font-size: 14px;
+}
+
+.frag-antwort table {
+  margin: 0 0 6px;
+  border-collapse: collapse;
+}
+
+.frag-antwort th,
+.frag-antwort td {
+  padding: 2px 6px;
+  border: 1px solid #c9d3cb;
+}
+
+.frag-antwort hr {
+  border: 0;
+  border-top: 1px solid #c9d3cb;
+}
+
+.frag-antwort a {
+  color: #2f5f7a;
+}
+
+.frag-hinweis {
+  margin: 6px 0 0;
+  color: #5f6862;
+  font-size: 14px;
+}
+
+.frag-aktionen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+
+.frag-kosten {
+  margin: 4px 0 0;
+  color: #7d877f;
+  font-size: 13px;
 }

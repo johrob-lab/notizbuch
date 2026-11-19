@@ -1,7 +1,9 @@
 import { h, render } from 'preact';
 import { afterEach, expect, test, vi } from 'vitest';
+import { appendErgaenzung } from '../../src/lib/dailyNote';
 import type { SyncEngine } from '../../src/sync/engine';
 import { BriefingCard } from '../../src/ui/BriefingCard';
+import { announceNoteWrite, noteQueue } from '../../src/ui/noteQueue';
 import { FAILED } from '../../src/ui/texts';
 import { fixture } from './helpers';
 
@@ -226,4 +228,38 @@ test('a card of an engine that writes still has its boxes, pens and the form for
   expect(box(host, NAME1)!.disabled).toBe(false);
   expect(host.querySelector('button.stift')).not.toBeNull();
   expect(host.querySelector('form.ergaenzen')).not.toBeNull();
+});
+
+test('a note written elsewhere in the app shows at once', async () => {
+  const fake = fakeEngine({ text: note, unknown: false });
+  const host = mount(fake.as);
+  await loaded(host);
+  await settled(host);
+  fake.state.answer = { text: appendErgaenzung(note, 'Neu aus dem Fenster', false), unknown: false };
+  announceNoteWrite(fake.as, '05 Daily Notes/2026-10-29.md');
+  await vi.waitFor(() => expect(host.textContent).toContain('Neu aus dem Fenster'));
+});
+
+test('the card waits for a write from the window', async () => {
+  const fake = fakeEngine({ text: note, unknown: false });
+  const host = mount(fake.as);
+  await loaded(host);
+  await settled(host);
+  const path = '05 Daily Notes/2026-10-29.md';
+  const gate = deferred();
+  const written = `${note.trimEnd()}\n- Vom Fenster\n`;
+  // Die Aufgabe des Fensters hält an und schreibt erst dann.
+  const windowTask = noteQueue(fake.as, path)(async () => {
+    await gate.promise;
+    fake.state.answer = { text: written, unknown: false };
+  });
+  tick(host, NAME1);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(fake.engine.write).not.toHaveBeenCalled();
+  gate.release();
+  await windowTask;
+  await vi.waitFor(() => expect(fake.engine.write).toHaveBeenCalledTimes(1));
+  const text = fake.engine.write.mock.calls[0][1];
+  expect(text).toContain('- Vom Fenster');
+  expect(text).toContain(TASK1.replace('[ ]', '[x]'));
 });

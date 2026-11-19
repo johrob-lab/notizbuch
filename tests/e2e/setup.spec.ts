@@ -122,7 +122,7 @@ test('token is not shown again', async ({ page }) => {
     markup: (await page.content()).includes(TOKEN),
     text: (await page.evaluate(() => document.body.innerText)).includes(TOKEN),
     values: await page.evaluate((secret) => [...document.querySelectorAll('input, textarea, select')].some((el) => (el as HTMLInputElement).value.includes(secret)), TOKEN),
-    password: await page.locator('input[type="password"]').count(),
+    password: await page.locator('section.zugang input[type="password"]').count(),
   });
   expect(await leaks()).toEqual({ markup: false, text: false, values: false, password: 0 });
 

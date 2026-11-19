@@ -51,6 +51,14 @@ export function vollbildOf(s: { vollbild?: unknown } | null | undefined): Vollbi
   };
 }
 
+/** Das Modell für „Frag Claude“: `sonnet` ist genauer, `haiku` sparsamer. */
+export type KiModel = 'sonnet' | 'haiku';
+
+/** Das Modell aus den Einstellungen; `haiku` nur bei genau diesem Wert, sonst die Vorgabe `sonnet`. */
+export function kiModelOf(s: { kiModel?: unknown } | null | undefined): KiModel {
+  return s?.kiModel === 'haiku' ? 'haiku' : 'sonnet';
+}
+
 /** Einstellungen dieses Geräts. Sie liegen nur in der IndexedDB des Geräts, der Token nirgends sonst. */
 export type Settings = {
   token: string;
@@ -68,6 +76,10 @@ export type Settings = {
   ink?: InkPrefs;
   /** Vollbild, siehe `Vollbild`. Ohne Angabe `DEFAULT_VOLLBILD`. */
   vollbild?: Vollbild;
+  /** Der Schlüssel für die Claude-Schnittstelle. Er liegt nur hier, wird nie angezeigt und steht in keiner Meldung. Ohne Angabe keiner. */
+  kiKey?: string;
+  /** Das Modell für „Frag Claude“. Ohne Angabe `sonnet`, siehe `kiModelOf`. */
+  kiModel?: KiModel;
 };
 
 /** Unter diesem Schlüssel liegen die Einstellungen im Bereich `settings` der IndexedDB. */

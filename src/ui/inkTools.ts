@@ -24,6 +24,8 @@ export type InkToolsOptions = {
   quickSwitchPos?: [number, number];
   onQuickSwitchMove?: (pos: [number, number]) => void;
   filter: GestureFilter;
+  /** Öffnet das Fenster „Frag Claude“. Ohne diese Angabe gibt es den Knopf in Rad und Lasche nicht. */
+  onAsk?: () => void;
 };
 
 export type Choose = { tool(t: Tool): void; pen(p: PenKind, from?: ButtonRect): void; color(c: InkColor): void; width(w: WidthName): void; eraserSize(s: EraserSize): void; eraserMode(m: EraserMode): void };
@@ -88,6 +90,8 @@ export function inkTools(o: InkToolsOptions): InkTools {
         return;
       case 'fit':
         return o.surface.current?.zoomToFit();
+      case 'ask':
+        return o.onAsk?.();
       case 'exit':
         return o.onVollbildAus?.();
     }
@@ -103,6 +107,7 @@ export function inkTools(o: InkToolsOptions): InkTools {
         canBack: o.nav?.canBack ?? false,
         canForward: o.nav?.canForward ?? false,
         stepLabels: o.nav?.labels ?? ['Zurück', 'Weiter'],
+        canAsk: o.onAsk !== undefined,
       })
     : null;
 

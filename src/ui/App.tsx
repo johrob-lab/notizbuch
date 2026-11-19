@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { SMOOTHING } from '../ink/types';
+import { checkKey, FAILURE_TEXT } from '../ki/claude';
 import { AccessChangedError, accessProblem, PendingChangesError, saveAccess, waitingText } from '../lib/access';
 import { todayVienna, type Day } from '../lib/dates';
 import { expiryWarning, knownExpiry } from '../lib/expiry';
 import { pageName } from '../lib/filenames';
-import { loadSettings, updateSettings, vollbildOf, type Settings, type Vollbild } from '../lib/settings';
+import { kiModelOf, loadSettings, updateSettings, vollbildOf, type Settings, type Vollbild } from '../lib/settings';
 import { initInkPrefs } from './inkPrefs';
 import { SyncEngine } from '../sync/engine';
 import { GitHubClient, type ListDir, type ReadFile } from '../sync/github';
 import { openStore, type Store } from '../sync/store';
 import { acquireActiveWindow, type ActiveWindow } from './activeWindow';
 import type { AccessValues } from './AccessForm';
+import type { AskHooks, AskPage } from './ask';
+import { AskWindow, type AskControl } from './AskWindow';
 import { BesprechungenPage } from './BesprechungenPage';
 import { BesprechungPage } from './BesprechungPage';
 import { MonatPage } from './MonatPage';
@@ -119,6 +122,10 @@ export function App() {
   // Ein Tipp auf „Besprechungen“, während die Liste offen ist, zählt hoch. Die Zahl gehört zum Schlüssel der Liste: Sie entsteht
   // neu und lädt alles noch einmal.
   const [listRound, setListRound] = useState(0);
+  // „Frag Claude“: Das Fenster gehört der App und bleibt beim Blättern offen. Die offene Seite meldet sich an (`askPage`), der Knopf
+  // öffnet es über `askControl`.
+  const askControl = useRef<AskControl | null>(null);
+  const [askPage, setAskPage] = useState<AskPage | null>(null);
 
   // Der Hinweis zum Start: Er kommt mit dem Start der Sitzung und, wenn sich dadurch ein anderer Text ergibt, noch einmal an einem anderen
   // Tag, sobald die App wieder sichtbar wird. Derselbe Text kommt nicht wieder, auch wenn man ihn geschlossen hat. (`today` stößt nur
@@ -286,7 +293,7 @@ export function App() {
   // ---------- Einstellungen ----------
 
   /** Eine Wahl der Einstellungen gilt sofort und wird gespeichert, ausgehend vom Stand im Speicher: Nichts anderes geht dabei verloren. */
-  const choose = async (patch: Partial<Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung' | 'vollbild'>>): Promise<void> => {
+  const choose = async (patch: Partial<Pick<Settings, 'smoothing' | 'prediction' | 'device' | 'messung' | 'vollbild' | 'kiModel'>>): Promise<void> => {
     const now = bootNow.current;
     if (now.phase !== 'bereit' || !now.window.active) return;
     const before = Object.fromEntries(Object.keys(patch).map((key) => [key, now.settings[key as keyof Settings]])) as Partial<Settings>;
@@ -362,6 +369,41 @@ export function App() {
   };
 
   /**
+   * Prüft den KI-Schlüssel (der Zähler für Token bei Claude kostet nichts) und speichert ihn nur, wenn er passt. Gibt den Text
+   * zurück, was nicht passt, sonst `null`. Der Schlüssel steht in keinem Text und keinem Fehler.
+   */
+  const saveKiKey = async (input: string): Promise<string | null> => {
+    const now = bootNow.current;
+    if (now.phase !== 'bereit' || !now.window.active) return FAILED;
+    const kiKey = input.trim();
+    const failure = await checkKey(kiKey, kiModelOf(now.settings));
+    if (failure !== null) return failure === 'key' ? 'Dieser Schlüssel passt nicht.' : failure === 'offline' ? 'Ohne Netz lässt sich der Schlüssel nicht prüfen.' : FAILURE_TEXT[failure];
+    if (live.current.gone) return null;
+    try {
+      await updateSettings(now.store, (saved) => ({ ...saved, kiKey }));
+    } catch {
+      return FAILED;
+    }
+    setBoot((current) => (current.phase === 'bereit' ? { ...current, settings: { ...current.settings, kiKey } } : current));
+    return null;
+  };
+
+  /** Vergisst den KI-Schlüssel: Das Feld verschwindet aus den Einstellungen, es wird nicht leer gespeichert. */
+  const removeKiKey = async (): Promise<void> => {
+    const now = bootNow.current;
+    if (now.phase !== 'bereit' || !now.window.active) return;
+    await updateSettings(now.store, (saved) => {
+      const { kiKey: _removed, ...rest } = saved;
+      return rest;
+    });
+    setBoot((current) => {
+      if (current.phase !== 'bereit') return current;
+      const { kiKey: _removed, ...rest } = current.settings;
+      return { ...current, settings: rest };
+    });
+  };
+
+  /**
    * Nimmt eine Änderung des Zugangs an, aber nur eine zugleich. Die Prüfung läuft weiter, auch wenn man das Formular verlässt (ein
    * neuer Token sperrt die App nicht); ein neues Formular könnte sonst eine zweite beginnen, die Engine und Einstellungen unter der
    * ersten austauscht. Ein Wechsel des Repositorys sperrt die App, bis er durch ist.
@@ -413,6 +455,23 @@ export function App() {
   // Seite des Kalenders und haben keine.
   const shown = shownMonth(route);
 
+  // „Frag Claude“ gibt es nur am iPad mit gespeichertem Schlüssel, in dem Fenster, das schreiben darf, und nicht, während der Zugang
+  // umgestellt wird. Sonst gibt es weder Knopf noch Fenster.
+  const askKey = boot.phase === 'bereit' && boot.settings.device === 'iPad' && boot.window.active && !switching ? boot.settings.kiKey : undefined;
+  const canAsk = askKey !== undefined && askKey !== '';
+  // Dieselben Haken, solange es „Frag Claude“ gibt: Sonst meldete sich die Seite bei jedem Zeichnen der App ab und wieder an. Die
+  // Abmeldung räumt nur die Seite weg, die sich angemeldet hat, nicht eine, die schon nach ihr kam.
+  const askHooks = useMemo<AskHooks>(
+    () => ({
+      open: () => askControl.current?.open(),
+      register: (page) => {
+        setAskPage(page);
+        return () => setAskPage((now) => (now === page ? null : now));
+      },
+    }),
+    [canAsk],
+  );
+
   // Was gleich unter der Leiste steht und bleibt: Das zweite Fenster eines Geräts liest nur, oder der Zugang wird umgestellt.
   const banner = boot.phase !== 'bereit' ? null : !boot.window.active ? OTHER_WINDOW : switching ? SWITCHING : null;
   const classes = [banner !== null ? 'mit-hinweis' : '', switching ? 'umstellen' : '', fullscreen ? 'vollbild' : ''].filter(Boolean).join(' ');
@@ -447,6 +506,8 @@ export function App() {
                 passive={!boot.window.active}
                 onChange={choose}
                 onAccess={changeAccess}
+                onKiKey={saveKiKey}
+                onKiRemove={removeKiKey}
               />
             ) : route.view === 'besprechungen' ? (
               <BesprechungenPage key={`${here} ${listRound}`} engine={boot.engine} listDir={boot.listDir} />
@@ -467,9 +528,21 @@ export function App() {
                 vollbild={fullscreen ? vollbild.werkzeuge : null}
                 nav={nav}
                 onVollbildAus={() => setVollbild({ an: false })}
+                ask={canAsk ? askHooks : undefined}
               />
             )}
             {route.view !== 'einstellungen' && route.view !== 'besprechungen' && !fullscreen && <MonthTabs year={Number(shown.slice(0, 4))} current={shown} />}
+            {/* Außerhalb der Seite: Beim Blättern bleibt es offen. In den Einstellungen und der Liste der Besprechungen ist es versteckt. */}
+            {canAsk && (
+              <AskWindow
+                engine={boot.engine}
+                kiKey={askKey}
+                model={kiModelOf(boot.settings)}
+                page={askPage}
+                away={route.view === 'einstellungen' || route.view === 'besprechungen'}
+                control={askControl}
+              />
+            )}
           </div>
         </>
       ) : boot.phase === 'einrichten' ? (

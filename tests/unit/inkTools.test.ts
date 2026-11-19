@@ -50,6 +50,16 @@ test('there are ring buttons only in fullscreen', () => {
   expect(inkTools(o).actions).toEqual(expected);
 });
 
+test('Frag Claude is in the ring only with onAsk, and its button runs it', () => {
+  const hasAsk = (t: ReturnType<typeof inkTools>) => t.actions!.outer.some((b) => b.key === 'ask');
+  expect(hasAsk(inkTools(setup({ full: true }).o))).toBe(false);
+  const onAsk = vi.fn();
+  const t = inkTools(setup({ full: true, onAsk }).o);
+  expect(hasAsk(t)).toBe(true);
+  t.runAction({ kind: 'ask' });
+  expect(onAsk).toHaveBeenCalledTimes(1);
+});
+
 test('the quick switch toggles between pen and eraser', () => {
   const { o } = setup();
   inkTools(o).quick.onToggle();
