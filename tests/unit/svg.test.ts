@@ -5,7 +5,7 @@ import { outlinePolygons } from '../../src/ink/outline';
 import { StrokeBuilder, toHundredths } from '../../src/ink/stroke';
 import { INK } from '../../src/ink/types';
 import { DEFAULT_FUELLER, MIN_DIST_PX, stabilSigmaPx, type PenKind } from '../../src/ink/pens';
-import { tabelleLayout } from '../../src/pages/layouts';
+import { sperrenLayout, tabelleLayout } from '../../src/pages/layouts';
 import { FORMAT_VERSION, PageTooNewError, mergePages, parsePage, serializePage, storedForm } from '../../src/ink/svg';
 import type { FieldBox, InkColor, Page, Stroke } from '../../src/ink/types';
 import { medianStep, UPRIGHT } from './repairHelpers';
@@ -1285,4 +1285,17 @@ test('the strokes of a table page are grouped by row', () => {
   const group = (feld: string) => new RegExp(`<g data-feld="${feld}"[^>]*>[\\s\\S]*?</g>`).exec(svg)?.[0] ?? '';
   expect(group('zeile-03')).toContain('data-id="zeile"');
   expect(group('frei')).toContain('data-id="kopf"');
+});
+
+test('a sperren page is written and read back with its kind, key and stroke', () => {
+  const layout = sperrenLayout('IB-2027-Q1');
+  const page: Page = { kind: 'sperren', key: 'IB-2027-Q1', meta: {}, strokes: [strokeAt(200, 206, 'blau', 'sp1')] };
+  const svg = serializePage(page, layout.fields, layout.background());
+  expect(svg).toContain('data-seite="sperren"');
+  expect(svg).toContain('data-schluessel="IB-2027-Q1"');
+  expect(svg).toContain('<g data-feld="sperre-2027-01-01-1" data-datum="2027-01-01">');
+  const back = parsePage(svg);
+  expect(back.kind).toBe('sperren');
+  expect(back.key).toBe('IB-2027-Q1');
+  expect(back.strokes.map((s) => s.id)).toEqual(['sp1']);
 });

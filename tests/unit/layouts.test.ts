@@ -10,6 +10,7 @@ import {
   besprechungLayout,
   calendarTargets,
   monatLayout,
+  sperrenLayout,
   tabelleLayout,
   tagLayout,
   tapTargetAt,
@@ -53,8 +54,35 @@ function allLayouts(): Layout[] {
     besprechungLayout({}),
     tabelleLayout({ ...MEETING, art: 'tabelle' }),
     tabelleLayout({ art: 'tabelle' }),
+    sperrenLayout('IB-2027-Q1'),
+    sperrenLayout('Lehne-2026-Q4'),
   ];
 }
+
+test('the sperren page lays out a quarter with two fields per day', () => {
+  const l = sperrenLayout('IB-2027-Q1');
+  expect(l.kind).toBe('sperren');
+  expect(l.cards).toEqual([]);
+  expect(l.fields).toHaveLength(180); // 90 Tage im 1. Quartal 2027, je 2 Plätze
+  expect(l.fields.find((f) => f.id === 'sperre-2027-01-01-1')).toMatchObject({ rect: [116, 184, 143, 44], datum: '2027-01-01', label: 'Fr 01.01.2027, Platz 1', paper: 'blanko' });
+  expect(l.fields.find((f) => f.id === 'sperre-2027-02-28-2')).toMatchObject({ rect: [634, 184 + 27 * 44, 143, 44] });
+  expect(l.fields.find((f) => f.id === 'sperre-2027-03-31-1')).toMatchObject({ rect: [866, 184 + 30 * 44, 143, 44] });
+  expect(l.fields.some((f) => f.id.startsWith('sperre-2027-02-29'))).toBe(false);
+  expect(sperrenLayout('IB-2028-Q1').fields).toHaveLength(182); // Schaltjahr
+  const bg = l.background();
+  expect(bg).toContain('data-sperren="1" data-spalten="40 415 790" data-zeilen="184 44" data-platz="76 143"');
+  expect(bg).toContain('Sperren IB');
+  expect(bg).toContain('1. Quartal 2027');
+  expect(bg).toContain('Jänner 2027');
+  expect(bg).toContain('01 Fr'); // 1. Jänner 2027 ist ein Freitag
+  expect(bg).toContain('KW 1'); // Montag 4. Jänner 2027
+  expect(sperrenLayout('Lehne-2027-Q1').background()).toContain('Sperren Lehne');
+  expect(() => sperrenLayout('IB-2027-Q9')).toThrow();
+});
+
+test('the sperren background stays exactly as it was', () => {
+  expect(sperrenLayout('IB-2027-Q1').background()).toMatchSnapshot();
+});
 
 /** Gibt den ersten Fehler gegen XML 1.0 zurück: nicht maskierte & und <, falsch geschachtelte oder offene Elemente. */
 function xmlProblem(xml: string): string | null {
