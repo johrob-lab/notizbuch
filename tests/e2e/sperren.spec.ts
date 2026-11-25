@@ -99,6 +99,21 @@ test('Lehne keeps the quarter', async ({ page }) => {
   await expect(link(fachlinie(page), 'IB')).toHaveAttribute('aria-current', 'page');
 });
 
+test('starting on Lehne, the arrows keep Lehne and IB keeps the quarter', async ({ page }) => {
+  await openSeeded(page, '#/sperren/Lehne-2026-Q4');
+  await expect(link(fachlinie(page), 'Lehne')).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('link', { name: 'Nächstes Quartal' }).click();
+  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-Q1');
+  await expect(link(fachlinie(page), 'Lehne')).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('link', { name: 'Voriges Quartal' }).click();
+  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2026-Q4');
+  await page.getByRole('link', { name: 'Nächstes Quartal' }).click();
+  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-Q1');
+  await link(fachlinie(page), 'IB').click();
+  await expect.poll(() => hash(page)).toBe('#/sperren/IB-2027-Q1');
+  await expect(link(fachlinie(page), 'IB')).toHaveAttribute('aria-current', 'page');
+});
+
 test('the last opened quarter comes back, also after a reload', async ({ page }) => {
   await openSeeded(page, '#/sperren/Lehne-2027-Q2');
   await expect.poll(async () => (await savedSettings(page))?.sperren).toBe('Lehne-2027-Q2');
@@ -162,6 +177,37 @@ test('the bar stays one row on an iPad in portrait', async ({ page }) => {
   expect(new Set(edges).size).toBe(1);
 });
 
+for (const width of [960, 1100, 1101]) {
+  test(`the bar fits at ${width} px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await openSeeded(page, '#/sperren/IB-2027-Q1');
+    for (const hash of ['#/sperren/IB-2027-Q1', DAY]) {
+      await page.evaluate((h) => (window.location.hash = h), hash);
+      await expect(link(page, 'Sperren')).toBeVisible();
+      const m = await page.evaluate(() => {
+        const bar = document.querySelector('header.topbar')!;
+        const items = [...bar.querySelectorAll<HTMLElement>('a.pill, button.pill')].filter((el) => el.offsetParent !== null);
+        const status = bar.querySelector<HTMLElement>('.status');
+        const right = (el: Element) => Math.round(el.getBoundingClientRect().right);
+        const next = status?.nextElementSibling as HTMLElement | null;
+        return {
+          viewport: document.documentElement.clientWidth,
+          scroll: document.documentElement.scrollWidth,
+          ends: items.map(right),
+          statusRight: status ? Math.round(status.getBoundingClientRect().left + status.scrollWidth) : 0,
+          nextLeft: next ? Math.round(next.getBoundingClientRect().left) : 99999,
+          rows: new Set(items.map((el) => Math.round(el.getBoundingClientRect().top))).size,
+        };
+      });
+      for (const end of m.ends) expect(end, `Knopf endet im Fenster bei ${hash}`).toBeLessThanOrEqual(m.viewport);
+      expect(m.scroll, `kein Querscrollen bei ${hash}`).toBeLessThanOrEqual(m.viewport);
+      expect(m.statusRight, `Stand endet links vom nächsten Knopf bei ${hash}`).toBeLessThanOrEqual(m.nextLeft);
+      expect(m.rows).toBe(1);
+      if (width === 1101) for (const name of ['Index', 'Jahr', 'To-Dos']) await expect(page.locator('header.topbar').getByRole('button', { name, exact: true })).toBeVisible();
+    }
+  });
+}
+
 test('no month tabs on the Sperren page', async ({ page }) => {
   await openSeeded(page, DAY);
   const tabs = page.locator('nav[aria-label="Monate"]');
@@ -184,7 +230,7 @@ test('the Firmen-PC sees the page read-only', async ({ page }) => {
 });
 
 const DOWNLOAD = 'Für Excel herunterladen';
-const KEINE_LISTE = 'Noch keine Liste. Sie kommt mit der Abendroutine, sobald Sperren gelesen sind.';
+const KEINE_LISTE = 'Noch keine Liste für IB 2027. Sie kommt mit der Abendroutine, sobald Sperren gelesen sind.';
 const NO_NETWORK = 'Zum Herunterladen braucht die App Netz.';
 const LISTE_KOPF = 'Fachlinie;Abschnitt;Von;Bis;Bemerkung';
 const csvOf = (jahr: number) => `\uFEFF${LISTE_KOPF}\r\nIB;Muster Abschnitt 1;${jahr}-03-01;${jahr}-03-04;Beispiel ${jahr}\r\n`;
