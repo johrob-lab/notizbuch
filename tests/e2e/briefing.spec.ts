@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test as base, type Locator, type Page } from '@playwright/test';
-import { openSeeded, queued, shareRepos } from './helpers/app';
+import { openSeeded, queued, sendToBackground, shareRepos } from './helpers/app';
 import { pen, viewOf } from './helpers/pointer';
 import { touchscreen } from './helpers/touch';
 
@@ -559,4 +559,57 @@ test('on the office PC the Tab key does not reach the button Ganze Seite under t
   // Klein ist der Knopf wieder da.
   await button(page, 'Fertig').click();
   await expect(button(page, 'Ganze Seite')).toBeVisible();
+});
+
+// ---------- Die Betra-Nr. an einer Erinnerung „Betra anmelden“ ----------
+
+/** Die rote Erinnerung, wie das Morgenbriefing sie schreibt (erfundener Abschnitt), und der Name ihres Felds. */
+const ROT = '- **<span style="color:#c62828">Betra anmelden bis Fr 18.12.: Muster Abschnitt 1, Mo 01.03.2027 (IB)</span>** %%sperre:IB-2027-03-01-1 rot%%';
+const BETRA_FIELD = 'Betra-Nr. für Betra anmelden bis Fr 18.12.: Muster Abschnitt 1, Mo 01.03.2027 (IB)';
+/** Die letzte Zeile der offenen Punkte im Mini-Vault: Dahinter steht die Erinnerung. */
+const LAST_POINT = '- [x] Reorga abstimmen %%todo:AAMkTEST3 gemeldet%%\n';
+
+test('a Betra number goes into the marker of its line', async ({ page }) => {
+  const withRot = NOTE_TEXT.replace(LAST_POINT, `${LAST_POINT}${ROT}\n`);
+  expect(withRot).toContain(ROT);
+  const repo = await openSeeded(page, DAY, { files: { [NOTE]: withRot } });
+  const field = page.getByLabel(BETRA_FIELD, { exact: true });
+  await expect(field).toBeVisible();
+  // Rot wie in Obsidian, ohne das Markup der Zeile.
+  await expect(briefing(page).locator('.text .rot')).toHaveCSS('color', 'rgb(198, 40, 40)');
+  expect(await briefing(page).innerText()).not.toContain('<span');
+
+  await field.fill('1234567');
+  await button(page, 'Eintragen').click();
+  await expect(briefing(page).getByText('Betra-Nr. 1234567', { exact: true })).toBeVisible();
+  await expect(field).toHaveCount(0);
+  await settled(page);
+
+  // Nur der Marker der Zeile ändert sich, alles andere bleibt Byte für Byte.
+  const expected = withRot.replace('%%sperre:IB-2027-03-01-1 rot%%', '%%sperre:IB-2027-03-01-1 rot betra:1234567%%');
+  await expect.poll(() => queuedText(page, NOTE)).toBe(expected);
+  await sendToBackground(page);
+  await expect.poll(() => repo.puts.length).toBe(1);
+  expect(repo.puts[0]).toMatchObject({ path: NOTE, text: expected });
+  expect(repo.unhandled).toEqual([]);
+});
+
+test('on an iPad in portrait the big briefing puts field, button and pen of a reminder together under its text', async ({ page }) => {
+  // Bei dieser Breite passten Text, Feld und Knopf gerade noch in eine Zeile, der Stift nicht mehr: Er bräche allein um.
+  await page.setViewportSize({ width: 834, height: 1194 });
+  await openSeeded(page, DAY, { files: { [NOTE]: NOTE_TEXT.replace(LAST_POINT, `${LAST_POINT}${ROT}\n`) } });
+  const field = page.getByLabel(BETRA_FIELD, { exact: true });
+  await expect(field).toBeVisible();
+  await button(page, 'Briefing durchgehen').click();
+  await expect(button(page, 'Fertig')).toBeVisible();
+  const item = briefing(page).locator('li.eintrag', { has: field });
+  const text = await boxOf(item.locator('.text'));
+  const input = await boxOf(field);
+  const send = await boxOf(item.getByRole('button', { name: 'Eintragen', exact: true }));
+  const pen = await boxOf(item.getByRole('button', { name: /^Bearbeiten: / }));
+  const row = await boxOf(item);
+  expect(input.y, 'unter dem Text').toBeGreaterThanOrEqual(text.y + text.height - 1);
+  for (const other of [send, pen]) expect(Math.abs(other.y + other.height / 2 - (input.y + input.height / 2)), 'in einer Reihe').toBeLessThanOrEqual(1);
+  expect(pen.x, 'der Stift rechts vom Knopf').toBeGreaterThanOrEqual(send.x + send.width);
+  expect(Math.abs(pen.x + pen.width - (row.x + row.width)), 'der Stift am rechten Rand wie in jeder Zeile').toBeLessThanOrEqual(1);
 });

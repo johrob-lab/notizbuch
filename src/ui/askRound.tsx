@@ -73,6 +73,7 @@ function answerNodes(answer: string): ComponentChildren {
     onDraft: ignore,
     onSave: ignore,
     onCancel: ignore,
+    onBetra: ignore,
   };
   return noteToVNodes(renderNote(md), ctx);
 }

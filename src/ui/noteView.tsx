@@ -1,7 +1,9 @@
 import { h, type ComponentChildren } from 'preact';
 import { useRef, useState } from 'preact/hooks';
+import { BETRA_FALSCH, betraNummer, betraOf, sperreOf } from '../lib/briefingEdit';
 import { isValidDay } from '../lib/dates';
 import { isItemLine, parseItem, visibleText } from '../lib/dailyNote';
+import { ROT_CLOSE, ROT_OPEN } from '../lib/markdown';
 import { Icon } from './Toolbar';
 
 // Die Tagesnotiz als Bauteile der Karte „Morgenbriefing“. Der Renderer (`renderNote`) liefert HTML mit Zeilennummern. Hier
@@ -32,10 +34,12 @@ export type NoteContext = {
   onSave(text: string): void;
   /** Escape oder „Abbrechen“. */
   onCancel(): void;
+  /** „Eintragen“ an einer Erinnerung „Betra anmelden“: die Zeile, die Quellzeile, wie sie gezeigt wurde, und die geprüfte Betra-Nr. */
+  onBetra(line: number, source: string, nummer: string): void;
 };
 
 /** Diese Elemente kommen so durch, ohne Attribute. */
-const PLAIN = new Set(['p', 'ul', 'ol', 'blockquote', 'pre', 'code', 'em', 'strong', 'b', 'i', 's', 'del', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'br', 'hr']);
+const PLAIN = new Set(['p', 'ul', 'ol', 'blockquote', 'pre', 'code', 'em', 'strong', 'b', 'i', 's', 'del', 'mark', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'br', 'hr']);
 /** Diese Elemente fallen samt Inhalt weg. Alles andere Unbekannte fällt weg, sein Text bleibt. */
 const DROPPED = new Set([
   'script',
@@ -143,6 +147,55 @@ function EditForm({ ctx, saving }: { ctx: NoteContext; saving: boolean }) {
   );
 }
 
+/** Der Text einer Zeile ohne das Markup für Fett, Gelb und Rot, zum Beispiel für den Namen eines Felds. */
+function withoutMarkup(text: string): string {
+  return text.replaceAll('**', '').replaceAll('==', '').replaceAll(ROT_OPEN, '').replaceAll(ROT_CLOSE, '');
+}
+
+/**
+ * Das Feld für die Betra-Nr. an einer Erinnerung „Betra anmelden“. Es hält den Text selbst (wie `EditForm`), damit beim Tippen
+ * nur dieses Feld neu gezeichnet wird. „Eintragen“ prüft, was im Feld steht (`betraNummer`): Ist es keine Betra-Nr., sagt es
+ * das Formular, und es wird nichts geschrieben. Der Hinweis bleibt im Baum, auch leer: Eine Meldung, die erst später erscheint,
+ * liest die Sprachausgabe nur dann vor.
+ */
+function BetraForm({ ctx, line, source, name }: { ctx: NoteContext; line: number; source: string; name: string }) {
+  const [text, setText] = useState('');
+  // Eingetragen wird, was zuletzt getippt wurde, auch wenn das Feld es noch nicht gezeichnet hat.
+  const typed = useRef('');
+  const [falsch, setFalsch] = useState(false);
+  return (
+    <form
+      class="betra"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const nummer = betraNummer(typed.current);
+        setFalsch(nummer === null);
+        if (nummer !== null) ctx.onBetra(line, source, nummer);
+      }}
+    >
+      <input
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
+        aria-label={`Betra-Nr. für ${name}`}
+        aria-invalid={falsch}
+        placeholder="Betra-Nr."
+        value={text}
+        onInput={(e) => {
+          typed.current = e.currentTarget.value;
+          setText(e.currentTarget.value);
+        }}
+      />
+      <button type="submit" class="knopf">
+        Eintragen
+      </button>
+      <span class="betra-hinweis" role="alert">
+        {falsch ? BETRA_FALSCH : ''}
+      </span>
+    </form>
+  );
+}
+
 function isElement(node: Node): node is Element {
   return node.nodeType === 1;
 }
@@ -179,6 +232,8 @@ function convert(el: Element, ctx: NoteContext): ComponentChildren {
   }
   // Ein Anhang, den der Renderer durch einen Hinweis ersetzt hat. Der Text ist fest, er kommt nicht aus der Notiz.
   if (tag === 'span' && el.classList.contains('anhang')) return h('span', { class: 'anhang' }, 'Anhang');
+  // Rot, wie der Renderer es aus dem Morgenbriefing macht: nur die feste Klasse, der Inhalt wie jeder andere.
+  if (tag === 'span' && el.classList.contains('rot')) return h('span', { class: 'rot' }, ...children(el, ctx));
   if (DROPPED.has(tag)) return null;
   return children(el, ctx);
 }
@@ -229,6 +284,18 @@ function item(li: Element, ctx: NoteContext): ComponentChildren {
       </label>
     ) : null;
 
+  // Eine Erinnerung „Betra anmelden“ (ein `sperre:` in den Markern): nach dem Text die eingetragene Betra-Nr. oder das Feld dafür.
+  // Kein Feld im Fenster, das nur liest, und nichts davon, solange die Zeile bearbeitet wird. Das Feld gehört zu seiner Sperre:
+  // Steht an der Stelle eine andere, beginnt es leer.
+  const sperre = own === null || editing ? null : sperreOf(own);
+  const nummer = own === null || sperre === null ? null : betraOf(own);
+  const betra =
+    own === null || sperre === null ? null : nummer !== null ? (
+      <span class="betra-nr">{`Betra-Nr. ${nummer}`}</span>
+    ) : ctx.readOnly === true ? null : (
+      <BetraForm key={sperre} ctx={ctx} line={line} source={own} name={withoutMarkup(name)} />
+    );
+
   return h(
     'li',
     { key: editing ? 'bearbeiten' : line >= 0 ? line : undefined, 'data-line': line >= 0 ? String(line) : undefined, class: own !== null ? 'eintrag' : undefined },
@@ -239,6 +306,7 @@ function item(li: Element, ctx: NoteContext): ComponentChildren {
     ) : (
       <span class="text">{convertNodes(textNodes.filter((node) => !isCheckbox(node)), ctx, false)}</span>
     ),
+    betra,
     own !== null && !editing && ctx.readOnly !== true ? (
       <button type="button" class="stift" aria-label={`Bearbeiten: ${name}`} disabled={ctx.editing !== null} onClick={() => ctx.onEdit(line, own)}>
         <Icon name="pen" />

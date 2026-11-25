@@ -6,6 +6,9 @@ import { isValidDay } from './dates';
 // Ziel eines Wikilinks, das genau ein Tag ist, optional mit `#Abschnitt`.
 const DAY_TARGET = /^(\d{4}-\d{2}-\d{2})(?:#.*)?$/;
 const BOM = '\uFEFF';
+/** Rot im Morgenbriefing (Erinnerung „Betra anmelden“), genau so geschrieben. Nur das öffnet einen roten Span. */
+export const ROT_OPEN = '<span style="color:#c62828">';
+export const ROT_CLOSE = '</span>';
 
 /** Ersetzt den YAML-Kopf durch Leerzeilen: er wird nicht angezeigt, die Zeilennummern bleiben. */
 function blankFrontmatter(lines: string[]): string[] {
@@ -23,7 +26,8 @@ function wikilink(state: StateInline, silent: boolean): boolean {
   const { src, pos } = state;
   if (src.charCodeAt(pos) !== 0x5b || src.charCodeAt(pos + 1) !== 0x5b) return false;
   const close = src.indexOf(']]', pos + 2);
-  if (close < 0) return false;
+  // Nicht über das Ende des Bereichs hinaus, den der Renderer gerade liest (zum Beispiel den Text in `==…==`).
+  if (close < 0 || close + 2 > state.posMax) return false;
 
   const inner = src.slice(pos + 2, close);
   if (/[\n[\]]/.test(inner)) return false;
@@ -55,7 +59,7 @@ function embed(state: StateInline, silent: boolean): boolean {
   const { src, pos } = state;
   if (src.charCodeAt(pos) !== 0x21 || src.charCodeAt(pos + 1) !== 0x5b || src.charCodeAt(pos + 2) !== 0x5b) return false;
   const close = src.indexOf(']]', pos + 3);
-  if (close < 0) return false;
+  if (close < 0 || close + 2 > state.posMax) return false;
 
   const inner = src.slice(pos + 3, close);
   if (/[\n[\]]/.test(inner) || !inner.trim()) return false;
@@ -65,6 +69,54 @@ function embed(state: StateInline, silent: boolean): boolean {
     state.push('html_inline', '', 0).content = '<span class="anhang">Anhang</span>';
   }
   state.pos = close + 2;
+  return true;
+}
+
+/**
+ * Legt festes Markup (`tag` mit `attrs`, nichts davon aus der Notiz) um den Text von `start` bis `end` (exklusiv). Der Text
+ * dazwischen wird gelesen wie jeder andere: Fett, Links und Wikilinks gehen weiter, enden aber vor `end`.
+ */
+function enclose(state: StateInline, start: number, end: number, name: string, tag: string, attrs: [string, string][] | null): void {
+  const max = state.posMax;
+  state.push(`${name}_open`, tag, 1).attrs = attrs;
+  state.pos = start;
+  state.posMax = end;
+  state.md.inline.tokenize(state);
+  state.push(`${name}_close`, tag, -1);
+  state.posMax = max;
+}
+
+/**
+ * `==Text==` ist Gelb wie in Obsidian (`<mark>`). Der Text ist nicht leer, enthält kein `==` und keinen Zeilenumbruch und beginnt
+ * und endet nicht mit Leerraum (wie in Obsidian: `a == b == c` bleibt Text). Alles andere mit `==` bleibt Text.
+ */
+function highlight(state: StateInline, silent: boolean): boolean {
+  const { src, pos } = state;
+  if (src.charCodeAt(pos) !== 0x3d || src.charCodeAt(pos + 1) !== 0x3d) return false;
+  const close = src.indexOf('==', pos + 2);
+  if (close < 0 || close + 2 > state.posMax) return false;
+  const inner = src.slice(pos + 2, close);
+  if (inner === '' || inner.trim() !== inner || inner.includes('\n')) return false;
+
+  if (!silent) enclose(state, pos + 2, close, 'mark', 'mark', null);
+  state.pos = close + 2;
+  return true;
+}
+
+/**
+ * Rot wie in Obsidian: Genau `ROT_OPEN` (so schreibt es das Morgenbriefing) öffnet einen festen `<span class="rot">`, das nächste
+ * `</span>` auf derselben Zeile schließt ihn. Ein `</span>` ohne einen solchen Anfang und jedes andere HTML bleiben Text
+ * (`html: false`), auch ein Anfang ohne Ende.
+ */
+function red(state: StateInline, silent: boolean): boolean {
+  const { src, pos } = state;
+  if (!src.startsWith(ROT_OPEN, pos)) return false;
+  const start = pos + ROT_OPEN.length;
+  const close = src.indexOf(ROT_CLOSE, start);
+  if (close < 0 || close + ROT_CLOSE.length > state.posMax || src.slice(start, close).includes('\n')) return false;
+
+  if (!silent) enclose(state, start, close, 'rot', 'span', [['class', 'rot']]);
+  state.pos = close + ROT_CLOSE.length;
   return true;
 }
 
@@ -92,6 +144,8 @@ const parser = new MarkdownIt({ html: false });
 parser.inline.ruler.before('link', 'wikilink', wikilink);
 // Vor dem Bild: `![[…]]` beginnt wie ein Markdown-Bild, ist aber ein Anhang.
 parser.inline.ruler.before('image', 'embed', embed);
+parser.inline.ruler.before('emphasis', 'highlight', highlight);
+parser.inline.ruler.before('html_inline', 'red', red);
 parser.core.ruler.push('note_items', (state) => {
   // Die Zeilen der Notiz, wie sie in der Datei stehen (mit Markern): `token.map` zählt in denselben Zeilen.
   const lines = (state.env.lines ?? []) as string[];
@@ -112,6 +166,7 @@ parser.core.ruler.push('note_items', (state) => {
  * `data-line`; jede andere Zeile mit `[ ]` zeigt die Klammern als Text. Der YAML-Kopf, ein BOM am
  * Anfang und `%%…%%` erscheinen nicht. Nicht jedes `data-line` ist ein Eintrag im Zeilenmodell: In
  * Zitaten und in `*`- oder nummerierten Listen gibt es Listenelemente, die `isItemLine` nicht kennt.
+ * Gelb (`==…==`) wird `<mark>`, Rot (genau `ROT_OPEN` bis `</span>`) wird `<span class="rot">`, wie in Obsidian.
  *
  * Mit `range` (Zeilenindex `start` bis `end`, exklusiv, in der Notiz) erscheinen nur diese Zeilen, zum Beispiel ein
  * Abschnitt. Die Zeilennummern bleiben die der ganzen Notiz, und Blockkommentare und der YAML-Kopf gelten weiter über

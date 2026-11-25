@@ -346,3 +346,50 @@ test('a range never shows the front matter', () => {
   const doc = '---\ndate: 2026-10-29\n---\n- [ ] a\n';
   expect(renderNote(doc, { start: 0, end: 4 })).toBe('<ul>\n<li data-line="3"><input type="checkbox" data-line="3"> a</li>\n</ul>\n');
 });
+
+// ---------- Gelb und Rot wie in Obsidian (Erinnerungen „Betra anmelden“ des Morgenbriefings) ----------
+
+test('yellow and red reminders become fixed markup, everything else of that kind stays text', () => {
+  expect(renderNote('- **==Betra anmelden==** %%sperre:IB-2027-03-01-1 gelb%%')).toContain('<strong><mark>Betra anmelden</mark></strong>');
+  expect(renderNote('- **<span style="color:#c62828">Betra anmelden</span>** %%sperre:X rot%%')).toContain('<strong><span class="rot">Betra anmelden</span></strong>');
+  expect(renderNote('a == b und c')).toContain('a == b und c');
+  expect(renderNote('<span style="color:red">x</span>')).toContain('&lt;span style=&quot;color:red&quot;&gt;x&lt;/span&gt;');
+  expect(renderNote('nur </span> hier')).toContain('nur &lt;/span&gt; hier');
+});
+
+test('the text inside yellow and red is normal content: bold and links keep working, markup in it stays text', () => {
+  expect(renderNote('==Bis **morgen** [[2026-10-28|gestern]] <b>x</b>==\n')).toBe(
+    '<p><mark>Bis <strong>morgen</strong> <a href="#/tag/2026-10-28">gestern</a> &lt;b&gt;x&lt;/b&gt;</mark></p>\n',
+  );
+  expect(renderNote('<span style="color:#c62828">Bis **morgen** ==dringend==</span> danach\n')).toBe(
+    '<p><span class="rot">Bis <strong>morgen</strong> <mark>dringend</mark></span> danach</p>\n',
+  );
+});
+
+test('== is yellow only around text that is not empty and has no space at its edges, as in Obsidian', () => {
+  expect(renderNote('====\n')).toBe('<p>====</p>\n');
+  expect(renderNote('a == b == c\n')).toBe('<p>a == b == c</p>\n');
+  expect(renderNote('==offen\n')).toBe('<p>==offen</p>\n');
+  expect(renderNote('==über\nzwei Zeilen==\n')).toBe('<p>==über\nzwei Zeilen==</p>\n');
+  expect(renderNote('`==Code==`\n')).toBe('<p><code>==Code==</code></p>\n');
+});
+
+test('only the exact red span of the briefing opens, and a </span> closes only that one on the same line', () => {
+  expect(renderNote('<span style="color:#c62828">a</span> b</span>\n')).toBe('<p><span class="rot">a</span> b&lt;/span&gt;</p>\n');
+  expect(renderNote('<span style="color:#c62828">ohne Ende\n')).toBe('<p>&lt;span style=&quot;color:#c62828&quot;&gt;ohne Ende</p>\n');
+  expect(renderNote('<span style="color:#c62828">a\nb</span>\n')).toBe('<p>&lt;span style=&quot;color:#c62828&quot;&gt;a\nb&lt;/span&gt;</p>\n');
+  expect(renderNote('<span style="color:#C62828">gross</span>\n')).toBe('<p>&lt;span style=&quot;color:#C62828&quot;&gt;gross&lt;/span&gt;</p>\n');
+  expect(renderNote('<span  style="color:#c62828">x</span>\n')).toBe('<p>&lt;span  style=&quot;color:#c62828&quot;&gt;x&lt;/span&gt;</p>\n');
+});
+
+test('a wikilink or an embed that would end after the yellow or red text stays text', () => {
+  expect(renderNote('==a [[Notiz==]]\n')).toBe('<p><mark>a [[Notiz</mark>]]</p>\n');
+  expect(renderNote('<span style="color:#c62828">a ![[Bild</span>.png]]\n')).toBe('<p><span class="rot">a ![[Bild</span>.png]]</p>\n');
+});
+
+test('a yellow or red reminder keeps its line number and shows no marker', () => {
+  const source = '- **==Gelb==** %%sperre:IB-2027-03-01-1 gelb%%\n- **<span style="color:#c62828">Rot</span>** %%sperre:IB-2027-03-02-1 rot%%\n';
+  expect(renderNote(source)).toBe(
+    '<ul>\n<li data-line="0"><strong><mark>Gelb</mark></strong></li>\n<li data-line="1"><strong><span class="rot">Rot</span></strong></li>\n</ul>\n',
+  );
+});

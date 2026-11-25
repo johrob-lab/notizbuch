@@ -1,9 +1,10 @@
 import { h, render } from 'preact';
 import { afterEach, expect, test, vi } from 'vitest';
+import { BETRA_FALSCH, STALE_NOTICE } from '../../src/lib/briefingEdit';
 import { appendErgaenzung } from '../../src/lib/dailyNote';
 import type { SyncEngine } from '../../src/sync/engine';
 import { BriefingCard } from '../../src/ui/BriefingCard';
-import { announceNoteWrite, noteQueue } from '../../src/ui/noteQueue';
+import { announceNoteWrite, noteQueue, onNoteWrite } from '../../src/ui/noteQueue';
 import { FAILED } from '../../src/ui/texts';
 import { fixture } from './helpers';
 
@@ -262,4 +263,129 @@ test('the card waits for a write from the window', async () => {
   const text = fake.engine.write.mock.calls[0][1];
   expect(text).toContain('- Vom Fenster');
   expect(text).toContain(TASK1.replace('[ ]', '[x]'));
+});
+
+// ---------- Die Erinnerungen „Betra anmelden“ und ihre Betra-Nr. ----------
+
+// Wie das Morgenbriefing sie schreibt (Reihenfolge rot, gelb, normal, dann die Aufgabe zum Einlesen), mit erfundenen Abschnitten.
+const ROT = '- **<span style="color:#c62828">Betra anmelden bis Fr 18.12.: Muster Abschnitt 1, Mo 01.03.2027 (IB)</span>** %%sperre:IB-2027-03-01-1 rot%%';
+const GELB = '- **==Betra anmelden bis Di 22.12.: Muster Abschnitt 2, Fr 05.03.2027 (IB)==** %%sperre:IB-2027-03-05-1 gelb%%';
+const NORMAL = '- Betra anmelden bis Do 24.12.: Beispielstrecke Nord, Mo 08.03. bis Mi 10.03.2027 (IB) %%sperre:IB-2027-03-08-1%%';
+const EINLESEN = '- [ ] Sperren IB 2027 einlesen (3 neu) %%einlesen:IB-2027@202611251905%%';
+const BETRA_NOTE = ['# 2026-12-18', '', '## Morgenbriefing (automatisch)', '### Offene Punkte', ROT, GELB, NORMAL, EINLESEN, ''].join('\n');
+const FUER_ROT = 'Betra-Nr. für Betra anmelden bis Fr 18.12.: Muster Abschnitt 1, Mo 01.03.2027 (IB)';
+const FUER_GELB = 'Betra-Nr. für Betra anmelden bis Di 22.12.: Muster Abschnitt 2, Fr 05.03.2027 (IB)';
+const FUER_NORMAL = 'Betra-Nr. für Betra anmelden bis Do 24.12.: Beispielstrecke Nord, Mo 08.03. bis Mi 10.03.2027 (IB)';
+
+const betraFields = (host: HTMLElement) => [...host.querySelectorAll<HTMLInputElement>('form.betra input')];
+const betraField = (host: HTMLElement, name: string) => host.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`);
+/** Der Listenpunkt der Zeile `source` der Notiz. */
+const itemOf = (host: HTMLElement, md: string, source: string) => host.querySelector(`li[data-line="${md.split('\n').indexOf(source)}"]`)!;
+
+/** Tippt `typed` in das Feld `name` und tippt auf „Eintragen“. */
+function enterBetra(host: HTMLElement, name: string, typed: string): void {
+  const input = betraField(host, name)!;
+  input.value = typed;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  const button = [...input.closest('form')!.querySelectorAll('button')].find((b) => b.textContent === 'Eintragen')!;
+  button.click();
+}
+
+async function mountBetra(text = BETRA_NOTE) {
+  const fake = fakeEngine({ text, unknown: false });
+  const host = mount(fake.as, '2026-12-18');
+  await vi.waitFor(() => expect(itemOf(host, text, EINLESEN)).not.toBeNull());
+  await settled(host);
+  return { fake, host };
+}
+
+test('the reminders show yellow and red and have a field for the Betra number, the task to read in the list has a box instead', async () => {
+  const { host } = await mountBetra();
+  expect(betraFields(host).map((field) => field.getAttribute('aria-label'))).toEqual([FUER_ROT, FUER_GELB, FUER_NORMAL]);
+  for (const field of betraFields(host)) {
+    expect(field.type).toBe('text');
+    expect(field.getAttribute('inputmode')).toBe('numeric');
+    expect(field.getAttribute('autocomplete')).toBe('off');
+    expect(field.getAttribute('placeholder')).toBe('Betra-Nr.');
+    expect([...field.closest('form')!.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Eintragen']);
+  }
+  expect(itemOf(host, BETRA_NOTE, ROT).querySelector('.text strong > .rot')?.textContent).toBe('Betra anmelden bis Fr 18.12.: Muster Abschnitt 1, Mo 01.03.2027 (IB)');
+  expect(itemOf(host, BETRA_NOTE, GELB).querySelector('.text strong > mark')?.textContent).toBe('Betra anmelden bis Di 22.12.: Muster Abschnitt 2, Fr 05.03.2027 (IB)');
+  expect(itemOf(host, BETRA_NOTE, NORMAL).querySelector('mark, .rot, strong')).toBeNull();
+  // Die Erinnerungen haben kein Kästchen: Erledigt sind sie mit der Nummer.
+  for (const source of [ROT, GELB, NORMAL]) expect(itemOf(host, BETRA_NOTE, source).querySelector('input[type="checkbox"]')).toBeNull();
+  // Die Aufgabe zum Einlesen hat ein Kästchen und kein Feld.
+  expect(box(host, 'Sperren IB 2027 einlesen (3 neu)')).not.toBeNull();
+  expect(itemOf(host, BETRA_NOTE, EINLESEN).querySelector('form, input[type="text"]')).toBeNull();
+  // Vom Markup der Zeilen ist nichts zu sehen.
+  for (const raw of ['**', '==', '<span', 'color', '%%', 'sperre']) expect(host.textContent).not.toContain(raw);
+});
+
+test('a Betra number goes into the marker of its line, and the line then shows it instead of the field', async () => {
+  const { fake, host } = await mountBetra();
+  const heard = vi.fn();
+  onNoteWrite(fake.as, heard);
+  enterBetra(host, FUER_ROT, ' 1234567 ');
+  await vi.waitFor(() => expect(fake.engine.write).toHaveBeenCalledTimes(1));
+  expect(fake.engine.write.mock.calls[0][1]).toBe(BETRA_NOTE.replace('rot%%', 'rot betra:1234567%%'));
+  // Wer sonst in der App diese Notiz zeigt, erfährt es.
+  await vi.waitFor(() => expect(heard).toHaveBeenCalledWith('05 Daily Notes/2026-12-18.md'));
+  await settled(host);
+  const rot = itemOf(host, BETRA_NOTE, ROT);
+  expect(rot.querySelector('.betra-nr')?.textContent).toBe('Betra-Nr. 1234567');
+  expect(rot.querySelector('form, input[type="text"]')).toBeNull();
+  // Die anderen Erinnerungen haben ihr Feld noch, und eine gelungene Änderung meldet nichts.
+  expect(betraFields(host).map((field) => field.getAttribute('aria-label'))).toEqual([FUER_GELB, FUER_NORMAL]);
+  expect(polite(host).textContent).toBe('');
+  expect(alert(host).textContent).toBe('');
+});
+
+test.each(['12a4567', '1234', '123456789', '123 4567'])('%s is no Betra number: the form says so and nothing is written', async (typed) => {
+  const { fake, host } = await mountBetra();
+  enterBetra(host, FUER_ROT, typed);
+  const hint = betraField(host, FUER_ROT)!.closest('form')!.querySelector('[role="alert"]');
+  await vi.waitFor(() => expect(hint?.textContent).toBe(BETRA_FALSCH));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(fake.engine.lookupFresh).not.toHaveBeenCalled();
+  expect(fake.engine.write).not.toHaveBeenCalled();
+  expect(betraField(host, FUER_ROT)!.value).toBe(typed); // das Getippte bleibt zum Verbessern
+  // Die anderen Formulare sagen nichts.
+  expect(betraField(host, FUER_GELB)!.closest('form')!.querySelector('[role="alert"]')?.textContent).toBe('');
+});
+
+test('a wrong number first and then a right one: the hint goes away and the right one is written', async () => {
+  const { fake, host } = await mountBetra();
+  enterBetra(host, FUER_GELB, '1234');
+  const form = betraField(host, FUER_GELB)!.closest('form')!;
+  await vi.waitFor(() => expect(form.querySelector('[role="alert"]')?.textContent).toBe(BETRA_FALSCH));
+  enterBetra(host, FUER_GELB, '12345');
+  await vi.waitFor(() => expect(fake.engine.write).toHaveBeenCalledTimes(1));
+  expect(fake.engine.write.mock.calls[0][1]).toBe(BETRA_NOTE.replace('gelb%%', 'gelb betra:12345%%'));
+  await settled(host);
+  expect(itemOf(host, BETRA_NOTE, GELB).querySelector('.betra-nr')?.textContent).toBe('Betra-Nr. 12345');
+});
+
+test('when the reminder is gone from the newest note, nothing is written and the card says so', async () => {
+  const { fake, host } = await mountBetra();
+  // Inzwischen lief das Morgenbriefing auf einem anderen Gerät neu, ohne diese Erinnerung.
+  const newest = BETRA_NOTE.replace(`${ROT}\n`, '');
+  fake.state.answer = { text: newest, unknown: false };
+  enterBetra(host, FUER_ROT, '1234567');
+  await vi.waitFor(() => expect(polite(host).textContent).toBe(STALE_NOTICE));
+  await settled(host);
+  expect(fake.engine.write).not.toHaveBeenCalled();
+  expect(betraField(host, FUER_ROT)).toBeNull(); // die Karte zeigt den neuesten Stand
+  expect(betraFields(host)).toHaveLength(2);
+});
+
+test('a window that only reads shows a Betra number but has no field for one', async () => {
+  const gelb = GELB.replace('gelb%%', 'gelb betra:7654321%%');
+  const withNumber = BETRA_NOTE.replace(GELB, gelb);
+  const fake = fakeEngine({ text: withNumber, unknown: false });
+  (fake.engine as { readOnly?: boolean }).readOnly = true; // das zweite Fenster eines Geräts
+  const host = mount(fake.as, '2026-12-18');
+  await vi.waitFor(() => expect(itemOf(host, withNumber, gelb)?.querySelector('.betra-nr')?.textContent).toBe('Betra-Nr. 7654321'));
+  expect(host.querySelector('form.betra')).toBeNull();
+  expect(host.querySelector('input[type="text"]')).toBeNull();
+  expect([...host.querySelectorAll('button')].map((b) => b.textContent)).not.toContain('Eintragen');
 });
