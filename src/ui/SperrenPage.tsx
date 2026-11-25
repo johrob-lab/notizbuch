@@ -71,8 +71,8 @@ export function SperrenPage({ sperrenKey, readFile, onOpen, ...rest }: Props) {
     }),
     [sperrenKey],
   );
-  // Im zweiten Fenster eines Geräts (die Engine liest nur) gilt dasselbe wie am Firmen-PC: Die Liste kommt als Download.
-  const { hinweis, download } = useCsvDownload({ readFile, readOnly: rest.readOnly || rest.engine.readOnly });
+  // Am Firmen-PC (`readOnly`) kommt die Liste als Download, am iPad über das Teilen-Blatt, auch im zweiten Fenster.
+  const { hinweis, download } = useCsvDownload({ readFile, readOnly: rest.readOnly });
   const head: Kopf = {
     ...kopf,
     // Der Knopf ist nie gesperrt: Auch am Firmen-PC und im zweiten Fenster lässt sich die Liste laden. Sie gehört zum Jahr der Seite.

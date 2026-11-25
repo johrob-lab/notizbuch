@@ -34,9 +34,9 @@ afterEach(() => {
   delete (navigator as unknown as Record<string, unknown>).share;
 });
 
-function mount(readFile: ReadFile, d: Partial<typeof D> = {}) {
+function mount(readFile: ReadFile, d: Partial<typeof D> = {}, readOnly = false) {
   function Probe() {
-    const { hinweis, download } = useCsvDownload({ readFile, readOnly: false });
+    const { hinweis, download } = useCsvDownload({ readFile, readOnly });
     return h('div', null, h('button', { onClick: () => void download({ ...D, ...d }) }, 'los'), h('p', { role: 'status' }, hinweis));
   }
   act(() => render(h(Probe, {}), host));
@@ -111,4 +111,19 @@ test('a current store gives no hint', async () => {
   mount(files({ [D.csvPath]: CSV, [D.jsonPath]: store }), { neuester: 500 });
   await tap();
   expect(status()).toBe('');
+});
+
+test('readOnly downloads, otherwise the share sheet is used', async () => {
+  URL.createObjectURL = vi.fn(() => 'blob:test');
+  URL.revokeObjectURL = vi.fn();
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+  mount(files({ [D.csvPath]: CSV }), {}, true);
+  await tap();
+  expect(click).toHaveBeenCalledTimes(1);
+  expect(share).not.toHaveBeenCalled();
+
+  mount(files({ [D.csvPath]: CSV }), {}, false);
+  await tap();
+  expect(share).toHaveBeenCalledTimes(1);
+  expect(click).toHaveBeenCalledTimes(1);
 });
