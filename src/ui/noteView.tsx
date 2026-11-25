@@ -274,7 +274,7 @@ function item(li: Element, ctx: NoteContext): ComponentChildren {
     rest = [];
   }
 
-  const name = own === null ? '' : visibleText(own);
+  const name = own === null ? '' : withoutMarkup(visibleText(own));
   // Während ein Vorgang läuft, ist nichts gesperrt (`disabled`): Das ließe alle Kästchen bei jedem Haken kurz aufblinken und
   // nähme einem Kästchen, das gerade den Fokus hat, ihn weg. Jeder Tipp zählt: Die Karte reiht ihn hinter die laufenden ein.
   const checkbox =
@@ -293,7 +293,7 @@ function item(li: Element, ctx: NoteContext): ComponentChildren {
     own === null || sperre === null ? null : nummer !== null ? (
       <span class="betra-nr">{`Betra-Nr. ${nummer}`}</span>
     ) : ctx.readOnly === true ? null : (
-      <BetraForm key={sperre} ctx={ctx} line={line} source={own} name={withoutMarkup(name)} />
+      <BetraForm key={sperre} ctx={ctx} line={line} source={own} name={name} />
     );
 
   return h(

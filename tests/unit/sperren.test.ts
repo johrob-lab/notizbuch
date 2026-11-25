@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import {
   aktuellerSperrenKey,
+  keineListe,
   mitFachlinie,
   parseSperrenKey,
   sperrenMonatsname,
@@ -47,4 +48,9 @@ test('mitFachlinie, quartalMonate, sperrenTitel', () => {
 test('the Sperren page calls the first month Jänner', () => {
   expect(sperrenMonatsname('2027-01')).toBe('Jänner');
   expect(sperrenMonatsname('2027-12')).toBe('Dezember');
+});
+
+test('keineListe nennt Fachlinie und Jahr', () => {
+  expect(keineListe('IB', 2026)).toBe('Noch keine Liste für IB 2026. Sie kommt mit der Abendroutine, sobald Sperren gelesen sind.');
+  expect(keineListe('Lehne', 2027)).toBe('Noch keine Liste für Lehne 2027. Sie kommt mit der Abendroutine, sobald Sperren gelesen sind.');
 });

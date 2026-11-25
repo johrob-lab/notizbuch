@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'preact/hooks';
 import type { Page } from '../ink/types';
 import { sperrenCsvName, sperrenCsvPath, sperrenJsonPath, sperrenPagePath } from '../lib/filenames';
 import { neuesterStrich } from '../lib/tabelleCsv';
-import { FACHLINIEN, KEINE_LISTE, mitFachlinie, parseSperrenKey } from '../lib/sperren';
+import { FACHLINIEN, keineListe, mitFachlinie, parseSperrenKey } from '../lib/sperren';
 import { sperrenLayout } from '../pages/layouts';
 import type { ReadFile } from '../sync/github';
 import { PageView, type Kopf, type KopfTools, type PageProps } from './PageView';
@@ -89,7 +89,7 @@ export function SperrenPage({ sperrenKey, readFile, onOpen, ...rest }: Props) {
             name: sperrenCsvName(s.fachlinie, s.jahr),
             seite: s.quartal,
             neuester: neuesterStrich(tools.current()),
-            keine: KEINE_LISTE,
+            keine: keineListe(s.fachlinie, s.jahr),
           });
         }}
       />

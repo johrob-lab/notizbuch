@@ -66,5 +66,7 @@ export function sperrenMonatsname(monthKey: string): string {
   return SPERREN_MONATE[Number(monthKey.slice(5, 7)) - 1] ?? '';
 }
 
-/** Hinweis am Knopf „Für Excel herunterladen“, wenn es die Liste des Jahres noch nicht gibt. */
-export const KEINE_LISTE = 'Noch keine Liste. Sie kommt mit der Abendroutine, sobald Sperren gelesen sind.';
+/** Hinweis am Knopf „Für Excel herunterladen“, wenn es die Liste der Fachlinie für das Jahr noch nicht gibt. */
+export function keineListe(fachlinie: Fachlinie, jahr: number): string {
+  return `Noch keine Liste für ${fachlinie} ${jahr}. Sie kommt mit der Abendroutine, sobald Sperren gelesen sind.`;
+}

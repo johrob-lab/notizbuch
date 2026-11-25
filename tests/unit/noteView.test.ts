@@ -308,3 +308,15 @@ test('a list item whose line the note does not know gets no pencil and no checkb
   expect(boxes(host)).toHaveLength(0);
   expect(host.textContent).toContain('fremd');
 });
+
+test('the names of the checkbox and the pen at a yellow and a red reminder have no markup', () => {
+  const gelb = '- [ ] **==Betra anmelden bis Fr 18.12.: Muster Abschnitt 1, Mo 01.03.2027 (IB)==** %%sperre:IB-2027-03-01-1 gelb%%';
+  const rot = '- [ ] **<span style="color:#c62828">Betra anmelden bis Fr 18.12.: Muster Abschnitt 2, Mo 01.03.2027 (IB)</span>** %%sperre:IB-2027-03-02-1 rot%%';
+  const md = `${gelb}\n${rot}\n`;
+  const host = show(renderNote(md), context(md));
+  const names = [...boxes(host), ...pencils(host)].map((el) => el.getAttribute('aria-label') ?? '');
+  expect(names).toHaveLength(4);
+  for (const name of names) expect(name).not.toMatch(/\*\*|==|<|span|style/);
+  expect(names[0]).toBe('Betra anmelden bis Fr 18.12.: Muster Abschnitt 1, Mo 01.03.2027 (IB)');
+  expect(names[1]).toBe('Betra anmelden bis Fr 18.12.: Muster Abschnitt 2, Mo 01.03.2027 (IB)');
+});
