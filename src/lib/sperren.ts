@@ -65,3 +65,6 @@ const SPERREN_MONATE = MONTHS.map((m, i) => (i === 0 ? 'Jänner' : m));
 export function sperrenMonatsname(monthKey: string): string {
   return SPERREN_MONATE[Number(monthKey.slice(5, 7)) - 1] ?? '';
 }
+
+/** Hinweis am Knopf „Für Excel herunterladen“, wenn es die Liste des Jahres noch nicht gibt. */
+export const KEINE_LISTE = 'Noch keine Liste. Sie kommt mit der Abendroutine, sobald Sperren gelesen sind.';

@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test as base, type Locator, type Page } from '@playwright/test';
 import { localFiles, openSeeded, queued, savedSettings, shareRepos } from './helpers/app';
 import { mouse, pen } from './helpers/pointer';
@@ -180,4 +181,38 @@ test('the Firmen-PC sees the page read-only', async ({ page }) => {
   expect(await strokeCount(page)).toBe(0);
   expect(await queued(page)).toEqual({});
   expect(await localFiles(page)).not.toContain(FILE);
+});
+
+const DOWNLOAD = 'Für Excel herunterladen';
+const KEINE_LISTE = 'Noch keine Liste. Sie kommt mit der Abendroutine, sobald Sperren gelesen sind.';
+const NO_NETWORK = 'Zum Herunterladen braucht die App Netz.';
+const LISTE_KOPF = 'Fachlinie;Abschnitt;Von;Bis;Bemerkung';
+const csvOf = (jahr: number) => `\uFEFF${LISTE_KOPF}\r\nIB;Muster Abschnitt 1;${jahr}-03-01;${jahr}-03-04;Beispiel ${jahr}\r\n`;
+
+test('download without a list says so', async ({ page }) => {
+  await openSeeded(page, '#/sperren/IB-2027-Q1');
+  await page.getByRole('button', { name: DOWNLOAD, exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: KEINE_LISTE })).toBeVisible();
+});
+
+test("download takes the list of the page's year", async ({ page }) => {
+  await openSeeded(page, '#/sperren/IB-2027-Q1', {
+    device: 'Firmen-PC',
+    files: {
+      '07 Anhänge/Notizbuch/2027/Sperren IB 2027.csv': csvOf(2027),
+      '07 Anhänge/Notizbuch/2026/Sperren IB 2026.csv': csvOf(2026),
+    },
+  });
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: DOWNLOAD, exact: true }).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toBe('Sperren IB 2027.csv');
+  expect(await readFile((await file.path())!)).toEqual(Buffer.from(csvOf(2027), 'utf8'));
+});
+
+test('download offline says so', async ({ page }) => {
+  const repo = await openSeeded(page, '#/sperren/IB-2027-Q1');
+  repo.offline = true;
+  await page.getByRole('button', { name: DOWNLOAD, exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: NO_NETWORK })).toBeVisible();
 });

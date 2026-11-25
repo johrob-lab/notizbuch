@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef } from 'preact/hooks';
 import type { Page } from '../ink/types';
-import { sperrenPagePath } from '../lib/filenames';
-import { FACHLINIEN, mitFachlinie, parseSperrenKey } from '../lib/sperren';
+import { sperrenCsvName, sperrenCsvPath, sperrenJsonPath, sperrenPagePath } from '../lib/filenames';
+import { neuesterStrich } from '../lib/tabelleCsv';
+import { FACHLINIEN, KEINE_LISTE, mitFachlinie, parseSperrenKey } from '../lib/sperren';
 import { sperrenLayout } from '../pages/layouts';
 import type { ReadFile } from '../sync/github';
 import { PageView, type Kopf, type KopfTools, type PageProps } from './PageView';
 import { routeHash } from './router';
+import { useCsvDownload } from './useCsvDownload';
 
 // Eine Seite der Sperren: ein Quartal einer Fachlinie. Über der Fläche steht ein Formular mit der Wahl der Fachlinie (zwei
 // Links, die dasselbe Quartal der anderen Fachlinie öffnen) und dem Knopf für den Download der Liste. Die Seite hat keine
@@ -25,11 +27,9 @@ type FormProps = {
   /** Hinweis unter dem Formular (der Download meldet hier, was er getan hat). */
   hinweis: string;
   onDownload(): void;
-  /** Der Download ist noch nicht belegt. */
-  downloadDisabled: boolean;
 };
 
-function Form({ sperrenKey, hinweis, onDownload, downloadDisabled }: FormProps) {
+function Form({ sperrenKey, hinweis, onDownload }: FormProps) {
   const aktuell = parseSperrenKey(sperrenKey)?.fachlinie;
   return (
     <form class="kopfdaten sperrenkopf" aria-label="Sperren" onSubmit={(e) => e.preventDefault()}>
@@ -41,7 +41,7 @@ function Form({ sperrenKey, hinweis, onDownload, downloadDisabled }: FormProps) 
         ))}
       </div>
       <div class="seitenleiste">
-        <button type="button" class="knopf" disabled={downloadDisabled} onClick={onDownload}>
+        <button type="button" class="knopf" onClick={onDownload}>
           Für Excel herunterladen
         </button>
       </div>
@@ -54,7 +54,7 @@ function Form({ sperrenKey, hinweis, onDownload, downloadDisabled }: FormProps) 
   );
 }
 
-export function SperrenPage({ sperrenKey, readFile: _readFile, onOpen, ...rest }: Props) {
+export function SperrenPage({ sperrenKey, readFile, onOpen, ...rest }: Props) {
   const layout = useMemo(() => sperrenLayout(sperrenKey), [sperrenKey]);
   // Nur einmal je Seite: `onOpen` darf sich bei jedem Zeichnen der App ändern.
   const opened = useRef(onOpen);
@@ -71,10 +71,29 @@ export function SperrenPage({ sperrenKey, readFile: _readFile, onOpen, ...rest }
     }),
     [sperrenKey],
   );
+  // Im zweiten Fenster eines Geräts (die Engine liest nur) gilt dasselbe wie am Firmen-PC: Die Liste kommt als Download.
+  const { hinweis, download } = useCsvDownload({ readFile, readOnly: rest.readOnly || rest.engine.readOnly });
   const head: Kopf = {
     ...kopf,
-    // Der Download kommt mit dem nächsten Schritt: Bis dahin ist der Knopf da, aber gesperrt.
-    form: (_tools: KopfTools) => <Form sperrenKey={sperrenKey} hinweis="" onDownload={() => undefined} downloadDisabled />,
+    // Der Knopf ist nie gesperrt: Auch am Firmen-PC und im zweiten Fenster lässt sich die Liste laden. Sie gehört zum Jahr der Seite.
+    form: (tools: KopfTools) => (
+      <Form
+        sperrenKey={sperrenKey}
+        hinweis={hinweis}
+        onDownload={() => {
+          const s = parseSperrenKey(sperrenKey);
+          if (s === null) return;
+          void download({
+            csvPath: sperrenCsvPath(s.fachlinie, s.jahr),
+            jsonPath: sperrenJsonPath(s.fachlinie, s.jahr),
+            name: sperrenCsvName(s.fachlinie, s.jahr),
+            seite: s.quartal,
+            neuester: neuesterStrich(tools.current()),
+            keine: KEINE_LISTE,
+          });
+        }}
+      />
+    ),
   };
   return <PageView {...rest} layout={layout} path={sperrenPagePath(sperrenKey)} kopf={head} />;
 }
