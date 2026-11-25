@@ -573,6 +573,27 @@ Frag in der Probe nichts Echtes oder Vertrauliches. Das Bild der Seite geht an C
 
 - [ ] Klappt
 
+### 3.21 Sperrenkalender
+
+Neu ist eine Seite für Sperren: ein Quartalskalender mit drei Monaten nebeneinander, je Tag eine Zeile mit zwei Schreibfeldern (Platz 1 und Platz 2). Dort schreibst du mit dem Stift den Abschnitt einer Sperre hin, zum Beispiel Gleis und Uhrzeit in Platz 2. Es gibt eine Seite für **IB** und eine für **Lehne**. Das Morgenbriefing erinnert dich dann rechtzeitig, die Sperre bei der Betra anzumelden (Betra ist die Stelle, bei der Sperren angemeldet werden), und zeigt dir, wann eine neue Sperrenliste einzulesen ist. Die Liste für Excel lässt sich auf der Seite herunterladen. Ein Makro (ein kleines Programm in Excel) übernimmt sie in die Sperren-Datei. Wie das geht, steht im Vault in der Notiz „Sperren einlesen“. Wo: echtes Vault, iPad mit Apple Pencil, am zweiten Tag dazu der Firmen-PC. Dauer: etwa 30 Minuten, verteilt auf zwei Tage.
+
+Schreib für die Probe einen Abschnitt aus deiner Liste hin, aber nimm einen, den es ruhig geben darf. Die Probe legt echte Erinnerungen an.
+
+1. Neue Version holen: Beende die App am iPad einmal ganz: Wische vom unteren Rand nach oben, halte kurz und wische die App nach oben weg. Öffne sie dann wieder über das Symbol auf dem Home-Bildschirm. Am Firmen-PC drückst du in Edge die Taste **F5**. Mach das auf jedem Gerät, bevor du etwas prüfst.
+2. Seite öffnen: Tippe oben in der Leiste auf **Sperren**. Erwartet: Es geht die Seite **Sperren IB** für das aktuelle Quartal auf, mit drei Monaten nebeneinander. Wochenenden und Feiertage sind hinterlegt, und am Montag steht die Kalenderwoche (KW).
+3. Blättern und wechseln: Tippe auf **›**, bis das 1. Quartal 2027 offen ist. Tippe dann auf **Lehne** und danach wieder auf **IB**. Erwartet: Das Quartal bleibt gleich, nur die Fachlinie wechselt.
+4. Sperre eintragen: Such Mitte Februar 2027 zwei Werktage hintereinander, zum Beispiel den 15. und den 16. Schreib mit dem Pencil an beiden Tagen in **Platz 1** (das linke Feld der Zeile) denselben Abschnitt aus deiner Liste. An einem der beiden Tage schreibst du in **Platz 2** (das rechte Feld) Gleis und Uhrzeit dazu. Erwartet: Die Schrift bleibt im Feld. Damit liegt die Sperre schon im Zeitraum der Erinnerung, die Betra-Anmeldung steht also bald an.
+5. Hochkant und quer: Dreh das iPad ins Hochformat und wieder zurück. Erwartet: In beiden Lagen ist die Leiste oben eine einzige Zeile, und im Kopf der Seite sind **IB**, **Lehne** und **Für Excel herunterladen** gut zu lesen.
+6. Am nächsten Morgen: Öffne die Tagesseite und schau in die Karte **Morgenbriefing**. Erwartet: Dort steht eine Zeile „Betra anmelden bis …“ mit deinem Abschnitt. Je nach Datum ist sie normal, gelb und fett oder rot und fett. Dazu steht eine Zeile „Sperren IB 2027 einlesen (n neu)“, wobei n die Zahl der neuen Sperren ist.
+7. Betra-Nr. eintragen: Tippe an der Zeile „Betra anmelden bis …“ auf das Feld für die Betra-Nr. Tippe zuerst etwas Falsches ein, zum Beispiel Buchstaben. Erwartet: Es kommt ein Hinweis, und nichts wird gespeichert. Trage dann die richtige Nummer ein (nur Ziffern, 5 bis 8 Stellen). Erwartet: An der Zeile steht „Betra-Nr. …“ mit deiner Nummer.
+8. Am Firmen-PC: Öffne das Notizbuch in Edge und die Sperrenseite IB, 1. Quartal 2027. Klicke auf **Für Excel herunterladen**. Erwartet: Im Download-Ordner liegt die Datei `Sperren IB 2027.csv`.
+9. Makro ausprobieren: Öffne eine **Kopie** deiner Sperren-Datei IB, nie das Original. Spiel das Makro nach der Anleitung „Sperren einlesen“ im Vault ein und lass es laufen. Erwartet: Das Makro zeigt einen Bericht mit den neuen Zeilen. Die Zeilen stehen unten im Blatt Eintragungen, und in der Spalte AI steht „NB IB-2027-…“.
+10. Zweiter Lauf: Lass das Makro noch einmal mit derselben Liste laufen. Erwartet: Der Bericht nennt keine neuen Zeilen, und in der Datei ändert sich nichts.
+11. In Outlook: Schau am Abend nach Schritt 4 in die Liste **Obsidian**. Erwartet: Dort liegt ein To-do „Betra anmelden bis …“. Schau am Abend nach Schritt 7 noch einmal nach. Erwartet: Das To-do ist erledigt.
+12. Passt etwas nicht, mach ein Bildschirmfoto (obere Taste und eine Lautstärketaste gleichzeitig kurz drücken) und gib kurz Bescheid, was du getan und was du gesehen hast. Schreib dazu die Uhrzeit und, wenn es eine gab, die genaue Meldung auf.
+
+- [ ] Klappt
+
 ## 4. Die 1 bis 2 Wochen und die Entscheidung
 
 Im Alltag brauchst du nichts Besonderes zu tun. Schreib im Notizbuch, wie du es später willst, und lass GoodNotes nebenher laufen. Wenn etwas nicht klappt, schreib dir jedes Mal auf:
