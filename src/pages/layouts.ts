@@ -4,7 +4,7 @@ import { addDays, formatDayLong, isValidDay, isoWeekKey, monthGrid, monthKey, MO
 import { besprechungBase } from '../lib/filenames';
 import { holidaysAT } from '../lib/holidays';
 import { istTabelle } from '../lib/meetings';
-import { parseSperrenKey, quartalMonate } from '../lib/sperren';
+import { parseSperrenKey, quartalMonate, sperrenMonatsname } from '../lib/sperren';
 import { SPERREN_GEOMETRIE, SPERREN_MARKER, sperrenFeldId } from './sperren';
 import { TABELLE_SPALTEN, TABELLE_ZEILEN, tabelleGeometrie, zeilenFeld } from './tabelle';
 import { fitLines, geburtstagItem, moreLabel, prioItems, SEPARATOR, terminItems, textWidth, withHead, type AgendaDay, type AgendaItem } from './agenda';
@@ -493,7 +493,6 @@ export function meetingLayout(meta: Record<string, string>): Layout {
 
 // ---------- Sperren ----------
 
-const SPERREN_MONATE = MONTHS.map((m, i) => (i === 0 ? 'Jänner' : m));
 const SPERREN_TAGE = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 
 /** Das Quartal einer Fachlinie: drei Monatsspalten, je Tag eine Zeile mit zwei Schreibfeldern. Wirft bei einem ungültigen Schlüssel. */
@@ -541,7 +540,7 @@ export function sperrenLayout(key: string): Layout {
         const list = days(month);
         const bottom = g.zeile0 + list.length * g.zeilenhoehe;
         out += rect([x, g.zeile0 - 36, g.breite, 32], { rx: 6, fill: COLOR.header });
-        out += text(x + 12, g.zeile0 - 14, `${SPERREN_MONATE[Number(month.slice(5, 7)) - 1]} ${month.slice(0, 4)}`, {
+        out += text(x + 12, g.zeile0 - 14, `${sperrenMonatsname(month)} ${month.slice(0, 4)}`, {
           'font-size': 18,
           'font-weight': 700,
           fill: COLOR.label,

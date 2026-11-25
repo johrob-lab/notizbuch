@@ -120,10 +120,10 @@ test('only the current month tab is highlighted', async () => {
 
 // ---------- Leiste ----------
 
-test('the bar has the views in order and only Month, Week, Day and Besprechungen lead somewhere yet', async () => {
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
+test('the bar has the views in order and only Month, Week, Day, Besprechungen and Sperren lead somewhere yet', async () => {
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
   const names = all('nav a, nav button').map((el) => el.textContent);
-  expect(names).toEqual(['Index', 'Jahr', 'Monat', 'Woche', 'Tag', 'To-Dos', 'BesprechungenBespr.']);
+  expect(names).toEqual(['Index', 'Jahr', 'Monat', 'Woche', 'Tag', 'To-Dos', 'BesprechungenBespr.', 'Sperren']);
   for (const name of ['Index', 'Jahr', 'To-Dos']) {
     const el = item(name);
     expect(el.tagName, name).toBe('BUTTON');
@@ -139,17 +139,17 @@ test('the bar has the views in order and only Month, Week, Day and Besprechungen
 
 test('Besprechungen on the open list asks to load it again, from any other view it only leads there', async () => {
   const reload = vi.fn();
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine(), onReloadList: reload }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine: fakeEngine(), onReloadList: reload }));
   await act(() => item('Besprechungen').click());
   expect(reload).not.toHaveBeenCalled();
-  await mount(h(TopBar, { route: route('#/besprechungen'), engine: fakeEngine(), onReloadList: reload }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/besprechungen'), engine: fakeEngine(), onReloadList: reload }));
   await act(() => item('Besprechungen').click());
   expect(reload).toHaveBeenCalledTimes(1);
   expect(item('Besprechungen').getAttribute('href')).toBe('#/besprechungen');
 });
 
 test('the view of the shown page is marked, and the others keep its date', async () => {
-  await mount(h(TopBar, { route: route('#/woche/2026-W45'), engine: fakeEngine() }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/woche/2026-W45'), engine: fakeEngine() }));
   expect(item('Woche').getAttribute('aria-current')).toBe('page');
   expect(item('Tag').hasAttribute('aria-current')).toBe(false);
   expect(item('Monat').hasAttribute('aria-current')).toBe(false);
@@ -159,20 +159,20 @@ test('the view of the shown page is marked, and the others keep its date', async
 });
 
 test('the arrows step the page that is shown, and stop where there is nothing to step', async () => {
-  await mount(h(TopBar, { route: route('#/tag/2026-12-31'), engine: fakeEngine() }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-12-31'), engine: fakeEngine() }));
   expect(item('Voriger Tag').getAttribute('href')).toBe('#/tag/2026-12-30');
   expect(item('Nächster Tag').getAttribute('href')).toBe('#/tag/2027-01-01');
 
-  await mount(h(TopBar, { route: route('#/woche/2027-W01'), engine: fakeEngine() }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/woche/2027-W01'), engine: fakeEngine() }));
   expect(item('Vorige Woche').getAttribute('href')).toBe('#/woche/2026-W53');
   expect(item('Nächste Woche').getAttribute('href')).toBe('#/woche/2027-W02');
 
-  await mount(h(TopBar, { route: route('#/monat/2026-12'), engine: fakeEngine() }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/monat/2026-12'), engine: fakeEngine() }));
   expect(item('Voriger Monat').getAttribute('href')).toBe('#/monat/2026-11');
   expect(item('Nächster Monat').getAttribute('href')).toBe('#/monat/2027-01');
 
   for (const hash of ['#/einstellungen', `#/besprechung/${encodeURIComponent('2026-10-29 0800 Muster')}/1`]) {
-    await mount(h(TopBar, { route: route(hash), engine: fakeEngine() }));
+    await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route(hash), engine: fakeEngine() }));
     const [prev, next] = all('[aria-label^="Vorig"], [aria-label^="Nächst"]');
     for (const arrow of [prev, next]) {
       expect(arrow.getAttribute('aria-disabled'), hash).toBe('true');
@@ -182,7 +182,7 @@ test('the arrows step the page that is shown, and stop where there is nothing to
 });
 
 test('Today leads to the day page of today, worked out when it is tapped', async () => {
-  await mount(h(TopBar, { route: route('#/monat/2026-03'), engine: fakeEngine() }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/monat/2026-03'), engine: fakeEngine() }));
   expect(item('Heute').getAttribute('href')).toBe('#/tag/2026-10-29');
   vi.setSystemTime(new Date('2026-10-30T10:00:00Z')); // die App blieb über Nacht offen
   await act(() => item('Heute').click());
@@ -193,10 +193,10 @@ test('Today leads to the day page of today, worked out when it is tapped', async
 });
 
 test('the gear opens the settings and is marked there', async () => {
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
   expect(item('Einstellungen').getAttribute('href')).toBe('#/einstellungen');
   expect(item('Einstellungen').hasAttribute('aria-current')).toBe(false);
-  await mount(h(TopBar, { route: route('#/einstellungen'), engine: fakeEngine() }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/einstellungen'), engine: fakeEngine() }));
   expect(item('Einstellungen').getAttribute('aria-current')).toBe('page');
   // In den Einstellungen ist keine Ansicht markiert
   for (const name of ['Monat', 'Woche', 'Tag']) expect(item(name).hasAttribute('aria-current'), name).toBe(false);
@@ -204,13 +204,13 @@ test('the gear opens the settings and is marked there', async () => {
 
 test('the bar shows the sync status exactly once', async () => {
   const engine = fakeEngine({ state: 'wartet', pending: 2 });
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine }));
   expect(all('[data-testid="status"]')).toHaveLength(1);
   expect(host.querySelector('[data-testid="status"]')!.textContent).toBe('Wartet auf Netz · 2 Änderungen');
 });
 
 test('tapping an item that is not there yet says so, once, and the note can be closed', async () => {
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
   expect(all('[role="alert"], [role="status"]:not([data-testid])')).toHaveLength(0);
   await act(() => item('Index').click());
   await act(() => item('Index').click());
@@ -228,7 +228,7 @@ test('tapping an item that is not there yet says so, once, and the note can be c
 
 test('a conflict copy is announced with its file name, and the note can be closed', async () => {
   const engine = fakeEngine();
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine }));
   await act(() =>
     engine.onConflict?.({
       path: '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg',
@@ -247,7 +247,7 @@ test('a conflict copy is announced with its file name, and the note can be close
 
 test('an error with a file is announced with the file name, an error without a file with a neutral notice of its own', async () => {
   const engine = fakeEngine();
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine }));
   // Der Fehler kann auch beim Lesen kommen: Die Meldung sagt „Abgleich“, nicht „Speichern“.
   await act(() => engine.onError?.({ path: '07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg', error: new Error('500') }));
   expect(all('.meldung').map((n) => n.textContent)).toEqual([expect.stringContaining('Abgleich hat nicht geklappt: 2026-10-29 Tag.svg')]);
@@ -273,7 +273,7 @@ test('a note that only informs goes away by itself after 8 seconds, alerts and t
   vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
   vi.setSystemTime(new Date('2026-10-29T10:00:00Z'));
   const engine = fakeEngine();
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine, startNotice: EXPIRY }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine, startNotice: EXPIRY }));
   await act(() => {
     item('Index').click(); // nur ein Hinweis
     engine.onConflict?.({ path: '05 Daily Notes/2026-10-29.md', copyPath: '05 Daily Notes/2026-10-29 (Konflikt).md' });
@@ -317,7 +317,7 @@ test('a note that only informs goes away by itself after 8 seconds, alerts and t
 test('a bar that goes away leaves no timer behind', async () => {
   vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
   vi.setSystemTime(new Date('2026-10-29T10:00:00Z'));
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
   await act(() => item('Index').click());
   expect(vi.getTimerCount()).toBe(1);
   await act(() => render(null, host));
@@ -326,7 +326,7 @@ test('a bar that goes away leaves no timer behind', async () => {
 
 test('the same note twice is shown once', async () => {
   const engine = fakeEngine();
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine }));
   const info = { path: 'a/2026-10-29 Tag.svg', error: new Error('x') };
   await act(() => {
     engine.onError?.(info);
@@ -341,7 +341,7 @@ test('the same note twice is shown once', async () => {
 
 test('the bar listens only while it is shown and gives the hooks back', async () => {
   const engine = fakeEngine();
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine }));
   expect(engine.onConflict).toBeTypeOf('function');
   expect(engine.onError).toBeTypeOf('function');
   await act(() => render(null, host));
@@ -351,7 +351,7 @@ test('the bar listens only while it is shown and gives the hooks back', async ()
 
 test('a hook that somebody else set meanwhile is not taken away', async () => {
   const engine = fakeEngine();
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine }));
   const other = () => undefined;
   engine.onError = other;
   await act(() => render(null, host));
@@ -364,7 +364,7 @@ const EXPIRY = 'Dein Zugang läuft am 05.11.2026 ab. Bitte rechtzeitig erneuern.
 
 test('a notice for the start is shown once, can be closed, and does not come back on other pages', async () => {
   const engine = fakeEngine();
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine, startNotice: EXPIRY }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine, startNotice: EXPIRY }));
   const notes = all('.meldung');
   expect(notes).toHaveLength(1);
   expect(notes[0].textContent).toContain(EXPIRY);
@@ -372,34 +372,43 @@ test('a notice for the start is shown once, can be closed, and does not come bac
   await act(() => (notes[0].querySelector('button') as HTMLElement).click());
   expect(all('.meldung')).toHaveLength(0);
   // Blättern ändert die Seite, nicht den Start: Der Hinweis kommt nicht wieder
-  await mount(h(TopBar, { route: route('#/woche/2026-W44'), engine, startNotice: EXPIRY }));
-  await mount(h(TopBar, { route: route('#/einstellungen'), engine, startNotice: EXPIRY }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/woche/2026-W44'), engine, startNotice: EXPIRY }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/einstellungen'), engine, startNotice: EXPIRY }));
   expect(all('.meldung')).toHaveLength(0);
 });
 
 test('a new text for the start notice replaces the old one, and none takes it away, but not the other notes', async () => {
   const engine = fakeEngine();
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine, startNotice: EXPIRY }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine, startNotice: EXPIRY }));
   await act(() => item('Index').click());
   expect(all('.meldung').map((n) => n.textContent)).toEqual([expect.stringContaining(EXPIRY), expect.stringContaining('Index kommt mit Stufe C')]);
   const next = 'Dein Zugang läuft am 12.11.2026 ab. Bitte rechtzeitig erneuern.';
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine, startNotice: next }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine, startNotice: next }));
   expect(all('.meldung').map((n) => n.textContent)).toEqual([expect.stringContaining('Index kommt mit Stufe C'), expect.stringContaining(next)]);
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine, startNotice: null }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine, startNotice: null }));
   expect(all('.meldung').map((n) => n.textContent)).toEqual([expect.stringContaining('Index kommt mit Stufe C')]);
 });
 
 test('without a start notice there is no note', async () => {
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
   expect(all('.meldung')).toHaveLength(0);
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine(), startNotice: null }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine: fakeEngine(), startNotice: null }));
   expect(all('.meldung')).toHaveLength(0);
 });
 
 test('a window that may not write shows no sync status of its own, but keeps the gear', async () => {
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine(), passive: true }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine: fakeEngine(), passive: true }));
   expect(all('[data-testid="status"]')).toHaveLength(0);
   expect(item('Einstellungen').getAttribute('href')).toBe('#/einstellungen');
-  await mount(h(TopBar, { route: route('#/tag/2026-10-29'), engine: fakeEngine(), passive: false }));
+  await mount(h(TopBar, { sperrenKey: 'IB-2026-Q4', route: route('#/tag/2026-10-29'), engine: fakeEngine(), passive: false }));
   expect(all('[data-testid="status"]')).toHaveLength(1);
+});
+
+test('the Sperren button leads to the given quarter and is current on that page', async () => {
+  await mount(h(TopBar, { sperrenKey: 'Lehne-2027-Q2', route: route('#/tag/2026-10-29'), engine: fakeEngine() }));
+  expect(item('Sperren').getAttribute('href')).toBe('#/sperren/Lehne-2027-Q2');
+  expect(item('Sperren').getAttribute('aria-current')).toBeNull();
+  await mount(h(TopBar, { sperrenKey: 'Lehne-2027-Q2', route: route('#/sperren/Lehne-2027-Q2'), engine: fakeEngine() }));
+  expect(item('Sperren').getAttribute('aria-current')).toBe('page');
+  expect(item('Besprechungen').getAttribute('aria-current')).toBeNull();
 });

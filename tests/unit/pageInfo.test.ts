@@ -62,3 +62,10 @@ test('the day text has the note and the card entries', () => {
 test('a day without note or entries says so', () => {
   expect(dayExtras('2026-10-29', null, [])).toBe('Zu diesem Tag gibt es keine Tagesnotiz.\n\nKarte „Besprechungen“ dieses Tages: keine Termine.');
 });
+
+test('the Sperren page has a name, a header and no note day', () => {
+  expect(pageLabel('sperren', 'IB-2027-Q1', {})).toBe('Sperren IB, 1. Quartal 2027');
+  expect(pageHeader('sperren', 'IB-2027-Q1', {})).toBe('Sperrenkalender IB, 1. Quartal 2027 (Jänner bis März 2027)');
+  expect(pageHeader('sperren', 'Lehne-2026-Q4', {})).toBe('Sperrenkalender Lehne, 4. Quartal 2026 (Oktober bis Dezember 2026)');
+  expect(noteDayOf('sperren', 'IB-2027-Q1', {})).toBeNull();
+});

@@ -3,6 +3,7 @@ import {
   aktuellerSperrenKey,
   mitFachlinie,
   parseSperrenKey,
+  sperrenMonatsname,
   quartalMonate,
   quartalOf,
   sperrenTitel,
@@ -41,4 +42,9 @@ test('mitFachlinie, quartalMonate, sperrenTitel', () => {
   expect(mitFachlinie('IB-2027-Q2', 'Lehne')).toBe('Lehne-2027-Q2');
   expect(quartalMonate({ fachlinie: 'IB', jahr: 2027, quartal: 4 })).toEqual(['2027-10', '2027-11', '2027-12']);
   expect(sperrenTitel('Lehne-2027-Q3')).toBe('Sperren Lehne, 3. Quartal 2027');
+});
+
+test('the Sperren page calls the first month Jänner', () => {
+  expect(sperrenMonatsname('2027-01')).toBe('Jänner');
+  expect(sperrenMonatsname('2027-12')).toBe('Dezember');
 });

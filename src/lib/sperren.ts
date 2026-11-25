@@ -1,4 +1,4 @@
-import type { Day } from './dates';
+import { MONTHS, type Day } from './dates';
 
 export type Fachlinie = 'IB' | 'Lehne';
 export const FACHLINIEN: readonly Fachlinie[] = ['IB', 'Lehne'];
@@ -58,3 +58,10 @@ export function sperrenTitel(key: string): string {
   return s ? `Sperren ${s.fachlinie}, ${s.quartal}. Quartal ${s.jahr}` : key;
 }
 
+
+const SPERREN_MONATE = MONTHS.map((m, i) => (i === 0 ? 'Jänner' : m));
+
+/** Name des Monats `JJJJ-MM` auf der Sperrenseite: Hier heißt der erste Monat „Jänner“ (sonst im Notizbuch „Januar“). */
+export function sperrenMonatsname(monthKey: string): string {
+  return SPERREN_MONATE[Number(monthKey.slice(5, 7)) - 1] ?? '';
+}

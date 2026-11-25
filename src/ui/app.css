@@ -141,6 +141,11 @@ body {
   margin-left: auto;
 }
 
+.sperrenkopf .fachlinie {
+  display: flex;
+  gap: 4px;
+}
+
 .seitenzahl {
   font-size: 15px;
   color: #4a5160;
@@ -421,6 +426,11 @@ body {
 
   .pill {
     padding: 0 8px;
+  }
+
+  /* Index, Jahr und To-Dos sind noch ohne Funktion: Hier machen sie Platz für „Sperren“, damit die Leiste einzeilig bleibt. */
+  .ansichten .platzhalter {
+    display: none;
   }
 }
 

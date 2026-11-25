@@ -12,6 +12,8 @@ type Props = {
    * einen Tag, eine Woche oder einen Monat. Solange eine Besprechung sie noch nicht liefert, sind beide Pfeile grau.
    */
   steps?: Steps;
+  /** Wohin „Sperren“ führt: die Sperrenseite, die auf diesem Gerät zuletzt offen war, sonst das aktuelle Quartal. */
+  sperrenKey: string;
   /**
    * Ein Hinweis, der beim Start der App kommt (zum Beispiel, dass der Zugang bald abläuft). Er steht wie jede Meldung da, bis man ihn
    * schließt, und kommt nicht wieder, wenn man blättert: Er gehört zum Start, nicht zur Seite. Ändert sich der Text, ersetzt der neue den
@@ -75,7 +77,7 @@ function Step({ label, symbol, from, to }: { label: string; symbol: string; from
  * Meldungen der Engine auf (Konfliktkopie, Fehler beim Abgleich) und bleiben, bis man sie schließt. Ein Hinweis, der nur
  * informiert, verschwindet nach 8 Sekunden von selbst.
  */
-export function TopBar({ route, engine, steps, startNotice, passive, blocked, vollbild, onVollbild, onReloadList }: Props) {
+export function TopBar({ route, engine, steps, sperrenKey, startNotice, passive, blocked, vollbild, onVollbild, onReloadList }: Props) {
   const [notes, setNotes] = useState<Note[]>([]);
   const lastId = useRef(0);
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -176,7 +178,7 @@ export function TopBar({ route, engine, steps, startNotice, passive, blocked, vo
               {name}
             </a>
           ) : (
-            <button key={name} type="button" class="pill" aria-disabled="true" title={SOON} onClick={() => announce(`${name} ${SOON}`, false)}>
+            <button key={name} type="button" class="pill platzhalter" aria-disabled="true" title={SOON} onClick={() => announce(`${name} ${SOON}`, false)}>
               {name}
             </button>
           ),
@@ -191,6 +193,9 @@ export function TopBar({ route, engine, steps, startNotice, passive, blocked, vo
         >
           <span class="lang" aria-hidden="true">Besprechungen</span>
           <span class="kurz" aria-hidden="true">Bespr.</span>
+        </a>
+        <a class="pill" href={routeHash({ view: 'sperren', key: sperrenKey })} aria-current={route.view === 'sperren' ? 'page' : undefined}>
+          Sperren
         </a>
       </nav>
       {/* Das Fenster, das nur liest, hat keinen Stand zu zeigen. Die leere Fläche hält das Zahnrad rechts. */}

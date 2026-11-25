@@ -3,6 +3,7 @@ import { SMOOTHING } from '../ink/types';
 import { checkKey, FAILURE_TEXT } from '../ki/claude';
 import { AccessChangedError, accessProblem, PendingChangesError, saveAccess, waitingText } from '../lib/access';
 import { todayVienna, type Day } from '../lib/dates';
+import { aktuellerSperrenKey, parseSperrenKey } from '../lib/sperren';
 import { expiryWarning, knownExpiry } from '../lib/expiry';
 import { pageName } from '../lib/filenames';
 import { kiModelOf, loadSettings, updateSettings, vollbildOf, type Settings, type Vollbild } from '../lib/settings';
@@ -18,6 +19,7 @@ import { BesprechungenPage } from './BesprechungenPage';
 import { BesprechungPage } from './BesprechungPage';
 import { MonatPage } from './MonatPage';
 import { MonthTabs } from './MonthTabs';
+import { SperrenPage } from './SperrenPage';
 import { draftsSettled, parkedPaths } from './pageSession';
 import type { PageProps } from './PageView';
 import { parseRoute, routeHash, shownMonth, STEP_LABELS, stepTargets, type Route, type Steps } from './router';
@@ -86,7 +88,7 @@ function useToday(): Day {
 /** Die Warnung vor dem Ablauf, für diesen Augenblick gerechnet: nach dem Datum, das GitHub genannt hat, sonst nach dem aus der Einrichtung. */
 const warningFor = (client: GitHubClient, typedExpiry: Day | undefined): string | null => expiryWarning(knownExpiry(client, typedExpiry), new Date());
 
-function Seite({ route, listDir, readFile, onSteps, ...page }: { route: Route; listDir: ListDir; readFile: ReadFile; onSteps(steps: Steps | null): void } & PageProps) {
+function Seite({ route, listDir, readFile, onSteps, onSperrenOpen, ...page }: { route: Route; listDir: ListDir; readFile: ReadFile; onSteps(steps: Steps | null): void; onSperrenOpen(key: string): void } & PageProps) {
   switch (route.view) {
     case 'tag':
       return <TagPage day={route.key} listDir={listDir} {...page} />;
@@ -96,6 +98,8 @@ function Seite({ route, listDir, readFile, onSteps, ...page }: { route: Route; l
       return <MonatPage month={route.key} {...page} />;
     case 'besprechung':
       return <BesprechungPage base={route.key} n={route.n ?? 1} listDir={listDir} readFile={readFile} onSteps={onSteps} {...page} />;
+    case 'sperren':
+      return <SperrenPage sperrenKey={route.key} readFile={readFile} onOpen={onSperrenOpen} {...page} />;
     case 'besprechungen':
     case 'einstellungen':
       return null; // Einstellungen und Liste der Besprechungen sind keine Seite zum Schreiben, die App zeigt sie selbst
@@ -442,6 +446,18 @@ export function App() {
     void updateSettings(now.store, (saved) => ({ ...saved, vollbild: { ...vollbildOf(saved), ...change } })).catch(() => undefined);
   };
 
+  // Die Sperrenseite, die zuletzt offen war, merkt sich das Gerät: „Sperren“ in der Leiste führt dorthin. Die Leiste kennt den Schlüssel
+  // sofort (`boot.settings`), gespeichert wird nur im Fenster, das schreiben darf. Das zweite Fenster ändert nur die Anzeige.
+  const openSperren = (key: string) => {
+    const now = bootNow.current;
+    if (now.phase !== 'bereit' || now.settings.sperren === key) return;
+    setBoot((current) => (current.phase === 'bereit' ? { ...current, settings: { ...current.settings, sperren: key } } : current));
+    if (!now.window.active) return;
+    void updateSettings(now.store, (saved) => ({ ...saved, sperren: key })).catch(() => undefined);
+  };
+  const lastSperren = boot.phase === 'bereit' ? boot.settings.sperren : undefined;
+  const sperrenKey = lastSperren !== undefined && parseSperrenKey(lastSperren) ? lastSperren : aktuellerSperrenKey(today);
+
   // Vollbild gilt nur auf Seiten, nie in den Einstellungen und in der Liste der Besprechungen.
   const vollbild = boot.phase === 'bereit' ? vollbildOf(boot.settings) : null;
   const fullscreen = vollbild !== null && vollbild.an && route.view !== 'einstellungen' && route.view !== 'besprechungen';
@@ -484,6 +500,7 @@ export function App() {
             route={route}
             engine={boot.engine}
             steps={steps}
+            sperrenKey={sperrenKey}
             startNotice={startNotice}
             passive={!boot.window.active}
             blocked={switching}
@@ -518,6 +535,7 @@ export function App() {
                 listDir={boot.listDir}
                 readFile={boot.readFile}
                 onSteps={reportSteps}
+                onSperrenOpen={openSperren}
                 engine={boot.engine}
                 readOnly={boot.settings.device === 'Firmen-PC'}
                 sigma={SMOOTHING[boot.settings.smoothing] ?? SMOOTHING.mittel}
@@ -531,7 +549,7 @@ export function App() {
                 ask={canAsk ? askHooks : undefined}
               />
             )}
-            {route.view !== 'einstellungen' && route.view !== 'besprechungen' && !fullscreen && <MonthTabs year={Number(shown.slice(0, 4))} current={shown} />}
+            {route.view !== 'einstellungen' && route.view !== 'besprechungen' && route.view !== 'sperren' && !fullscreen && <MonthTabs year={Number(shown.slice(0, 4))} current={shown} />}
             {/* Außerhalb der Seite: Beim Blättern bleibt es offen. In den Einstellungen und der Liste der Besprechungen ist es versteckt. */}
             {canAsk && (
               <AskWindow
