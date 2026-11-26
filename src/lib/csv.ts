@@ -5,7 +5,7 @@
  * Anführungszeichen reicht bis zum Ende.
  */
 export function parseCsv(text: string): string[][] {
-  const s = text.startsWith('﻿') ? text.slice(1) : text;
+  const s = text.startsWith('\uFEFF') ? text.slice(1) : text;
   const zeilen: string[][] = [];
   let zeile: string[] = [];
   let wert = '';

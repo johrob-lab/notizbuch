@@ -9,7 +9,7 @@ const O = { fachlinie: 'IB' as const, jahr: 2027 };
 
 function csv(fachlinie: string): string {
   const werte = EXCEL_KOPF.split(';').map((k) => (k === 'Fachlinie' ? fachlinie : k === 'Datum' ? '2027-03-01' : k === 'Abschnitt' ? 'Muster Abschnitt 1' : k === 'Stand' ? '2026-11-26 09:40' : ''));
-  return '﻿' + [EXCEL_KOPF, werte.join(';')].join('\r\n') + '\r\n';
+  return '\uFEFF' + [EXCEL_KOPF, werte.join(';')].join('\r\n') + '\r\n';
 }
 
 function datei(name: string, inhalt: string | Uint8Array, size?: number) {
@@ -59,7 +59,7 @@ describe('excelStandHolen', () => {
     expect(meldung).toBe('Excel-Stand übernommen: 1 Sperre, davon 0 aus dem Notizbuch.');
     expect(e.calls).toEqual([`lookupFresh ${PFAD}`, `write ${PFAD}`]);
     expect(e.writes).toEqual([{ path: PFAD, text, kind: 'md' }]);
-    expect(e.writes[0].text.startsWith('﻿')).toBe(true);
+    expect(e.writes[0].text.startsWith('\uFEFF')).toBe(true);
     expect(heard).toEqual([PFAD]);
   });
 

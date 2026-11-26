@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { parseCsv } from '../../src/lib/csv';
 
 test('Strichpunkt, Anführungszeichen, BOM und CRLF', () => {
-  expect(parseCsv('﻿a;b\r\n"x;y";"z ""q"""\r\n')).toEqual([['a', 'b'], ['x;y', 'z "q"']]);
+  expect(parseCsv('\uFEFFa;b\r\n"x;y";"z ""q"""\r\n')).toEqual([['a', 'b'], ['x;y', 'z "q"']]);
 });
 
 test('ein Zeilenumbruch in Anführungszeichen bleibt im Wert', () => {

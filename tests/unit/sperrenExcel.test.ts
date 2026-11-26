@@ -45,7 +45,7 @@ function excelCsv(zeilen: Partial<Record<Feld, string>>[]): string {
       })
       .join(';');
   });
-  return '﻿' + [EXCEL_KOPF, ...zeilenText].join('\r\n') + '\r\n';
+  return '\uFEFF' + [EXCEL_KOPF, ...zeilenText].join('\r\n') + '\r\n';
 }
 
 const ERWARTET = { fachlinie: 'IB' as const, jahr: 2027 };
@@ -98,7 +98,7 @@ describe('leseExcelStand', () => {
   });
 
   test('LF und kein BOM gehen auch', () => {
-    const text = excelCsv(drei).replace(/^﻿/, '').replace(/\r\n/g, '\n');
+    const text = excelCsv(drei).replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
     expect(leseExcelStand(text, ERWARTET).ok).toBe(true);
   });
 
@@ -170,14 +170,14 @@ test('ausNotizbuch', () => {
 });
 
 test('vergleichsform', () => {
-  expect(vergleichsform('  Muster \t Abschnitt 1 ')).toBe('muster abschnitt 1');
+  expect(vergleichsform('  Muster \t Abschnitt\u00A01 ')).toBe('muster abschnitt 1');
 });
 
 describe('gueltigeEintraege', () => {
   const kopf = 'ID;Fachlinie;Datum;Abschnitt;Abschnitt gelesen;Gleis;von;bis;Betra-Nr.;Sperre;Status;Hinweis;Stand';
   const zeile = (datum: string, abschnitt: string, status: string) =>
     `IB-${datum}-1;IB;${datum};${abschnitt};${abschnitt};;;;;;${status};;2026-11-25 19:05`;
-  const liste = '﻿' + [kopf, zeile('2027-03-02', 'Beispielstrecke Nord', 'gültig'), zeile('2027-03-03', 'Muster Abschnitt 1', 'unsicher'), zeile('2027-03-04', 'Muster Abschnitt 2', 'gestrichen')].join('\r\n') + '\r\n';
+  const liste = '\uFEFF' + [kopf, zeile('2027-03-02', 'Beispielstrecke Nord', 'gültig'), zeile('2027-03-03', 'Muster Abschnitt 1', 'unsicher'), zeile('2027-03-04', 'Muster Abschnitt 2', 'gestrichen')].join('\r\n') + '\r\n';
 
   test('nur Status gültig', () => {
     expect([...gueltigeEintraege(liste)]).toEqual(['2027-03-02|beispielstrecke nord']);

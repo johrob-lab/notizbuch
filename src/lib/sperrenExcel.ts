@@ -3,7 +3,12 @@ import { isValidDay, type Day } from './dates';
 import { FACHLINIEN, type Fachlinie } from './sperren';
 import { PLAETZE, sperrenFeldId, type Platz } from '../pages/sperren';
 
-/** Die Kopfzeile der Excel-Datei, 36 Spalten. */
+/**
+ * Die Kopfzeile der Excel-Datei, 36 Spalten. Drei Abschriften von Hand, ohne automatische
+ * Prüfung zwischen den Repos: diese hier, KopfExcelStand in SperrenEinlesen.bas und KOPF_EXCEL in
+ * sperren_einlesen_test.py (beide im Vault unter 04 Ressourcen/Excel-Formeln und Vorlagen/Sperren
+ * einlesen). Wer eine ändert, ändert alle drei.
+ */
 export const EXCEL_KOPF =
   'Fachlinie;Datum;Betra-Nr.;Abschnitt;Gleis;von;bis;HTW Anz./Nr.;HTW Fahrer;HTW best.;HTW zug.;BCR Anz./Nr.;BCR best.;BCR zug.;TUF Anz./Nr.;TUF best.;TUF zug.;MTW Anz./Nr.;MTW best.;MTW zug.;SAS ET Anz./Name;SAS ET best.;SAS ET zug.;TFZF Art;TFZF Name / Firma;TFZF best.;TFZF zug.;Bemerkung / Ansprechpartner;offen;Platz;Anzeigetext;Bedarf-Nr.;fremd;Zeitraum;Hinweis Übernahme;Stand';
 
