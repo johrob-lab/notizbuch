@@ -36,11 +36,23 @@ export function sizedSvg(svg: string, size: { w: number; h: number }): string {
   return svg.slice(0, match.index) + tag + svg.slice(match.index + match[0].length);
 }
 
-/** Wartet auf das Laden des Bildes, `false` bei Fehler. */
-function loaded(img: HTMLImageElement): Promise<boolean> {
+/**
+ * Wartet, bis das Bild fertig dekodiert ist (`decode`, sonst `onload`), `false` bei Fehler. Lehnt `decode` ab (Safari tut das bei
+ * SVG manchmal, obwohl das Bild geladen ist), zählt, was das Bild selbst sagt: fertig und mit Breite. `src` setzt erst, wer danach
+ * aufruft.
+ */
+function loaded(img: HTMLImageElement, src: string): Promise<boolean> {
+  if (typeof img.decode === 'function') {
+    img.src = src;
+    return img.decode().then(
+      () => true,
+      () => img.complete && img.naturalWidth > 0,
+    );
+  }
   return new Promise((resolve) => {
     img.onload = () => resolve(true);
     img.onerror = () => resolve(false);
+    img.src = src;
   });
 }
 
@@ -50,12 +62,15 @@ export async function pageImage(svg: string, timeoutMs = 8000): Promise<string |
   try {
     const size = imageSize(PAGE_W, PAGE_H);
     const img = new Image();
-    const done = loaded(img);
-    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(sizedSvg(svg, size))}`;
+    const done = loaded(img, `data:image/svg+xml;charset=utf-8,${encodeURIComponent(sizedSvg(svg, size))}`);
     const timeout = new Promise<false>((resolve) => {
       timer = setTimeout(() => resolve(false), timeoutMs);
     });
-    if (!(await Promise.race([done, timeout]))) return null;
+    if (!(await Promise.race([done, timeout]))) {
+      // Nach der Zeitgrenze (oder dem Fehler) soll nichts weiterladen.
+      img.src = '';
+      return null;
+    }
     const canvas = document.createElement('canvas');
     canvas.width = size.w;
     canvas.height = size.h;

@@ -407,6 +407,19 @@ test('peek reads a missing file, no network and no access as null', async () => 
   expect(await e.peek(A)).toBeNull();
 });
 
+test('peekLookup says unknown without network and does not bind the page', async () => {
+  fake.files[A] = { text: base, sha: 's1' };
+  fake.offline = true;
+  expect(await e.peekLookup(A)).toEqual({ text: null, unknown: true });
+  fake.offline = false;
+  expect(await e.peekLookup(A)).toEqual({ text: base, unknown: false });
+  await quiet();
+  const gets = fake.count('get');
+  await e.peekLookup(A);
+  await quiet();
+  expect(fake.count('get')).toBe(gets);
+});
+
 // ---------- Löschen ----------
 
 test('remove queues a delete with the last known sha, drops the local copy and flush deletes', async () => {

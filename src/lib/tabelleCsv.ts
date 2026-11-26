@@ -20,7 +20,7 @@ const VERARBEITET = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/;
  * Der Zeilenspeicher nennt die Zeit des Laufs (`verarbeitet`) und je Seite den `stand`. `null` ohne neuere Striche und bei
  * fehlendem oder kaputtem Speicher; wirft nie.
  */
-export function standHinweis(json: string | null, seite: number, neuester: number): string | null {
+export function standHinweis(json: string | null, seite: number | string, neuester: number): string | null {
   if (json === null) return null;
   try {
     const store: unknown = JSON.parse(json);

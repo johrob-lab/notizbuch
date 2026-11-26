@@ -1,5 +1,5 @@
 import { base64ToUtf8, utf8ToBase64 } from './base64';
-import { assertAllowedPath, hasBlockedWordPart, normalizePath, PathNotAllowedError, type Mode } from './paths';
+import { assertAllowedPath, hasBlockedWordPart, isCopyPath, normalizePath, PathNotAllowedError, type Mode } from './paths';
 
 const API = 'https://api.github.com';
 const API_VERSION = '2022-11-28';
@@ -74,6 +74,12 @@ export function withTimeout<T>(run: () => Promise<T>, ms = CALL_TIMEOUT_MS): Pro
     );
   });
 }
+
+/** Größer als das kommt eine Datei nicht in die Kopie von "Frag Claude". */
+export const MAX_KOPIE_BYTES = 1_000_000;
+
+/** Eine Datei der Kopie, wie der Baum sie nennt. Der Blob wird über die sha geholt, nie über den Pfad. */
+export type CopyEntry = { path: string; sha: string; size: number };
 
 export type DirEntry = { name: string; path: string; sha: string; type: 'file' | 'dir' };
 
@@ -267,6 +273,31 @@ export class GitHubClient {
   }
 
   /**
+   * Der ganze Baum eines Commits in einer Anfrage, gefiltert für die Kopie: nur Blobs, deren Pfad `isCopyPath` erlaubt und
+   * die höchstens `MAX_KOPIE_BYTES` groß sind. Das Filtern muss hier passieren, denn die Blob-Anfrage nennt nur eine sha.
+   * Die Pfade kommen in NFC. `truncated` reicht GitHubs Hinweis durch, dass der Baum selbst abgeschnitten ist.
+   */
+  async vaultTree(commit: string): Promise<{ entries: CopyEntry[]; truncated: boolean }> {
+    const { data } = await this.#request('GET', `${this.#repoUrl}/git/trees/${encodeURIComponent(commit)}?recursive=1`);
+    if (!isObject(data) || !Array.isArray(data.tree)) throw unexpected();
+    const entries: CopyEntry[] = [];
+    for (const raw of data.tree) {
+      if (!isObject(raw)) continue;
+      const { path, sha, size, type } = raw;
+      if (type !== 'blob' || typeof path !== 'string' || typeof sha !== 'string' || typeof size !== 'number') continue;
+      if (!isCopyPath(path) || size > MAX_KOPIE_BYTES) continue;
+      entries.push({ path: normalizePath(path), sha, size });
+    }
+    return { entries, truncated: data.truncated === true };
+  }
+
+  /** Text einer Datei der Kopie. Die Pfadregel der Kopie läuft hier noch einmal, bevor die sha angefragt wird. */
+  async copyText(entry: CopyEntry): Promise<string> {
+    if (!isCopyPath(entry.path)) throw new PathNotAllowedError(entry.path);
+    return this.#blobText(entry.sha);
+  }
+
+  /**
    * Dateien, die sich zwischen zwei Commits geändert haben, bei Umbenennungen neuer und alter Name. Namen mit
    * gesperrten Wortteilen lässt sie weg.
    */
@@ -393,3 +424,6 @@ export class GitHubClient {
     if (expiry !== null) this.lastTokenExpiry = expiry;
   }
 }
+
+/** Was die Kopie von "Frag Claude" vom Client braucht. */
+export type CopyClient = Pick<GitHubClient, 'headSha' | 'vaultTree' | 'copyText'>;

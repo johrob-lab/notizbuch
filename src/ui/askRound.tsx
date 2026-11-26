@@ -1,5 +1,6 @@
 import type { ComponentChildren, JSX } from 'preact';
 import { useMemo } from 'preact/hooks';
+import { ohneQuellenZeile, type Quelle } from '../gehirn/quellen';
 import { costLabel } from '../ki/cost';
 import type { SentTurn } from '../ki/prompt';
 import { timeVienna, type Day } from '../lib/dates';
@@ -9,15 +10,18 @@ import { noteToVNodes, type NoteContext } from './noteView';
 import type { Pressable } from './pointerBits';
 import { FAILED } from './texts';
 
-// Eine Runde im Fenster „Frag Claude“ (AskWindow.tsx): die Frage, darunter klein die Uhrzeit und die Seite, die mitging, dann die
-// Antwort mit ihren Hinweisen und den Kosten. Die Antwort erscheint wie eine Notiz in der Karte Morgenbriefing (`renderNote` und
-// `noteToVNodes`): nur bekannte Elemente, nie HTML aus dem Text. Links auf einen Tag der App und mit http oder https bleiben Links (die ins Netz mit `noopener`), jede andere Adresse wird Text.
+// Eine Runde im Fenster „Frag Claude“ (AskWindow.tsx): die Frage, darunter klein die Uhrzeit und die Seite, die mitging, die grauen
+// Zeilen der Suche, dann die Antwort mit ihren Hinweisen und den Kosten. Die Antwort erscheint wie eine Notiz in der Karte
+// Morgenbriefing (`renderNote` und `noteToVNodes`): nur bekannte Elemente, nie HTML aus dem Text. Links auf einen Tag der App und mit http oder https bleiben Links (die ins Netz mit `noopener`), jede andere Adresse wird Text.
 
 /**
  * Eine Runde des Gesprächs. `label` ist der Name der Seite, die mit der Frage ging, `null` ohne Seite. `noteDay` ist der Tag der
  * Notiz, zu der die Antwort gehört: der Tag der Seite, die beim Fragen offen war, auch wenn sie nicht mitging, auf Woche, Monat oder
  * ohne Seite der Tag der Frage. `sent` ist, was mit der Frage an Claude ging (eine Nachfrage schickt es noch einmal mit). `cost` sind
- * die Kosten der Antwort in Cent, `null` ohne Zahlen und nach „Stopp“.
+ * die Kosten der Antwort in Cent über alle Schritte, `null` ohne Zahlen und nach „Stopp“, `partial` heißt: Es fehlten Zahlen, die
+ * Kosten sind eine Untergrenze. `schritte` sind die grauen Zeilen (je Werkzeugaufruf eine und Text, den Claude davor schrieb),
+ * `pfade` die Pfade aller Werkzeugergebnisse. Brach die Antwort nach dem ersten Text an einem Fehler ab (`fehler`), stehen in
+ * `failure` der Satz dazu und in `code` die Spur zur Ursache (`400`, `overloaded_error`), sonst `null`.
  */
 export type Turn = {
   id: number;
@@ -25,11 +29,18 @@ export type Turn = {
   at: Date;
   label: string | null;
   noteDay: Day;
+  /** Der Tag der Seite, die mit der Frage ging, `null` ohne Tagesseite (Woche, Monat, keine Seite, Schalter aus). */
+  seitenTag: Day | null;
   sent: SentTurn;
   answer: string;
-  state: 'laeuft' | 'fertig' | 'gestoppt' | 'abgeschnitten';
+  state: 'laeuft' | 'fertig' | 'gestoppt' | 'abgeschnitten' | 'fehler';
   cost: number | null;
+  partial: boolean;
   imageFailed: boolean;
+  schritte: string[];
+  pfade: string[];
+  failure: string | null;
+  code: string | null;
 };
 
 const IMAGE_FAILED = 'Das Bild der Seite ließ sich nicht erstellen. Claude bekam nur die Angaben zur Seite.';
@@ -52,17 +63,28 @@ export type RoundActions = {
   copy: CopyState;
   onTake(): void;
   onCopy(): void;
+  /** Die Quellen dieser Runde (leer ohne, nach einem Fehler und solange sie läuft) und was ein Tipp auf eine tut. */
+  quellen: Quelle[];
+  onQuelle(quelle: Quelle): void;
   press(b: Pressable & { run(): void }): JSX.IntrinsicElements['button'];
 };
 
-const TAKE_LABEL: Record<TakeState, string> = { nein: 'In Ergänzungen übernehmen', laeuft: 'Wird übernommen …', fertig: 'Übernommen', fehler: 'In Ergänzungen übernehmen' };
-const COPY_LABEL: Record<CopyState, string> = { nein: 'Kopieren', kopiert: 'Kopiert', fehler: 'Kopieren ging nicht.' };
+const TAKE_LABEL: Record<TakeState, string> = {
+  nein: 'In Ergänzungen übernehmen',
+  laeuft: 'Wird übernommen …',
+  fertig: 'Übernommen',
+  fehler: 'In Ergänzungen übernehmen',
+};
+const COPY_LABEL: Record<CopyState, string> = {
+  nein: 'Kopieren',
+  kopiert: 'Kopiert',
+  fehler: 'Kopieren ging nicht.',
+};
 
 const ignore = (): void => undefined;
 
-/** Die Antwort als Bauteile, nur zum Lesen: Aufgaben haben ein gesperrtes Kästchen, es gibt keinen Stift und nichts zu bearbeiten. */
-function answerNodes(answer: string): ComponentChildren {
-  const md = visibleMarkdown(answer);
+/** Markdown als Bauteile, nur zum Lesen (die Antwort und die Notiz der Ansicht zum Lesen): Aufgaben haben ein gesperrtes Kästchen, es gibt keinen Stift und nichts zu bearbeiten. */
+export function readOnlyNodes(md: string): ComponentChildren {
   const ctx: NoteContext = {
     lines: md.split('\n'),
     editing: null,
@@ -78,21 +100,62 @@ function answerNodes(answer: string): ComponentChildren {
   return noteToVNodes(renderNote(md), ctx);
 }
 
+/** Die Antwort ohne die Zeile `Quellen:`, wie eine Notiz zum Lesen. */
+const answerNodes = (answer: string, laeuft: boolean): ComponentChildren => readOnlyNodes(visibleMarkdown(ohneQuellenZeile(answer, laeuft)));
+
 /** Eine Runde. Die Antwort wird nur neu zerlegt, wenn ihr Text sich ändert: Während eine Antwort läuft, bleiben die älteren, wie sie sind. */
 export function Round({ turn, actions }: { turn: Turn; actions: RoundActions }) {
-  const answer = useMemo(() => answerNodes(turn.answer), [turn.answer]);
+  const answer = useMemo(() => answerNodes(turn.answer, turn.state === 'laeuft'), [turn.answer, turn.state]);
   const waiting = turn.state === 'laeuft' && turn.answer === '';
   // Knöpfe gibt es nur für eine Runde mit Text, nicht, solange sie noch läuft.
   const hasText = turn.state !== 'laeuft' && turn.answer.trim() !== '';
   const { take, copy, press } = actions;
+  // Die Hinweise unter der Antwort, in dieser Reihenfolge.
+  const hints = [turn.imageFailed && IMAGE_FAILED, turn.state === 'gestoppt' && STOPPED, turn.state === 'abgeschnitten' && CUT].filter(
+    (hint): hint is string => hint !== false,
+  );
   return (
     <li class="frag-runde">
       <p class="frag-frage">{turn.question}</p>
       <p class="frag-wann">{`${timeVienna(turn.at)} · ${turn.label ?? 'ohne Seite'}`}</p>
+      {turn.schritte.length > 0 && (
+        <ol class="frag-schritte">
+          {turn.schritte.map((schritt, i) => (
+            <li key={i}>{schritt}</li>
+          ))}
+        </ol>
+      )}
       <div class="frag-antwort">{waiting ? '…' : answer}</div>
-      {turn.imageFailed && <p class="frag-hinweis">{IMAGE_FAILED}</p>}
-      {turn.state === 'gestoppt' && <p class="frag-hinweis">{STOPPED}</p>}
-      {turn.state === 'abgeschnitten' && <p class="frag-hinweis">{CUT}</p>}
+      {hints.map((hint) => (
+        <p key={hint} class="frag-hinweis">
+          {hint}
+        </p>
+      ))}
+      {turn.failure !== null && (
+        <p class="frag-fehlersatz" role="alert">
+          {turn.failure}
+        </p>
+      )}
+      {turn.code !== null && <p class="frag-code">{`Fehlercode ${turn.code}`}</p>}
+      {actions.quellen.length > 0 && (
+        <div class="frag-quellen">
+          <h4>Quellen</h4>
+          <div class="frag-quellenknoepfe">
+            {actions.quellen.map((quelle, i) => (
+              <button
+                type="button"
+                class="knopf frag-quelle"
+                {...press({
+                  key: `quelle-${turn.id}-${i}`,
+                  run: () => actions.onQuelle(quelle),
+                })}
+              >
+                {quelle.etikett}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {hasText && (
         <div class="frag-aktionen">
           <button type="button" class="knopf" {...press({ key: `kopieren-${turn.id}`, run: actions.onCopy })}>
@@ -102,7 +165,11 @@ export function Round({ turn, actions }: { turn: Turn; actions: RoundActions }) 
             type="button"
             class="knopf"
             disabled={take === 'laeuft' || take === 'fertig'}
-            {...press({ key: `uebernehmen-${turn.id}`, disabled: take === 'laeuft' || take === 'fertig', run: actions.onTake })}
+            {...press({
+              key: `uebernehmen-${turn.id}`,
+              disabled: take === 'laeuft' || take === 'fertig',
+              run: actions.onTake,
+            })}
           >
             {TAKE_LABEL[take]}
           </button>
@@ -113,7 +180,7 @@ export function Round({ turn, actions }: { turn: Turn; actions: RoundActions }) 
           {FAILED}
         </p>
       )}
-      {turn.cost !== null && <p class="frag-kosten">{costLabel(turn.cost)}</p>}
+      {turn.cost !== null && <p class="frag-kosten">{costLabel(turn.cost, turn.partial)}</p>}
     </li>
   );
 }

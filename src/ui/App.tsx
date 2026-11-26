@@ -3,7 +3,7 @@ import { SMOOTHING } from '../ink/types';
 import { checkKey, FAILURE_TEXT } from '../ki/claude';
 import { AccessChangedError, accessProblem, PendingChangesError, saveAccess, waitingText } from '../lib/access';
 import { todayVienna, type Day } from '../lib/dates';
-import { aktuellerSperrenKey, parseSperrenKey } from '../lib/sperren';
+import { aktuellerSperrenKey, neuerSperrenKey } from '../lib/sperren';
 import { expiryWarning, knownExpiry } from '../lib/expiry';
 import { pageName } from '../lib/filenames';
 import { kiModelOf, loadSettings, updateSettings, vollbildOf, type Settings, type Vollbild } from '../lib/settings';
@@ -456,7 +456,7 @@ export function App() {
     void updateSettings(now.store, (saved) => ({ ...saved, sperren: key })).catch(() => undefined);
   };
   const lastSperren = boot.phase === 'bereit' ? boot.settings.sperren : undefined;
-  const sperrenKey = lastSperren !== undefined && parseSperrenKey(lastSperren) ? lastSperren : aktuellerSperrenKey(today);
+  const sperrenKey = (lastSperren === undefined ? null : neuerSperrenKey(lastSperren)) ?? aktuellerSperrenKey(today);
 
   // Vollbild gilt nur auf Seiten, nie in den Einstellungen und in der Liste der Besprechungen.
   const vollbild = boot.phase === 'bereit' ? vollbildOf(boot.settings) : null;
@@ -554,6 +554,8 @@ export function App() {
             {canAsk && (
               <AskWindow
                 engine={boot.engine}
+                client={boot.client}
+                repo={boot.settings.repo}
                 kiKey={askKey}
                 model={kiModelOf(boot.settings)}
                 page={askPage}

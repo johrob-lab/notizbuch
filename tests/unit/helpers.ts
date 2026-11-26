@@ -70,3 +70,33 @@ export const messageDelta = (stop: string, output: number) =>
   sse('message_delta', { type: 'message_delta', delta: { stop_reason: stop }, usage: { output_tokens: output } });
 export const messageStop = () => sse('message_stop', { type: 'message_stop' });
 export const errorEvent = (type: string, message: string) => sse('error', { type: 'error', error: { type, message } });
+
+// Die Blöcke einer Antwort mit ihrem `index`: Anfang, Stücke und Ende. `textDelta` oben bleibt ein Stück Text bei 0 ohne Anfang.
+export const blockStart = (index: number, block: unknown) =>
+  sse('content_block_start', { type: 'content_block_start', index, content_block: block });
+const blockDelta = (index: number, delta: unknown) => sse('content_block_delta', { type: 'content_block_delta', index, delta });
+export const textDeltaAt = (index: number, text: string) => blockDelta(index, { type: 'text_delta', text });
+export const thinkingDelta = (index: number, thinking: string) => blockDelta(index, { type: 'thinking_delta', thinking });
+export const signatureDelta = (index: number, signature: string) => blockDelta(index, { type: 'signature_delta', signature });
+export const inputJsonDelta = (index: number, partial_json: string) => blockDelta(index, { type: 'input_json_delta', partial_json });
+export const blockStop = (index: number) => sse('content_block_stop', { type: 'content_block_stop', index });
+
+/**
+ * Ein falsches `fetch` für ein Gespräch mit mehreren Anfragen: Anfrage n (ab 0) bekommt den Strom aus `responses[n]`, wie bei
+ * `streamOf`. `status` nennt den Status je Anfrage (sonst 200), mit `hold: n` hält der Strom der Anfrage n nach dem ersten
+ * Stück an, bis ihr Signal abbricht. Kommt eine Anfrage mehr, als es Antworten gibt, scheitert sie. `calls` merkt jede Anfrage.
+ */
+export function stepsOf(
+  responses: string[][],
+  o: { status?: Record<number, number>; hold?: number } = {},
+): typeof fetch & { calls: Call[] } {
+  const calls: Call[] = [];
+  const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const n = calls.length;
+    calls.push({ url: String(input), init: init ?? {} });
+    if (n >= responses.length) throw new Error(`stepsOf: keine Antwort für Anfrage ${n + 1}`);
+    return streamOf(responses[n], { status: o.status?.[n], hold: o.hold === n })(input, init);
+  }) as typeof fetch & { calls: Call[] };
+  fn.calls = calls;
+  return fn;
+}

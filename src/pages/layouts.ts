@@ -4,8 +4,8 @@ import { addDays, formatDayLong, isValidDay, isoWeekKey, monthGrid, monthKey, MO
 import { besprechungBase } from '../lib/filenames';
 import { holidaysAT } from '../lib/holidays';
 import { istTabelle } from '../lib/meetings';
-import { parseSperrenKey, quartalMonate, sperrenMonatsname } from '../lib/sperren';
-import { SPERREN_GEOMETRIE, SPERREN_MARKER, sperrenFeldId } from './sperren';
+import { parseSperrenKey, seitenMonate, sperrenMonatsname, sperrenZeitraum } from '../lib/sperren';
+import { PLAETZE, SPERREN_GEOMETRIE, SPERREN_MARKER, sperrenFeldId } from './sperren';
 import { TABELLE_SPALTEN, TABELLE_ZEILEN, tabelleGeometrie, zeilenFeld } from './tabelle';
 import { fitLines, geburtstagItem, moreLabel, prioItems, SEPARATOR, terminItems, textWidth, withHead, type AgendaDay, type AgendaItem } from './agenda';
 
@@ -507,12 +507,12 @@ export function meetingLayout(meta: Record<string, string>): Layout {
 
 const SPERREN_TAGE = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 
-/** Das Quartal einer Fachlinie: drei Monatsspalten, je Tag eine Zeile mit zwei Schreibfeldern. Wirft bei einem ungültigen Schlüssel. */
+/** Zwei Monate einer Fachlinie: zwei Monatsspalten, je Tag eine Zeile mit drei Schreibfeldern. Wirft bei einem ungültigen Schlüssel. */
 export function sperrenLayout(key: string): Layout {
   const s = parseSperrenKey(key);
   if (!s) throw new Error(`Ungültiger Sperrenschlüssel „${key}“.`);
   const g = SPERREN_GEOMETRIE;
-  const months = quartalMonate(s);
+  const months = seitenMonate(s);
   const holiday = holidayLookup();
   const days = (month: string): Day[] => {
     const out: Day[] = [];
@@ -524,7 +524,7 @@ export function sperrenLayout(key: string): Layout {
     for (const d of days(month)) {
       const y = g.zeile0 + (dayNumber(d) - 1) * g.zeilenhoehe;
       const wd = SPERREN_TAGE[weekdayIndex(d)];
-      for (const platz of [1, 2] as const) {
+      for (const platz of PLAETZE) {
         const [dd, mm, yy] = [d.slice(8, 10), d.slice(5, 7), d.slice(0, 4)];
         fields.push({
           id: sperrenFeldId(d, platz),
@@ -543,7 +543,7 @@ export function sperrenLayout(key: string): Layout {
     cards: [],
     background: once(() => {
       let out = paper() + text(LEFT, 80, `Sperren ${s.fachlinie}`, { 'font-size': 40, 'font-weight': 700, fill: COLOR.text });
-      out += text(LEFT, 112, `${s.quartal}. Quartal ${s.jahr}`, { 'font-size': 20, fill: COLOR.muted });
+      out += text(LEFT, 112, sperrenZeitraum(s), { 'font-size': 20, fill: COLOR.muted });
       let fills = '';
       let lines = '';
       let labels = '';
@@ -569,7 +569,7 @@ export function sperrenLayout(key: string): Layout {
             labels += text(x + 8, y + 36, `KW ${Number(isoWeekKey(d).slice(6))}`, { 'font-size': 10, fill: name ? COLOR.holiday : COLOR.faint });
           }
           lines += `M${num(x)} ${num(y)}h${num(g.breite)}`;
-          lines += `M${num(x + g.label + g.platz)} ${num(y)}v${g.zeilenhoehe}`;
+          for (const platz of [0, 1, 2]) lines += `M${num(x + g.label + platz * g.platz)} ${num(y)}v${g.zeilenhoehe}`;
         }
         lines += `M${num(x)} ${num(bottom)}h${num(g.breite)}`;
         lines += `M${num(x + g.label)} ${num(g.zeile0)}V${num(bottom)}`;

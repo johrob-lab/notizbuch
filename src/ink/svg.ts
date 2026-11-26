@@ -151,7 +151,7 @@ function strokeMarkup(s: Stroke): string {
 }
 
 /** Index des ersten Feldes, das die Mitte des Rahmens um die Punkte enthält (Ränder zählen mit), sonst -1. */
-function fieldIndex(fields: FieldBox[], pts: Pt[]): number {
+function fieldIndex(fields: readonly FieldBox[], pts: readonly Pt[]): number {
   let x0 = Infinity;
   let y0 = Infinity;
   let x1 = -Infinity;
@@ -228,6 +228,20 @@ export function serializePage(p: Page, fields: FieldBox[], background: string): 
     (i < 0 ? frei : groups[i]).paths.push(strokeMarkup(s));
   }
   return writeSvg(p, stripInvalid(background), [...groups, frei], tools);
+}
+
+/**
+ * Die `id`s der Felder, in denen Striche liegen, nach derselben Regel wie `serializePage`: Ein Strich gehört zum ersten Feld, das
+ * die Mitte seines Rahmens enthält. Striche ohne Punkte und Striche außerhalb aller Felder zählen nicht.
+ */
+export function belegteFelder(strokes: readonly Stroke[], fields: readonly FieldBox[]): Set<string> {
+  const belegt = new Set<string>();
+  for (const s of strokes) {
+    if (!s.pts.length) continue;
+    const i = fieldIndex(fields, s.pts);
+    if (i >= 0) belegt.add(fields[i].id);
+  }
+  return belegt;
 }
 
 // ---------- Lesen ----------

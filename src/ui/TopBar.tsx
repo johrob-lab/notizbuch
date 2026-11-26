@@ -12,7 +12,7 @@ type Props = {
    * einen Tag, eine Woche oder einen Monat. Solange eine Besprechung sie noch nicht liefert, sind beide Pfeile grau.
    */
   steps?: Steps;
-  /** Wohin „Sperren“ führt: die Sperrenseite, die auf diesem Gerät zuletzt offen war, sonst das aktuelle Quartal. */
+  /** Wohin „Sperren“ führt: die Sperrenseite, die auf diesem Gerät zuletzt offen war, sonst die Seite mit dem laufenden Monat. */
   sperrenKey: string;
   /**
    * Ein Hinweis, der beim Start der App kommt (zum Beispiel, dass der Zugang bald abläuft). Er steht wie jede Meldung da, bis man ihn

@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'preact/hooks';
+import { kopieImSpeicher } from '../gehirn/kopie';
 import { dayExtras } from '../ki/pageInfo';
 import { todayVienna, type Day } from '../lib/dates';
 import type { DayEntry } from '../lib/dayMeetings';
@@ -47,7 +48,11 @@ export function TagPage({ day, listDir, ...rest }: PageProps & { day: Day; listD
   const onEntries = useCallback((list: DayEntry[]) => {
     entries.current = list;
   }, []);
-  const askExtra = useCallback(async () => dayExtras(day, await rest.engine.peek(dailyNotePath(day)), entries.current), [day, rest.engine]);
+  const askExtra = useCallback(async () => {
+    const look = await rest.engine.peekLookup(dailyNotePath(day));
+    const ausKopie = look.unknown ? (kopieImSpeicher()?.text(dailyNotePath(day)) ?? null) : null;
+    return dayExtras(day, look, entries.current, ausKopie);
+  }, [day, rest.engine]);
 
   return (
     <PageView

@@ -39,14 +39,24 @@ function startsWithFolder(segments: string[], folder: readonly string[], strict:
   return folder.every((part, i) => segments[i] === part);
 }
 
-function isAllowed(path: unknown, mode: unknown): boolean {
-  if (typeof path !== 'string') return false;
+/**
+ * Die Formprüfung, die jede Pfadregel teilt: Text, keine Steuerzeichen, kein `\`, keine leeren Teile, kein `.` oder `..`,
+ * kein gesperrter Wortteil. Liefert die Pfadteile der NFC-Form, bei einem Formfehler `null`.
+ */
+function safeSegments(path: unknown): string[] | null {
+  if (typeof path !== 'string') return null;
   const normalized = normalizePath(path);
-  if (CONTROL_OR_BROKEN.test(normalized) || normalized.includes('\\')) return false;
+  if (CONTROL_OR_BROKEN.test(normalized) || normalized.includes('\\')) return null;
   const segments = normalized.split('/');
   // Leere Teile fangen auch den leeren Pfad, einen Schrägstrich am Anfang oder Ende und `//` ab.
-  if (segments.some((part) => part === '' || part === '.' || part === '..')) return false;
-  if (hasBlockedWordPart(normalized)) return false;
+  if (segments.some((part) => part === '' || part === '.' || part === '..')) return null;
+  if (hasBlockedWordPart(normalized)) return null;
+  return segments;
+}
+
+function isAllowed(path: unknown, mode: unknown): boolean {
+  const segments = safeSegments(path);
+  if (!segments) return false;
 
   switch (mode) {
     case 'write':
@@ -73,4 +83,23 @@ function isAllowed(path: unknown, mode: unknown): boolean {
  */
 export function assertAllowedPath(path: string, mode: Mode): void {
   if (!isAllowed(path, mode)) throw new PathNotAllowedError(path);
+}
+
+// Nur für die Kopie von "Frag Claude": CSV nur aus diesem Ordner.
+const COPY_CSV_FOLDER = ['07 Anhänge', 'Notizbuch'] as const;
+
+/**
+ * Diese Regel gilt nur für die Kopie von "Frag Claude", sie erlaubt nur Lesen über die sha aus dem Baum eines Commits.
+ * Erlaubt: `.md` überall und `.csv` unter `07 Anhänge/Notizbuch/` (Endung groß oder klein). Abgelehnt: jeder Pfadteil mit
+ * `.` am Anfang (`.obsidian`, `.claude`, `.trash` ...), `CLAUDE.md` im Hauptordner, Namen mit `(Konflikt` und alle Formfehler
+ * und gesperrten Wortteile wie bei `assertAllowedPath`. Geprüft wird die NFC-Form.
+ */
+export function isCopyPath(path: string): boolean {
+  const segments = safeSegments(path);
+  if (!segments) return false;
+  if (segments.some((part) => part.startsWith('.') || part.includes('(Konflikt'))) return false;
+  if (segments.length === 1 && segments[0] === 'CLAUDE.md') return false;
+  const name = segments[segments.length - 1].toLowerCase();
+  if (name.endsWith('.md')) return true;
+  return name.endsWith('.csv') && startsWithFolder(segments, COPY_CSV_FOLDER, true);
 }

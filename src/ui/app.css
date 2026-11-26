@@ -152,6 +152,14 @@ body {
   white-space: nowrap;
 }
 
+/* Der Stand aus Excel im Kopf der Sperrenseite, eine eigene Zeile unter den Knöpfen. */
+.excelstand {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 14px;
+  color: #5f6862;
+}
+
 .kopfhinweis {
   flex-basis: 100%;
   margin: 0;
@@ -2234,14 +2242,15 @@ body {
  */
 .frag-fenster {
   position: absolute;
-  top: 69px;
+  /* `--frag-oben` setzt AskWindow.tsx: die Unterkante der Werkzeugleiste plus 8 (umgebrochen unter 744 Punkten höher als 61). */
+  top: var(--frag-oben, 69px);
   right: max(12px, env(safe-area-inset-right));
   z-index: 3;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
   width: min(460px, calc(100% - 80px));
-  max-height: calc(100% - 81px);
+  max-height: calc(100% - var(--frag-oben, 69px) - 12px);
   padding: 12px 16px 16px;
   border: 1px solid var(--linie);
   border-radius: 12px;
@@ -2394,16 +2403,48 @@ body {
   white-space: nowrap;
 }
 
-/* Leer nimmt die Zeile keinen Platz, bleibt aber im Baum: Ein Fehler, der erst später erscheint, wird so vorgelesen. */
+/*
+ * Leer nehmen die Zeile zur Kopie und die Fehlerzeile keinen Platz, bleiben aber im Baum: Was erst später erscheint, wird so
+ * vorgelesen.
+ */
+/* Grau (Kopie, Hinweise) und rot (Fehler) gelten für das Fenster und die Runden zugleich. */
+.frag-gehirn,
+.frag-hinweis {
+  color: #5f6862;
+}
+
+.frag-fehler,
+.frag-fehlersatz {
+  color: #a32a24;
+}
+
+.frag-gehirn {
+  flex: none;
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+
 .frag-fehler {
   flex: none;
   margin: 8px 0 0;
-  color: #a32a24;
   font-size: 15px;
 }
 
+.frag-gehirn:empty,
 .frag-fehler:empty {
   margin: 0;
+}
+
+/* Die Spur zur Ursache unter dem Fehlersatz (im Fenster und in einer Runde) und die Kosten: klein und grau. */
+.frag-code,
+.frag-kosten {
+  color: #7d877f;
+  font-size: 13px;
+}
+
+.frag-code {
+  flex: none;
+  margin: 2px 0 0;
 }
 
 .frag-verlauf {
@@ -2437,6 +2478,71 @@ body {
   margin: 2px 0 6px;
   color: #5f6862;
   font-size: 13px;
+}
+
+/* Die Suchzeilen: je Werkzeugaufruf eine kleine graue Zeile zwischen Frage und Antwort, ohne Nummern. */
+.frag-schritte {
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+  color: #7d877f;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* Die Quellen unter der Antwort: eine kleine Überschrift und je Quelle ein Knopf. */
+.frag-quellen {
+  margin: 6px 0;
+}
+
+.frag-quellen h4 {
+  margin: 0 0 4px;
+  color: #5f6862;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.frag-quellenknoepfe {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.frag-quelle {
+  min-height: 40px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Die Ansicht zum Lesen: statt des Verlaufs die Notiz einer Quelle, nur zum Lesen. */
+.frag-lesen {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--linie);
+}
+
+.frag-lesen h3 {
+  margin: 0;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.frag-lesetext {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+.frag-lesen .knopf {
+  align-self: flex-start;
 }
 
 /* Die Antwort wie eine Notiz, nur kleiner als in der Karte Morgenbriefing. */
@@ -2529,7 +2635,12 @@ body {
 
 .frag-hinweis {
   margin: 6px 0 0;
-  color: #5f6862;
+  font-size: 14px;
+}
+
+/* Die Antwort brach nach dem ersten Text an einem Fehler ab: Der Satz steht unter dem Text, rot wie die Fehlerzeile. */
+.frag-fehlersatz {
+  margin: 6px 0 0;
   font-size: 14px;
 }
 
@@ -2542,8 +2653,6 @@ body {
 
 .frag-kosten {
   margin: 4px 0 0;
-  color: #7d877f;
-  font-size: 13px;
 }
 
 /*
@@ -2666,4 +2775,34 @@ body {
   font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-size: 18px;
   background: #fffefa;
+}
+
+/*
+ * Die abgestimmten Sperren aus dem Excel-Stand auf der Sperrenseite (GraueSperren.tsx): grau in den freien Plätzen, eine Zeile
+ * je Platz, zu Langes endet mit „…“. Die Ebene liegt wie die Karten in Seiteneinheiten über der Fläche, ist aber keine Karte:
+ * Sie fängt weder Stift noch Finger noch Maus ab, geschrieben und getippt wird überall wie sonst. „+1“ steht oben rechts im
+ * Platz 3, wenn eine Sperre keinen freien Platz mehr fand.
+ */
+.graue-sperren {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.graue-sperren .grau {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 0 6px;
+  font: 14px/44px 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  color: #8a938c;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.graue-sperren .grau-mehr {
+  position: absolute;
+  font: 600 11px/14px 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  color: #6f7a72;
+  text-align: right;
 }

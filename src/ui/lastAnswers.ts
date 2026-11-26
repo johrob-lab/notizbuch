@@ -1,9 +1,9 @@
 import type { SyncEngine } from '../sync/engine';
 
-// Die letzte Antwort der Engine je Datei, für die Haken, die beim Aufgehen einer Seite Dateien lesen (`useVaultList`,
-// `usePrioritaeten`): Eine Seite, die neu aufgeht, beginnt damit statt leer, bis ihre eigene Anfrage antwortet. Beim Weiterscrollen
-// zeigt die neue Seite so im ersten Bild dieselben Termine, Geburtstage und Prioritäten wie eben ihre Vorschau oder sie selbst
-// davor, statt sie bis zum Lesen für einen Augenblick zu verlieren.
+// Die letzte Antwort der Engine je Datei, für die Haken, die beim Aufgehen einer Seite Dateien lesen (`useVaultText` und damit
+// `useVaultList`, `usePrioritaeten`): Eine Seite, die neu aufgeht, beginnt damit statt leer, bis ihre eigene Anfrage antwortet.
+// Beim Weiterscrollen zeigt die neue Seite so im ersten Bild dieselben Termine, Geburtstage und Prioritäten wie eben ihre Vorschau
+// oder sie selbst davor, statt sie bis zum Lesen für einen Augenblick zu verlieren.
 
 /**
  * Was die Engine für eine Datei zuletzt geliefert hat: ihr Text, `null` für eine Datei, die fehlt oder sich nicht lesen ließ.

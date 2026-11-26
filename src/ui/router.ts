@@ -1,4 +1,4 @@
-import { stepSperrenKey, parseSperrenKey, quartalMonate } from '../lib/sperren';
+import { stepSperrenKey, parseSperrenKey, neuerSperrenKey, seitenMonate } from '../lib/sperren';
 import { addDays, isValidDay, isoWeekKey, monthKey, todayVienna, weekDays, type Day } from '../lib/dates';
 
 // Die Adresse (`window.location.hash`) bestimmt, welche Seite offen ist. Jede Seite hat genau eine gültige Adresse,
@@ -8,7 +8,7 @@ export type View = 'tag' | 'woche' | 'monat' | 'besprechung' | 'besprechungen' |
 
 /**
  * Eine Seite des Notizbuchs. Der Schlüssel ist je nach Ansicht der Tag (`2026-10-29`), die Woche (`2026-W44`),
- * der Monat (`2026-10`) oder der Name der Besprechung ohne Seitennummer, bei den Sperren das Quartal einer Fachlinie (`IB-2027-Q1`). Die Einstellungen und die Liste der Besprechungen haben keinen Schlüssel.
+ * der Monat (`2026-10`) oder der Name der Besprechung ohne Seitennummer, bei den Sperren die Seite mit zwei Monaten einer Fachlinie, benannt nach dem ersten Monat (`IB-2027-03`). Die Einstellungen und die Liste der Besprechungen haben keinen Schlüssel.
  */
 export type Route = { view: View; key: string; n?: number };
 
@@ -58,7 +58,11 @@ function read(hash: string): Route | null {
   }
 
   const sperren = SPERREN_ADDRESS.exec(hash);
-  if (sperren) return parseSperrenKey(sperren[1]) ? { view: 'sperren', key: sperren[1] } : null;
+  if (sperren) {
+    // Eine alte Adresse mit Quartalsschlüssel (`IB-2027-Q2`) öffnet die neue Seite (`IB-2027-03`).
+    const key = neuerSperrenKey(sperren[1]);
+    return key ? { view: 'sperren', key } : null;
+  }
 
   const meeting = MEETING_ADDRESS.exec(hash);
   if (meeting && COUNT.test(meeting[2]) && Number.isSafeInteger(Number(meeting[2]))) {
@@ -125,7 +129,7 @@ export function shownDay(r: Route, today: Day = todayVienna()): Day {
   if (r.view === 'sperren') {
     const s = parseSperrenKey(r.key);
     if (!s) return today;
-    const months = quartalMonate(s);
+    const months = seitenMonate(s);
     return months.includes(monthKey(today)) ? today : `${months[0]}-01`;
   }
   const day = r.key.slice(0, 10);
@@ -155,7 +159,7 @@ export const STEP_LABELS: Record<Route['view'], [string, string]> = {
   monat: ['Voriger Monat', 'Nächster Monat'],
   besprechung: ['Vorige Seite', 'Nächste Seite'],
   besprechungen: ['Vorige Seite', 'Nächste Seite'],
-  sperren: ['Voriges Quartal', 'Nächstes Quartal'],
+  sperren: ['Vorige zwei Monate', 'Nächste zwei Monate'],
   einstellungen: ['Vorige Seite', 'Nächste Seite'],
 };
 
