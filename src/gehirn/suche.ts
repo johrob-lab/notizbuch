@@ -17,12 +17,16 @@ export type Treffer = { path: string; tag: Day | null; abschnitt: string; zeilen
 
 const MAX_TREFFER = 12;
 const MAX_JE_DATEI = 3;
+const MAX_JE_CSV = 12;
 const MAX_ZEILEN = 12;
 const MAX_ZEICHEN = 300;
 const KURZ = 4;
 
-type Abschnitt = { name: string; zeilen: string[]; norm: string[] };
-type Index = { sha: string; tag: Day | null; abschnitte: Abschnitt[] };
+type Tage = { von: Day; bis: Day }[];
+// `nameZeile`: Zeile 0 ist der Dateiname. Er zählt beim Finden, steht aber nie als bloßer Umfeld-Zeile im Ausschnitt.
+// `tage` (Tage je Zeile) hängen an `heute`, weil Daten ohne Jahr davon abhängen. Sie werden einmal je sha und Tag berechnet.
+type Abschnitt = { name: string; zeilen: string[]; norm: string[]; nameZeile: boolean; tage?: Tage[] };
+type Index = { sha: string; tag: Day | null; csv: boolean; abschnitte: Abschnitt[]; tageHeute?: Day };
 
 // Der Index (normalisierte Zeilen je Datei) wird je sha einmal gebaut. Er hält nur Dateien der letzten Suche,
 // ersetzt eine Datei, wenn sich ihre sha ändert, und wächst darum nicht über die Kopie hinaus.
@@ -32,15 +36,16 @@ function baueIndex(datei: KopieDatei): Index {
   const dateiname = datei.path.slice(datei.path.lastIndexOf('/') + 1).replace(/\.[^.]*$/, '');
   const istCsv = datei.path.toLowerCase().endsWith('.csv');
   const abschnitte: Abschnitt[] = [];
-  let aktuell: Abschnitt = { name: '', zeilen: [], norm: [] };
+  let aktuell: Abschnitt = { name: '', zeilen: [], norm: [], nameZeile: false };
   const add = (z: string) => {
     aktuell.zeilen.push(z);
     aktuell.norm.push(normalisiert(z));
   };
   if (istCsv) {
-    add(dateiname);
-    for (const z of csvZeilen(datei.text)) add(z);
-    abschnitte.push(aktuell);
+    // Jede Datenzeile ist ein eigener Abschnitt `Zeile <n>`, damit Wörter und Tage in derselben Zeile stehen müssen.
+    csvZeilen(datei.text).forEach((z, i) =>
+      abschnitte.push({ name: `Zeile ${i + 1}`, zeilen: [z], norm: [normalisiert(z)], nameZeile: false }),
+    );
   } else {
     const alle = (datei.text.startsWith('\uFEFF') ? datei.text.slice(1) : datei.text).split(/\r?\n/);
     // Der Kopf (erster `---`-Block) hat keine Überschriften.
@@ -57,7 +62,7 @@ function baueIndex(datei: KopieDatei): Index {
       const kopf = /^#{1,6}[ \t]+(.*?)[ \t#]*$/.exec(z);
       if (kopf) {
         if (aktuell.zeilen.length > 0) abschnitte.push(aktuell);
-        aktuell = { name: kopf[1], zeilen: [], norm: [] };
+        aktuell = { name: kopf[1], zeilen: [], norm: [], nameZeile: false };
         add(z);
       } else if (z.trim() !== '') add(z);
     }
@@ -67,8 +72,9 @@ function baueIndex(datei: KopieDatei): Index {
   if (!istCsv) {
     abschnitte[0].zeilen.unshift(dateiname);
     abschnitte[0].norm.unshift(normalisiert(dateiname));
+    abschnitte[0].nameZeile = true;
   }
-  return { sha: datei.sha, tag: datumDerNotiz(datei.path, datei.text), abschnitte };
+  return { sha: datei.sha, tag: datumDerNotiz(datei.path, datei.text), csv: istCsv, abschnitte };
 }
 
 type Wort = { text: string; ganz: boolean };
@@ -106,9 +112,17 @@ function kuerzen(z: string): string {
 }
 
 /** Die passenden Zeilen mit je einer davor und danach, zusammengelegt, höchstens 12, je höchstens 300 Zeichen. */
-function ausschnitt(zeilen: string[], passend: Set<number>): string[] {
+function ausschnitt(abschnitt: Abschnitt, passend: Set<number>, csv: boolean): string[] {
+  const zeilen = abschnitt.zeilen;
+  if (csv) return zeilen.map(kuerzen);
   const dabei = new Set<number>();
-  for (const i of passend) for (let j = i - 1; j <= i + 1; j++) if (j >= 0 && j < zeilen.length) dabei.add(j);
+  for (const i of passend) {
+    for (let j = i - 1; j <= i + 1; j++) {
+      if (j < 0 || j >= zeilen.length) continue;
+      if (j === 0 && abschnitt.nameZeile && !passend.has(0)) continue;
+      dabei.add(j);
+    }
+  }
   return [...dabei]
     .sort((a, b) => a - b)
     .slice(0, MAX_ZEILEN)
@@ -133,8 +147,8 @@ export function suchen(
   for (const p of indexe.keys()) if (!pfade.has(p)) indexe.delete(p);
 
   const ordner = anfrage.ordner ? `${normalisiert(anfrage.ordner).replace(/\/+$/, '')}/` : null;
-  const imZeitraum = (z: string): boolean =>
-    datenImText(z, heute).some(
+  const imZeitraum = (tage: Tage): boolean =>
+    tage.some(
       (b) =>
         (anfrage.datumVon === undefined || b.bis >= anfrage.datumVon) &&
         (anfrage.datumBis === undefined || b.von <= anfrage.datumBis),
@@ -147,6 +161,12 @@ export function suchen(
     if (!index || index.sha !== datei.sha) {
       index = baueIndex(datei);
       indexe.set(datei.path, index);
+    }
+    if (mitDatum) {
+      if (index.tageHeute !== heute) {
+        index.tageHeute = heute;
+        for (const a of index.abschnitte) a.tage = undefined;
+      }
     }
     if (anfrage.geschriebenVon !== undefined || anfrage.geschriebenBis !== undefined) {
       if (index.tag === null) continue;
@@ -172,8 +192,9 @@ export function suchen(
       if (!alleWoerter) continue;
       if (mitDatum) {
         let datumGefunden = false;
-        abschnitt.zeilen.forEach((z, i) => {
-          if (imZeitraum(z)) {
+        const tage = (abschnitt.tage ??= abschnitt.zeilen.map((z) => datenImText(z, heute)));
+        tage.forEach((t, i) => {
+          if (imZeitraum(t)) {
             datumGefunden = true;
             passend.add(i);
           }
@@ -184,7 +205,7 @@ export function suchen(
         path: datei.path,
         tag: index.tag,
         abschnitt: abschnitt.name,
-        zeilen: ausschnitt(abschnitt.zeilen, passend),
+        zeilen: ausschnitt(abschnitt, passend, index.csv),
         punkte: passend.size,
       });
     }
@@ -202,7 +223,7 @@ export function suchen(
   for (const t of alle) {
     if (treffer.length >= MAX_TREFFER) break;
     const n = jeDatei.get(t.path) ?? 0;
-    if (n >= MAX_JE_DATEI) continue;
+    if (n >= (t.path.toLowerCase().endsWith('.csv') ? MAX_JE_CSV : MAX_JE_DATEI)) continue;
     jeDatei.set(t.path, n + 1);
     treffer.push(t);
   }
