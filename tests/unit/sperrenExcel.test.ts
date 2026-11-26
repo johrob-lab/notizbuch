@@ -8,6 +8,8 @@ import {
   gueltigeEintraege,
   KEIN_EXCEL_STAND,
   leseExcelStand,
+  pruefeExcelDatei,
+  uebernommenText,
   vergleichsform,
   type ExcelZeile,
 } from '../../src/lib/sperrenExcel';
@@ -301,5 +303,42 @@ describe('excelStandText', () => {
 
   test('ohne Zeilen', () => {
     expect(excelStandText(leseExcelStand(excelCsv([]), ERWARTET), 'IB', 2027)).toBe('Excel-Stand für IB 2027: keine Sperren');
+  });
+});
+
+describe('pruefeExcelDatei', () => {
+  const KEINE_SPERREN = 'Die Datei hat keine Sperren und passt nach ihrem Namen nicht zu IB 2027.';
+  const zeile = { datum: '2027-03-01', abschnitt: 'Muster Abschnitt 1' };
+
+  test('Zeilen einer anderen Fachlinie', () => {
+    const r = pruefeExcelDatei(excelCsv([{ ...zeile, fachlinie: 'Lehne' }]), 'Sperren Lehne 2027 Excel.csv', ERWARTET);
+    expect(r).toEqual({ ok: false, fehler: 'Die Datei ist für Lehne 2027, offen ist IB 2027.' });
+  });
+
+  test('Zeilen passen: der Name zählt nicht', () => {
+    expect(pruefeExcelDatei(excelCsv([zeile]), 'export.csv', ERWARTET).ok).toBe(true);
+  });
+
+  test('nur Kopf mit passendem Namen, auch mit Zähler', () => {
+    expect(pruefeExcelDatei(excelCsv([]), 'Sperren IB 2027 Excel (1).csv', ERWARTET).ok).toBe(true);
+    expect(pruefeExcelDatei(excelCsv([]), 'sperren ib 2027 excel.CSV', ERWARTET).ok).toBe(true);
+  });
+
+  test('nur Kopf mit falschem Namen', () => {
+    for (const name of ['Sperren Lehne 2027 Excel.csv', 'Sperren IB 2028 Excel.csv', 'export.csv']) {
+      expect(pruefeExcelDatei(excelCsv([]), name, ERWARTET), name).toEqual({ ok: false, fehler: KEINE_SPERREN });
+    }
+  });
+
+  test('kein Excel-Stand: der Fehler der Lesung', () => {
+    expect(pruefeExcelDatei('a;b\r\n', 'Sperren IB 2027 Excel.csv', ERWARTET)).toEqual({ ok: false, fehler: KEIN_EXCEL_STAND });
+  });
+});
+
+describe('uebernommenText', () => {
+  const stand = (n: number, nb: number) => ({ fachlinie: 'IB' as const, jahr: 2027, stand: null, zeilen: Array(n).fill(null), ausNotizbuch: nb });
+  test('mehrere und eine Sperre', () => {
+    expect(uebernommenText(stand(223, 0))).toBe('Excel-Stand übernommen: 223 Sperren, davon 0 aus dem Notizbuch.');
+    expect(uebernommenText(stand(1, 1))).toBe('Excel-Stand übernommen: 1 Sperre, davon 1 aus dem Notizbuch.');
   });
 });

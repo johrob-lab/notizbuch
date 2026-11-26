@@ -205,7 +205,12 @@ test('the bar stays one row on an iPad in portrait', async ({ page }) => {
   await page.evaluate(() => (window.location.hash = '#/sperren/IB-2027-01'));
   const kopf = page.locator('.kopf');
   const edges = await Promise.all(
-    [kopf.getByRole('link', { name: 'IB', exact: true }), kopf.getByRole('link', { name: 'Lehne', exact: true }), kopf.getByRole('button', { name: 'Für Excel herunterladen', exact: true })].map(async (el) =>
+    [
+      kopf.getByRole('link', { name: 'IB', exact: true }),
+      kopf.getByRole('link', { name: 'Lehne', exact: true }),
+      kopf.getByRole('button', { name: 'Stand aus Excel holen', exact: true }),
+      kopf.getByRole('button', { name: 'Für Excel herunterladen', exact: true }),
+    ].map(async (el) =>
       Math.round((await el.boundingBox())!.y),
     ),
   );
@@ -486,5 +491,67 @@ test.describe('Excel-Stand', () => {
     await expect(grau(page, 'sperre-2027-03-01-1')).toHaveText(ERSTE);
     await expect(grau(page, 'sperre-2027-03-03-2')).toHaveText('Muster Abschnitt 4');
     await expect(stand(page)).toHaveText('Excel-Stand vom 26.11.2026, 09:40');
+  });
+
+  // ---------- Stand aus Excel holen ----------
+
+  const HOLEN = 'Stand aus Excel holen';
+  const hinweis = (page: Page) => page.locator('.kopf .kopfhinweis');
+  const DATEI = excelCsv([
+    { datum: '2027-03-01', abschnitt: 'Muster Abschnitt 1', gleis: '2', von: '08:00', bis: '14:00', platz: '1', anzeigetext: 'Muster Abschnitt 1 / Gl. 2' },
+    { datum: '2027-03-03', abschnitt: 'Muster Abschnitt 3', platz: '1' },
+  ]);
+
+  /** Klickt auf den Knopf und wählt die Datei im Dialog des Browsers. */
+  async function holen(page: Page, name: string, text: string | Buffer): Promise<void> {
+    const chooser = page.waitForEvent('filechooser');
+    await page.locator('.kopf').getByRole('button', { name: HOLEN, exact: true }).click();
+    await (await chooser).setFiles({ name, mimeType: 'text/csv', buffer: typeof text === 'string' ? Buffer.from(text, 'utf8') : text });
+  }
+
+  for (const device of ['iPad', 'Firmen-PC'] as const) {
+    test(`on the ${device} the chosen file is stored unchanged, shown grey, and the same file can be chosen again`, async ({ page }) => {
+      const repo = await openSeeded(page, MAERZ, { device });
+      repo.offline = true;
+      await expect(stand(page)).toHaveText('Noch kein Excel-Stand für IB 2027');
+      await holen(page, 'Sperren IB 2027 Excel.csv', DATEI);
+      const meldung = 'Excel-Stand übernommen: 2 Sperren, davon 0 aus dem Notizbuch.';
+      await expect(hinweis(page)).toHaveText(meldung);
+      await expect.poll(async () => (await queued(page))[EXCEL_2027]).toBe(DATEI);
+      await expect(stand(page)).toHaveText('Excel-Stand vom 26.11.2026, 09:40');
+      await expect(grau(page, 'sperre-2027-03-01-1')).toHaveText(ERSTE);
+      // Dieselbe Datei noch einmal: Das Feld ist geleert, die Wahl zählt wieder.
+      await holen(page, 'Sperren IB 2027 Excel.csv', DATEI);
+      await expect(hinweis(page)).toHaveText(meldung);
+    });
+  }
+
+  test('a file for another Fachlinie is refused and nothing waits for upload', async ({ page }) => {
+    const repo = await openSeeded(page, MAERZ);
+    repo.offline = true;
+    await holen(page, 'Sperren Lehne 2027 Excel.csv', excelCsv([{ fachlinie: 'Lehne', datum: '2027-03-01', abschnitt: 'Muster Abschnitt 1' }]));
+    await expect(hinweis(page)).toHaveText('Die Datei ist für Lehne 2027, offen ist IB 2027.');
+    await page.waitForTimeout(300);
+    expect((await queued(page))[EXCEL_2027]).toBeUndefined();
+    await expect(stand(page)).toHaveText('Noch kein Excel-Stand für IB 2027');
+  });
+
+  test('without a network the file waits and the message comes', async ({ page }) => {
+    const repo = await openSeeded(page, MAERZ, { device: 'Firmen-PC' });
+    repo.offline = true;
+    await holen(page, 'Sperren IB 2027 Excel (1).csv', DATEI);
+    await expect(hinweis(page)).toHaveText('Excel-Stand übernommen: 2 Sperren, davon 0 aus dem Notizbuch.');
+    expect((await queued(page))[EXCEL_2027]).toBe(DATEI);
+  });
+
+  test('the second window has no button, but shows the grey', async ({ context, page }) => {
+    await openSeeded(page, MAERZ, { files });
+    const second = await context.newPage();
+    await shareRepos(page, second);
+    await second.goto('/notizbuch/' + MAERZ);
+    await expect(second.getByText('Das Notizbuch ist schon in einem anderen Fenster offen.', { exact: true })).toBeVisible();
+    await expect(grau(second, 'sperre-2027-03-01-1')).toHaveText(ERSTE);
+    await expect(second.getByRole('button', { name: DOWNLOAD, exact: true })).toBeVisible();
+    await expect(second.getByRole('button', { name: HOLEN, exact: true })).toHaveCount(0);
   });
 });

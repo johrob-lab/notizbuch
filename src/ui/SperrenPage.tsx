@@ -8,6 +8,7 @@ import { excelStandText, graueSperren, gueltigeEintraege, leseExcelStand, type E
 import { sperrenLayout } from '../pages/layouts';
 import type { ReadFile } from '../sync/github';
 import { GraueSperren } from './GraueSperren';
+import { excelStandHolen } from './excelHolen';
 import { PageView, type Kopf, type KopfTools, type PageProps } from './PageView';
 import { routeHash } from './router';
 import { useCsvDownload } from './useCsvDownload';
@@ -40,10 +41,13 @@ type FormProps = {
   /** Hinweis unter dem Formular (der Download meldet hier, was er getan hat). */
   hinweis: string;
   onDownload(): void;
+  /** Eine Datei für den Excel-Stand wurde gewählt. Fehlt es, gibt es keinen Knopf (zweites Fenster). */
+  onDatei?: (file: File) => void;
 };
 
-function Form({ sperrenKey, stand, hinweis, onDownload }: FormProps) {
+function Form({ sperrenKey, stand, hinweis, onDownload, onDatei }: FormProps) {
   const aktuell = parseSperrenKey(sperrenKey)?.fachlinie;
+  const feld = useRef<HTMLInputElement>(null);
   return (
     <form class="kopfdaten sperrenkopf" aria-label="Sperren" onSubmit={(e) => e.preventDefault()}>
       <div class="fachlinie" role="group" aria-label="Fachlinie">
@@ -54,6 +58,28 @@ function Form({ sperrenKey, stand, hinweis, onDownload }: FormProps) {
         ))}
       </div>
       <div class="seitenleiste">
+        {onDatei && (
+          <>
+            <button type="button" class="knopf" onClick={() => feld.current?.click()}>
+              Stand aus Excel holen
+            </button>
+            <input
+              ref={feld}
+              type="file"
+              accept=".csv,text/csv"
+              hidden
+              aria-hidden="true"
+              tabIndex={-1}
+              onChange={(e) => {
+                const input = e.currentTarget;
+                const file = input.files?.[0];
+                // Geleert wird nach jeder Wahl, damit dieselbe Datei noch einmal gewählt werden kann.
+                input.value = '';
+                if (file) onDatei(file);
+              }}
+            />
+          </>
+        )}
         <button type="button" class="knopf" onClick={onDownload}>
           Für Excel herunterladen
         </button>
@@ -114,7 +140,23 @@ export function SperrenPage({ sperrenKey, readFile, onOpen, ...rest }: Props) {
     [sperrenKey],
   );
   // Am Firmen-PC (`readOnly`) kommt die Liste als Download, am iPad über das Teilen-Blatt, auch im zweiten Fenster.
-  const { hinweis, download } = useCsvDownload({ readFile, readOnly: rest.readOnly });
+  const { hinweis: downloadHinweis, download } = useCsvDownload({ readFile, readOnly: rest.readOnly });
+  // Unter dem Kopf steht die Meldung der Aktion, die zuletzt benutzt wurde: Download oder Holen.
+  const [geholt, setGeholt] = useState('');
+  const [zuletzt, setZuletzt] = useState<'download' | 'holen'>('download');
+  const holend = useRef(false);
+  const holen = async (file: File) => {
+    if (holend.current) return;
+    holend.current = true;
+    setZuletzt('holen');
+    setGeholt('');
+    try {
+      setGeholt(await excelStandHolen(file, { engine: rest.engine, fachlinie, jahr }));
+    } finally {
+      holend.current = false;
+    }
+  };
+  const hinweis = zuletzt === 'holen' ? geholt : downloadHinweis;
   const head: Kopf = {
     ...kopf,
     // Der Knopf ist nie gesperrt: Auch am Firmen-PC und im zweiten Fenster lässt sich die Liste laden. Sie gehört zum Jahr der Seite.
@@ -123,7 +165,9 @@ export function SperrenPage({ sperrenKey, readFile, onOpen, ...rest }: Props) {
         sperrenKey={sperrenKey}
         stand={stand}
         hinweis={hinweis}
+        onDatei={rest.engine.readOnly ? undefined : (file) => void holen(file)}
         onDownload={() => {
+          setZuletzt('download');
           const s = parseSperrenKey(sperrenKey);
           if (s === null) return;
           void download({

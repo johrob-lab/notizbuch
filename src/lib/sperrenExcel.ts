@@ -205,3 +205,27 @@ export function graueSperren(
   }
   return { plaetze, mehr };
 }
+
+export const ZU_GROSS = 'Die Datei ist zu groß für einen Excel-Stand (über 1 MB).';
+export const NICHT_LESBAR = 'Die Datei lässt sich nicht lesen. Bitte die Datei nehmen, die das Makro geschrieben hat.';
+
+const DATEINAME = /^Sperren (IB|Lehne) (\d{4}) Excel(?: \(\d+\))?\.csv$/i;
+
+/**
+ * Prüft eine Datei, die jemand für den Excel-Stand wählt: wie `leseExcelStand`. Hat sie keine Zeilen, sagt nur ihr Name, ob sie zu
+ * der offenen Seite gehört (`Sperren IB 2027 Excel.csv`, auch mit ` (1)` vom Browser).
+ */
+export function pruefeExcelDatei(text: string, name: string, offen: { fachlinie: Fachlinie; jahr: number }): ExcelLesung {
+  const lesung = leseExcelStand(text, offen);
+  if (!lesung.ok || lesung.stand.zeilen.length > 0) return lesung;
+  const m = DATEINAME.exec(name);
+  const passt = m !== null && m[1].toLowerCase() === offen.fachlinie.toLowerCase() && Number(m[2]) === offen.jahr;
+  if (passt) return lesung;
+  return { ok: false, fehler: `Die Datei hat keine Sperren und passt nach ihrem Namen nicht zu ${offen.fachlinie} ${offen.jahr}.` };
+}
+
+/** Die Meldung nach dem Holen, zum Beispiel `Excel-Stand übernommen: 223 Sperren, davon 0 aus dem Notizbuch.` */
+export function uebernommenText(s: ExcelStand): string {
+  const n = s.zeilen.length;
+  return `Excel-Stand übernommen: ${n === 1 ? '1 Sperre' : `${n} Sperren`}, davon ${s.ausNotizbuch} aus dem Notizbuch.`;
+}
