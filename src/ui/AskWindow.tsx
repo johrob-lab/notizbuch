@@ -3,7 +3,7 @@ import { GestureFilter } from '../ink/gestures';
 import { askClaude, FAILURE_TEXT, KiError } from '../ki/claude';
 import { costCents } from '../ki/cost';
 import { pageImage } from '../ki/pageImage';
-import { buildMessages, systemPrompt, type SentTurn } from '../ki/prompt';
+import { buildMessages, systemBlocks, type SentTurn } from '../ki/prompt';
 import { todayVienna } from '../lib/dates';
 import type { KiModel } from '../lib/settings';
 import type { SyncEngine } from '../sync/engine';
@@ -174,7 +174,7 @@ export function AskWindow({ engine, kiKey, model, page, away, control }: Props) 
         : await askClaude({
             key: kiKey,
             model,
-            system: systemPrompt(at),
+            system: systemBlocks(at, null),
             messages: buildMessages([...earlier, sent]),
             signal: stop.signal,
             onText: (delta) => change((now) => ({ answer: now.answer + delta })),

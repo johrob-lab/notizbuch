@@ -44,7 +44,7 @@ const entries: DayEntry[] = [
 ];
 
 test('the day text has the note and the card entries', () => {
-  expect(dayExtras('2026-10-29', 'Zeile 1\nZeile 2', entries)).toBe(
+  expect(dayExtras('2026-10-29', { text: 'Zeile 1\nZeile 2', unknown: false }, entries, null)).toBe(
     [
       'Tagesnotiz 2026-10-29, Anfang:',
       'Zeile 1',
@@ -60,7 +60,7 @@ test('the day text has the note and the card entries', () => {
 });
 
 test('a day without note or entries says so', () => {
-  expect(dayExtras('2026-10-29', null, [])).toBe('Zu diesem Tag gibt es keine Tagesnotiz.\n\nKarte „Besprechungen“ dieses Tages: keine Termine.');
+  expect(dayExtras('2026-10-29', { text: null, unknown: false }, [], null)).toBe('Zu diesem Tag gibt es keine Tagesnotiz.\n\nKarte „Besprechungen“ dieses Tages: keine Termine.');
 });
 
 test('the Sperren page has a name, a header and no note day', () => {
@@ -68,4 +68,12 @@ test('the Sperren page has a name, a header and no note day', () => {
   expect(pageHeader('sperren', 'IB-2027-03', {})).toBe('Sperrenkalender IB, März und April 2027');
   expect(pageHeader('sperren', 'Lehne-2026-11', {})).toBe('Sperrenkalender Lehne, November und Dezember 2026');
   expect(noteDayOf('sperren', 'IB-2027-03', {})).toBeNull();
+});
+
+test('an unknown note comes from the copy or is said to be unloadable', () => {
+  const look = { text: null, unknown: true };
+  expect(dayExtras('2026-10-29', look, [], 'Aus der Kopie')).toBe(
+    'Tagesnotiz 2026-10-29 (aus der Kopie des Vaults), Anfang:\nAus der Kopie\nTagesnotiz, Ende.\n\nKarte „Besprechungen“ dieses Tages: keine Termine.',
+  );
+  expect(dayExtras('2026-10-29', look, [], null)).toBe('Die Tagesnotiz dieses Tages ließ sich gerade nicht laden.\n\nKarte „Besprechungen“ dieses Tages: keine Termine.');
 });

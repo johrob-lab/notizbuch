@@ -292,6 +292,11 @@ export class SyncEngine {
     return (await this.#lookup(path, false)).text;
   }
 
+  /** Wie `peek`, sagt aber auch, ob `null` „gibt es nicht“ oder „ließ sich nicht fragen“ heißt (`unknown`). Bindet die Seite nicht. */
+  async peekLookup(path: string): Promise<{ text: string | null; unknown: boolean }> {
+    return this.#lookup(path, false);
+  }
+
   /** Das Lesen hinter `lookup` und `peek`. Mit `bind` wird die Seite an den Text gebunden und im Hintergrund aufgefrischt. */
   async #lookup(path: string, bind: boolean): Promise<{ text: string | null; unknown: boolean }> {
     const gets = (text: string, version: PageVersion) => {

@@ -382,7 +382,7 @@ test('the page goes along when the switch is on', async () => {
   const body = bodyOf(f.calls[0]);
   expect(body.messages).toHaveLength(1);
   expect(body.messages.at(-1).content).toEqual([IMAGE_BLOCK, { type: 'text', text: 'Offene Seite: Tagesseite Do 29.10.2026\n\nFrage: Was steht an?' }]);
-  expect(body.system.startsWith('Du bist Claude')).toBe(true);
+  expect(body.system[0].text.startsWith('Du bist Claude')).toBe(true);
   expect(body.model).toBe('claude-sonnet-5-5');
   expect((f.calls[0].init.headers as Record<string, string>)['x-api-key']).toBe('sk-ant-test-0000');
   expect(page.describe).toHaveBeenCalledTimes(1);

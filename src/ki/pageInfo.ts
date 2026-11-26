@@ -65,9 +65,19 @@ export function entryText(e: DayEntry): string {
   return parts.join(' · ');
 }
 
-/** Die Angaben zu einem Tag: der Anfang seiner Tagesnotiz und die Karte „Besprechungen“. */
-export function dayExtras(day: Day, note: string | null, entries: DayEntry[]): string {
-  const notePart = note === null ? 'Zu diesem Tag gibt es keine Tagesnotiz.' : `Tagesnotiz ${day}, Anfang:\n${note}\nTagesnotiz, Ende.`;
+/**
+ * Die Angaben zu einem Tag: der Anfang seiner Tagesnotiz und die Karte „Besprechungen“. Ließ sich die Notiz nicht laden
+ * (`unknown`), kommt sie, wenn es sie gibt, aus der Kopie des Vaults (`ausKopie`), sonst sagt der Text das.
+ */
+export function dayExtras(day: Day, look: { text: string | null; unknown: boolean }, entries: DayEntry[], ausKopie: string | null): string {
+  let notePart: string;
+  if (look.text !== null) notePart = `Tagesnotiz ${day}, Anfang:\n${look.text}\nTagesnotiz, Ende.`;
+  else if (look.unknown) {
+    notePart =
+      ausKopie !== null
+        ? `Tagesnotiz ${day} (aus der Kopie des Vaults), Anfang:\n${ausKopie}\nTagesnotiz, Ende.`
+        : 'Die Tagesnotiz dieses Tages ließ sich gerade nicht laden.';
+  } else notePart = 'Zu diesem Tag gibt es keine Tagesnotiz.';
   const cardPart =
     entries.length === 0
       ? 'Karte „Besprechungen“ dieses Tages: keine Termine.'
