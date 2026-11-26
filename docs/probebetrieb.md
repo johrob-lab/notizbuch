@@ -599,6 +599,41 @@ Schreib für die Probe zwei Abschnitte aus deiner Liste hin, aber nimm welche, d
 
 - [ ] Klappt
 
+### 3.22 Frag Claude im ganzen Gehirn
+
+Das Fenster **Frag Claude** kennt jetzt nicht mehr nur die offene Seite, sondern dein ganzes Vault („Gehirn“). Das iPad hält dafür eine Kopie aller Notizen und der Listen im Ordner `07 Anhänge/Notizbuch/`. Dateien mit „recovery“, „passw“, „token“ oder „.key“ im Namen, versteckte Ordner und die `CLAUDE.md` sind nicht dabei. Die Kopie liegt nur auf dem iPad. Sie geht nur an GitHub, um sich aufzufrischen, und an Claude geht nur, was du mit **Fragen** abschickst. Claude sucht in der Kopie selbst. Über der Antwort steht für jeden Suchschritt eine graue Zeile, zum Beispiel „Sucht „TFZF“ … 3 Treffer“. Unter der Antwort stehen die **Quellen**, also die Notizen, aus denen sie stammt. Claude kann nichts ändern. Schreiben geht weiter nur über **In Ergänzungen übernehmen**. Wo: echtes Vault, iPad mit Apple Pencil, dazu ein Computer für die Console. Dauer: etwa 30 Minuten. Voraussetzung: 3.20 ist erledigt, der Schlüssel ist gespeichert und es ist Guthaben da.
+
+Eine Frage mit Suche kostet etwa 2 bis 6 Cent (mit dem Modell **Sonnet (genauer)**). Die Kosten stehen unter der Antwort in der Kostenzeile, zum Beispiel „≈ 3,5 Cent“. Das Limit hast du in 3.20 in der Claude Console im Workspace **Notizbuch** gesetzt. Mehr als das kann nicht abgebucht werden.
+
+Die Fragen unten stellst du so, wie sie hier stehen, sie fragen nach deinen echten Notizen. Die Antworten gehen an Claude, frag also nur, was du Claude auch zeigen willst.
+
+1. Neue Version holen: Beende die App am iPad einmal ganz: Wische vom unteren Rand nach oben, halte kurz und wische die App nach oben weg. Öffne sie dann wieder über das Symbol auf dem Home-Bildschirm. Mach das, bevor du etwas prüfst.
+2. Erstes Laden: Öffne die Tagesseite von heute und tippe ganz rechts in der Werkzeugleiste auf die drei Funken (**Frag Claude**). Erwartet: Das Fenster geht auf, und unter den Knöpfen steht eine Zeile wie „Gehirn wird geladen … 40 von 130“. Die erste Zahl wächst. Du kannst schon fragen, während sie läuft, Claude erfährt dann, dass die Kopie noch nicht vollständig ist. Warte für diese Probe, bis die Zeile weg ist. Erwartet: Die Zeile verschwindet, wenn alles da ist, und es bleibt keine Zeile zurück. Das erste Laden dauert je nach Größe des Vaults ein paar Minuten. Bricht es ab, weil das Netz weg ist, steht „Gehirn: 40 von 130 Notizen da, der Rest kommt mit Netz.“ Dann machst du mit Netz weiter, der Rest wird beim nächsten Öffnen oder bei der nächsten Frage nachgeholt.
+3. Erste Frage: Tippe in das Feld **Was willst du wissen?** und schreib oder sag: `Was findest du zum Thema Bestellung TFZF Lehne im April?` Lass den Schalter **Seite mitschicken** an oder schalte ihn aus, beides ist in Ordnung. Tippe auf **Fragen**. Erwartet: Statt **Fragen** steht **Stopp**. Über der Antwort erscheinen graue Zeilen, eine je Suchschritt, zum Beispiel „Sucht „TFZF“ … 3 Treffer“ oder „Liest Tagesnotiz Mi 25.11.2026“. Dann kommt die Antwort Wort für Wort. Unter ihr steht die Überschrift **Quellen** mit einem Knopf je Quelle, dann die Kostenzeile „≈ … Cent“. Es sind höchstens 8 Schritte. Wird die Grenze erreicht, steht „Grenze von 8 Schritten erreicht“, und Claude sagt in der Antwort, dass die Suche abgebrochen wurde.
+4. Zweite Frage: Tippe auf **Neue Frage** und frag: `Gibt es für die Schulung STE schon eine Einladung?` Tippe auf **Fragen**. Erwartet: Wie in Schritt 3: graue Suchzeilen, dann die Antwort mit **Quellen**. Wo nichts steht, sagt Claude das, statt etwas zu erfinden.
+5. Quelle mit Datum: Tippe unter der Antwort auf eine Quelle, die ein Datum trägt, zum Beispiel „Do 26.11.2026“. Erwartet: Der Tag geht in der App auf, und das Fenster **Frag Claude** bleibt offen. Steht bei der Quelle ein Abschnitt in Klammern, zum Beispiel „Do 26.11.2026 (Besprechung Beispiel)“, ist es derselbe Tag.
+6. Andere Quelle: Tippe auf eine Quelle ohne Datum, zum Beispiel eine Notiz aus `02 Projekte` oder eine Liste mit „.csv“ im Namen. Erwartet: Im Fenster steht der Name der Quelle als Überschrift und darunter die Notiz zum Lesen, bei einer Liste Zeile für Zeile. Hat die Quelle einen Abschnitt, springt die Ansicht dorthin. Darunter steht der Knopf **Zurück zur Antwort**. Tippe darauf. Erwartet: Die Antwort steht wieder da, mit den Quellen. Die Notiz lässt sich hier nicht ändern.
+7. Übernehmen: Tippe unter der Antwort auf **In Ergänzungen übernehmen**. Erwartet: Kurz steht „Wird übernommen …“, dann „Übernommen“. Tippe auf **Schließen**, öffne in Obsidian die Tagesnotiz von heute und schau in den Abschnitt **Ergänzungen**. Erwartet: Dort stehen die Zeile `Claude, HH:MM: …` mit der Frage, die Punkte der Antwort und als letzter Punkt eine Zeile wie `Quellen: [[2026-11-26]], [[Sperren Abschnitte Lehne]]`. Die Namen sind Links, ein Tipp darauf öffnet die Notiz. Lösche die Zeilen danach in Obsidian, wenn du sie nicht brauchst, und achte auf `- [ ]`, das ginge am Abend als Aufgabe nach Outlook.
+8. Wieder öffnen ohne neues Laden: Tippe auf **Schließen** und gleich wieder auf die drei Funken. Erwartet: Es steht keine Zeile „Gehirn wird geladen …“. Die Kopie ist schon da, und nichts wird neu geladen, solange sich im Vault nichts geändert hat. Schreib in Obsidian oder in der App eine Änderung in eine Notiz, warte bis oben **Gesichert** steht und öffne das Fenster noch einmal. Erwartet: Es wird nur nachgeholt, was neu ist, die Zeile steht höchstens kurz da, und die Frage nach der geänderten Notiz findet den neuen Stand.
+9. Ohne Netz: Schalte den Flugmodus ein (Einstellungen, Flugmodus, und darauf achten, dass das WLAN-Symbol weg ist). Wechsle zurück ins Notizbuch, öffne das Fenster, schreib eine Frage und tippe auf **Fragen**. Erwartet: „Ohne Netz kann Claude nicht antworten.“ Deine Frage bleibt im Feld stehen. Schalte den Flugmodus wieder aus, tippe noch einmal auf **Fragen**. Erwartet: Es klappt.
+10. Kosten ansehen: Öffne am Computer `platform.claude.com` und dort **Usage**. Erwartet: Im Workspace **Notizbuch** stehen für die Fragen aus dieser Probe etwa 2 bis 6 Cent je Frage mit Suche. Das passt zu den Zahlen der Kostenzeile unter den Antworten. Ist eine Frage deutlich teurer, schreib die Frage und die Zahl auf.
+11. Passt etwas nicht, mach ein Bildschirmfoto (obere Taste und eine Lautstärketaste gleichzeitig kurz drücken) und gib kurz Bescheid, was du getan und was du gesehen hast. Schreib dazu die Uhrzeit und, wenn es eine gab, die genaue Meldung auf.
+
+Als Fehler gilt:
+
+- In Schritt 2 steht die Ladezeile weiter da, obwohl alles geladen ist, oder sie fehlt, während noch geladen wird.
+- In Schritt 3 oder 4 gibt es keine grauen Suchzeilen, oder die Antwort nennt Dinge, die in keiner deiner Notizen stehen. Auch eine Quelle, die nicht zur Antwort passt, ist ein Fehler. Eine genannte Notiz, die es nicht gibt, darf nicht unter **Quellen** stehen.
+- Eine Quelle oder eine graue Zeile nennt eine Datei, die Claude nicht sehen darf (mit „recovery“, „passw“, „token“ oder „.key“ im Namen, aus einem versteckten Ordner oder die `CLAUDE.md`). Das ist der schwerste Fehler. Schreib den Namen auf und frag nicht weiter.
+- Claude kennt die Notiz von heute nicht, obwohl sie im Vault steht und die Kopie vollständig ist.
+- In Schritt 5 schließt sich das Fenster, oder der Tag geht nicht auf.
+- In Schritt 6 fehlt der Knopf **Zurück zur Antwort**, oder die Notiz lässt sich ändern.
+- In Schritt 7 fehlt die Zeile `Quellen:` oder ihre Links führen ins Leere.
+- In Schritt 8 wird beim zweiten Öffnen wieder alles neu geladen.
+- In Schritt 9 hängt das Fenster, statt „Ohne Netz kann Claude nicht antworten.“ zu zeigen.
+- In Schritt 10 kostet eine Frage deutlich mehr als 6 Cent, oder Claude hat mehr als 8 Schritte gebraucht.
+
+- [ ] Klappt
+
 ## 4. Die 1 bis 2 Wochen und die Entscheidung
 
 Im Alltag brauchst du nichts Besonderes zu tun. Schreib im Notizbuch, wie du es später willst, und lass GoodNotes nebenher laufen. Wenn etwas nicht klappt, schreib dir jedes Mal auf:
