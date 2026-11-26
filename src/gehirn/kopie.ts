@@ -34,7 +34,10 @@ const ZUGLEICH = 4;
 const nachPfad = (a: KopieDatei, b: KopieDatei) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 
 export class Kopie {
-  readonly #db: Db;
+  #db: Db;
+  readonly #name: string;
+  /** `close()` kam: Die Datenbank wird nicht neu geöffnet. */
+  #geschlossen = false;
   /** Nach Pfad sortiert, wird nach jedem Speichern ersetzt (kein Umbau bei jedem Lesen). */
   #dateien: readonly KopieDatei[];
   #nachPfad = new Map<string, KopieDatei>();
@@ -46,7 +49,8 @@ export class Kopie {
   #ohneNetz = false;
   #lauf: Promise<KopieStand> | null = null;
 
-  private constructor(db: Db, dateien: KopieDatei[], head: string | undefined, gesamt: number | undefined) {
+  private constructor(name: string, db: Db, dateien: KopieDatei[], head: string | undefined, gesamt: number | undefined) {
+    this.#name = name;
     this.#db = db;
     this.#dateien = [...dateien].sort(nachPfad);
     for (const d of this.#dateien) this.#nachPfad.set(d.path, d);
@@ -55,15 +59,19 @@ export class Kopie {
     this.#gesamt = gesamt;
   }
 
-  static async open(name = VORGABE): Promise<Kopie> {
-    const db = await openDB<GehirnDB>(name, 1, {
+  static #verbinde(name: string): Promise<Db> {
+    return openDB<GehirnDB>(name, 1, {
       upgrade(upgrading) {
         upgrading.createObjectStore('dateien', { keyPath: 'path' });
         upgrading.createObjectStore('meta');
       },
     });
+  }
+
+  static async open(name = VORGABE): Promise<Kopie> {
+    const db = await Kopie.#verbinde(name);
     const [dateien, head, gesamt] = await Promise.all([db.getAll('dateien'), db.get('meta', 'head'), db.get('meta', 'gesamt')]);
-    return new Kopie(db, dateien, typeof head === 'string' ? head : undefined, typeof gesamt === 'number' ? gesamt : undefined);
+    return new Kopie(name, db, dateien, typeof head === 'string' ? head : undefined, typeof gesamt === 'number' ? gesamt : undefined);
   }
 
   dateien(): readonly KopieDatei[] {
@@ -95,7 +103,7 @@ export class Kopie {
     return this.#lauf;
   }
 
-  async #auffrischen(client: CopyClient, onStand?: (s: KopieStand) => void): Promise<KopieStand> {
+  async #auffrischen(client: CopyClient, onStand?: (s: KopieStand) => void, nochmal = true): Promise<KopieStand> {
     const melden = () => {
       try {
         onStand?.(this.stand());
@@ -127,6 +135,26 @@ export class Kopie {
       }
     } catch (fehler) {
       if (fehler instanceof OfflineError) this.#ohneNetz = true;
+      else if (nochmal && !this.#geschlossen && (fehler as { name?: unknown } | null)?.name === 'InvalidStateError') {
+        // Safari hat die Verbindung im Hintergrund beendet. Jeder Schritt ist wiederholbar, also neu öffnen und einmal noch.
+        try {
+          const neu = await Kopie.#verbinde(this.#name);
+          if (this.#geschlossen) {
+            neu.close();
+          } else {
+            const alt = this.#db;
+            this.#db = neu;
+            try {
+              alt.close();
+            } catch {
+              // war schon zu
+            }
+            return await this.#auffrischen(client, onStand, false);
+          }
+        } catch {
+          // das Neuöffnen scheiterte: Die Kopie bleibt, wie sie ist
+        }
+      }
     }
     melden();
     return this.stand();
@@ -172,6 +200,7 @@ export class Kopie {
   }
 
   close(): void {
+    this.#geschlossen = true;
     this.#db.close();
   }
 }

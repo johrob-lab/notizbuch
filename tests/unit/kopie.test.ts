@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { openDB } from 'idb';
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { Kopie, kopieImSpeicher, setzeKopieImSpeicher, type KopieStand } from '../../src/gehirn/kopie';
 import { OfflineError, type CopyClient, type CopyEntry } from '../../src/sync/github';
 
@@ -204,4 +204,40 @@ test('die Kopie dieser Sitzung', () => {
   expect(kopieImSpeicher()).toBe(kopie);
   setzeKopieImSpeicher(null);
   expect(kopieImSpeicher()).toBeNull();
+});
+
+/** Öffnet die Kopie und gibt die Verbindung dazu, damit ein Test sie von außen schließen kann (wie Safari). */
+async function kopieMitVerbindung(): Promise<{ k: Kopie; verbindung: () => IDBDatabase }> {
+  let db: IDBDatabase | undefined;
+  const echt = indexedDB.open.bind(indexedDB);
+  const spy = vi.spyOn(indexedDB, 'open').mockImplementation((...args: Parameters<IDBFactory['open']>) => {
+    const req = echt(...args);
+    req.addEventListener('success', () => (db = req.result));
+    return req;
+  });
+  const k = await Kopie.open('notizbuch-gehirn-probe');
+  spy.mockRestore();
+  return { k, verbindung: () => db! };
+}
+
+test('beendet Safari die Verbindung, öffnet die Kopie neu und kommt ans Ziel', async () => {
+  const { k, verbindung } = await kopieMitVerbindung();
+  verbindung().close();
+  const { client } = fakeClient({ entries: drei() });
+  const stand = await k.auffrischen(client);
+  expect(stand).toEqual({ geladen: 3, gesamt: 3, vollstaendig: true, ohneNetz: false });
+  k.close();
+});
+
+test('nach close() wird nicht neu geöffnet', async () => {
+  const { k } = await kopieMitVerbindung();
+  const { client } = fakeClient({ entries: drei() });
+  const lauf = k.auffrischen(client);
+  k.close();
+  const stand = await lauf;
+  expect(stand.vollstaendig).toBe(false);
+  expect(stand.ohneNetz).toBe(false);
+  const db = await openDB('notizbuch-gehirn-probe', 1);
+  expect(await db.get('meta', 'head')).toBeUndefined();
+  db.close();
 });
