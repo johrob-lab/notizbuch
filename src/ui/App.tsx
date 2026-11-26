@@ -554,6 +554,7 @@ export function App() {
             {canAsk && (
               <AskWindow
                 engine={boot.engine}
+                client={boot.client}
                 kiKey={askKey}
                 model={kiModelOf(boot.settings)}
                 page={askPage}

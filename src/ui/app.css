@@ -2402,7 +2402,17 @@ body {
   white-space: nowrap;
 }
 
-/* Leer nimmt die Zeile keinen Platz, bleibt aber im Baum: Ein Fehler, der erst später erscheint, wird so vorgelesen. */
+/*
+ * Leer nehmen die Zeile zur Kopie und die Fehlerzeile keinen Platz, bleiben aber im Baum: Was erst später erscheint, wird so
+ * vorgelesen.
+ */
+.frag-gehirn {
+  flex: none;
+  margin: 6px 0 0;
+  color: #5f6862;
+  font-size: 13px;
+}
+
 .frag-fehler {
   flex: none;
   margin: 8px 0 0;
@@ -2410,8 +2420,17 @@ body {
   font-size: 15px;
 }
 
+.frag-gehirn:empty,
 .frag-fehler:empty {
   margin: 0;
+}
+
+/* Die Spur zur Ursache unter dem Fehlersatz, im Fenster und in einer Runde: klein und grau. */
+.frag-code {
+  flex: none;
+  margin: 2px 0 0;
+  color: #7d877f;
+  font-size: 13px;
 }
 
 .frag-verlauf {
@@ -2445,6 +2464,17 @@ body {
   margin: 2px 0 6px;
   color: #5f6862;
   font-size: 13px;
+}
+
+/* Die Suchzeilen: je Werkzeugaufruf eine kleine graue Zeile zwischen Frage und Antwort, ohne Nummern. */
+.frag-schritte {
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+  color: #7d877f;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 /* Die Antwort wie eine Notiz, nur kleiner als in der Karte Morgenbriefing. */
@@ -2538,6 +2568,13 @@ body {
 .frag-hinweis {
   margin: 6px 0 0;
   color: #5f6862;
+  font-size: 14px;
+}
+
+/* Die Antwort brach nach dem ersten Text an einem Fehler ab: Der Satz steht unter dem Text, rot wie die Fehlerzeile. */
+.frag-fehlersatz {
+  margin: 6px 0 0;
+  color: #a32a24;
   font-size: 14px;
 }
 

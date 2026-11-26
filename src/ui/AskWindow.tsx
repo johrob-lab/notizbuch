@@ -1,24 +1,29 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import type { KopieStand } from '../gehirn/kopie';
+import { fuehreAus, WERKZEUGE } from '../gehirn/werkzeuge';
 import { GestureFilter } from '../ink/gestures';
-import { askClaude, FAILURE_TEXT, KiError } from '../ki/claude';
+import { FAILURE_TEXT, KiError } from '../ki/claude';
 import { costCents } from '../ki/cost';
+import { frage } from '../ki/gespraech';
 import { pageImage } from '../ki/pageImage';
 import { buildMessages, systemBlocks, type SentTurn } from '../ki/prompt';
 import { todayVienna } from '../lib/dates';
 import type { KiModel } from '../lib/settings';
 import type { SyncEngine } from '../sync/engine';
+import type { CopyClient } from '../sync/github';
 import type { AskPage } from './ask';
 import { Round, type Turn } from './askRound';
 import { useRoundActions } from './askTakeover';
 import { keepFocusAfterTap, watchHand } from './palmGuard';
 import { useActivation, type Pressable } from './pointerBits';
+import { KOPIE_WARTEN_MS, useKopie } from './useKopie';
 
 // Das Fenster „Frag Claude“: eine Frage tippen oder diktieren, die offene Seite mitschicken, die Antwort lesen. Es gehört der App,
 // nicht der Seite: Darum bleibt es offen, wenn man blättert, und nennt immer die Seite, die gerade offen ist (`page`). In den
 // Einstellungen und in der Liste der Besprechungen ist es versteckt (`away`) und behält, was im Feld steht. Es liegt außerhalb der
 // Bühne: Die Schreibfläche sieht nie, was auf ihm geschieht. Ein Stiftstrich darauf wird also nie Tinte, Finger und Rad bewegen
 // die Seite nicht. Vor der Hand, die beim Schreiben aufliegt, schützt es dasselbe Tor wie die Seite (`watchHand` in palmGuard.ts).
-// Gefragt wird nur mit „Fragen“ oder Enter: Öffnen, Tippen, der Schalter und Blättern schicken nichts an Claude.
+// Gefragt wird nur mit „Fragen“ oder Enter. Öffnen und Fragen frischen nur die Kopie des Vaults bei GitHub auf (useKopie.ts).
 
 /** Was die App mit dem Fenster tun kann. */
 export type AskControl = {
@@ -31,6 +36,8 @@ export type AskControl = {
 
 type Props = {
   engine: SyncEngine;
+  /** Der Zugang zu GitHub, über den die Kopie des Vaults auffrischt. */
+  client: CopyClient;
   kiKey: string;
   model: KiModel;
   /** Die offene Seite, sobald sie gelesen ist und sich angemeldet hat. Sonst `null`. */
@@ -44,18 +51,55 @@ type Props = {
 /** Ein Knopf des Fensters und was er tut. */
 type Knopf = Pressable & { run(): void };
 
+/** Ein Fehler, der im Fenster steht: der Satz und die Spur zur Ursache (`null` ohne). */
+type Fehler = { satz: string; code: string | null };
+
+/** Was die Werkzeuge ohne Kopie sehen (die Datenbank ließ sich nicht öffnen): nichts. */
+const OHNE_KOPIE: KopieStand = { geladen: 0, gesamt: 0, vollstaendig: false, ohneNetz: false };
+
 /** Die Frage mit der Seite: ihre Angaben als Text und ihr Bild, beides zugleich gelesen. Ohne Bild ist `image` `null`. */
 async function questionWithPage(page: AskPage, question: string): Promise<SentTurn> {
   const [text, image] = await Promise.all([page.describe(), pageImage(page.svg())]);
   return { question, page: { text, image } };
 }
 
+/** Wartet auf `promise`, bis das Signal abbricht. Dann gibt es sofort `null`, was danach noch kommt, zählt nicht. */
+function untilStopped<T>(signal: AbortSignal, promise: Promise<T>): Promise<T | null> {
+  return new Promise<T | null>((resolve, reject) => {
+    const stopped = () => resolve(null);
+    if (signal.aborted) return stopped();
+    signal.addEventListener('abort', stopped, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', stopped));
+  });
+}
+
+/** Wartet auf `promise`, aber höchstens `ms`. Die Uhr läuft danach nicht weiter. */
+async function atMost(promise: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([promise, new Promise<void>((resolve) => (timer = setTimeout(resolve, ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Die Zeile zur Kopie unter den Knöpfen: während des Ladens der Fortschritt, nach einem Laden ohne Netz, was fehlt. Ist die Kopie
+ * vollständig, steht nichts da, auch nicht für den Augenblick, in dem sie beim Öffnen nachsieht.
+ */
+function brainLine(stand: KopieStand | null, laeuft: boolean): string {
+  if (stand === null || stand.geladen >= stand.gesamt) return '';
+  if (laeuft) return `Gehirn wird geladen … ${stand.geladen} von ${stand.gesamt}`;
+  return stand.ohneNetz ? `Gehirn: ${stand.geladen} von ${stand.gesamt} Notizen da, der Rest kommt mit Netz.` : '';
+}
+
 /**
  * Das Fenster: oben „Frag Claude“ und „Schließen“, darunter das Feld für die Frage, der Schalter „Seite mitschicken“ mit dem Namen der
- * offenen Seite, „Fragen“ (während einer Antwort „Stopp“) und „Neue Frage“, die Zeile für Fehler und der Verlauf mit der neuesten
- * Runde oben. Alle Knöpfe und der Schalter laufen über `useActivation` mit dem Tor der offenen Seite, ohne Seite mit einem eigenen.
+ * offenen Seite, „Fragen“ (während einer Antwort „Stopp“) und „Neue Frage“, die Zeile zur Kopie, die Zeile für Fehler und der
+ * Verlauf mit der neuesten Runde oben. Alle Knöpfe und der Schalter laufen über `useActivation` mit dem Tor der offenen Seite, ohne
+ * Seite mit einem eigenen.
  */
-export function AskWindow({ engine, kiKey, model, page, away, control }: Props) {
+export function AskWindow({ engine, client, kiKey, model, page, away, control }: Props) {
   const root = useRef<HTMLElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const [open, setOpen] = useState(false);
@@ -63,7 +107,8 @@ export function AskWindow({ engine, kiKey, model, page, away, control }: Props) 
   const [withPage, setWithPage] = useState(true);
   /** Das Gespräch, die neueste Runde zuerst. */
   const [turns, setTurns] = useState<Turn[]>([]);
-  const [failure, setFailure] = useState('');
+  const [failure, setFailure] = useState<Fehler | null>(null);
+  const gehirn = useKopie(client);
   // Die Runden, wie sie zuletzt gezeichnet wurden: Eine Nachfrage schickt die früheren mit.
   const turnsNow = useRef(turns);
   turnsNow.current = turns;
@@ -94,7 +139,8 @@ export function AskWindow({ engine, kiKey, model, page, away, control }: Props) 
   };
   useLayoutEffect(() => () => keeping.current?.(), []);
 
-  // Direkt am Element sichtbar, nicht erst nach dem nächsten Zeichnen: Ein verstecktes Feld nähme den Fokus nicht.
+  // Direkt am Element sichtbar, nicht erst nach dem nächsten Zeichnen: Ein verstecktes Feld nähme den Fokus nicht. Die Kopie frischt
+  // dabei auf, ohne dass das Öffnen darauf wartet (`auffrischen` bleibt dieselbe Funktion).
   useLayoutEffect(() => {
     const mine: AskControl = {
       open: () => {
@@ -102,6 +148,7 @@ export function AskWindow({ engine, kiKey, model, page, away, control }: Props) 
         if (el) el.hidden = false;
         focusField();
         setOpen(true);
+        void gehirn.auffrischen();
       },
     };
     control.current = mine;
@@ -120,9 +167,10 @@ export function AskWindow({ engine, kiKey, model, page, away, control }: Props) 
   useEffect(() => () => endTalk(), []);
 
   /**
-   * Stellt die Frage im Feld, mit der Seite, die jetzt offen ist, wenn der Schalter an ist. Die Frage steht sofort oben als neue Runde,
-   * die Antwort kommt Wort für Wort dazu. Scheitert sie, oder endet sie mit „Stopp“, bevor Text kam, verschwindet die Runde wieder,
-   * und die Frage steht wieder im Feld.
+   * Stellt die Frage im Feld, mit der Seite, die jetzt offen ist, wenn der Schalter an ist. Die Frage steht sofort oben als neue Runde.
+   * Während die Seite gelesen wird, frischt die Kopie auf (höchstens `KOPIE_WARTEN_MS`). Dann sucht Claude in der Kopie: je
+   * Werkzeugaufruf eine graue Zeile, die Antwort kommt Wort für Wort dazu. Endet sie mit „Stopp“, bevor etwas zu sehen war, oder
+   * scheitert sie vor dem ersten Text, verschwindet die Runde wieder, und die Frage steht wieder im Feld.
    */
   const ask = async (): Promise<void> => {
     const text = question.trim();
@@ -148,10 +196,15 @@ export function AskWindow({ engine, kiKey, model, page, away, control }: Props) 
       answer: '',
       state: 'laeuft',
       cost: null,
+      partial: false,
       imageFailed: false,
+      schritte: [],
+      pfade: [],
+      failure: null,
+      code: null,
     };
     setQuestion('');
-    setFailure('');
+    setFailure(null);
     field.current?.blur(); // am iPad geht die Tastatur zu
     setTurns((all) => [turn, ...all]);
 
@@ -164,30 +217,70 @@ export function AskWindow({ engine, kiKey, model, page, away, control }: Props) 
       setTurns((all) => all.filter((t) => t.id !== id));
       setQuestion((now) => (now.trim() === '' ? text : now));
     };
+    // Was die Runde schon zeigt: ihre grauen Zeilen und den Text des laufenden Schritts (ein neuer Schritt leert ihn).
+    const lines: string[] = [];
+    let shown = '';
+    /** „Stopp“: Ist schon etwas zu sehen, bleibt die Runde mit „Gestoppt.“ stehen, sonst kommt die Frage zurück ins Feld. */
+    const stopped = (pfade: string[] = []) =>
+      lines.length === 0 && shown.trim() === '' ? giveBack() : change(() => ({ answer: shown, state: 'gestoppt', pfade }));
 
     try {
-      const sent = sending ? await questionWithPage(sending, text) : turn.sent;
-      if (sent !== turn.sent) change(() => ({ sent, imageFailed: sent.page?.image === null }));
-      // „Stopp“, während die Seite noch beschrieben wurde: Dann geht gar nichts hinaus.
-      const reply = stop.signal.aborted
-        ? null
-        : await askClaude({
-            key: kiKey,
-            model,
-            system: systemBlocks(at, null),
-            messages: buildMessages([...earlier, sent]),
-            signal: stop.signal,
-            onText: (delta) => change((now) => ({ answer: now.answer + delta })),
-          });
+      // Die Seite wird gelesen, während die Kopie auffrischt. „Stopp“ wirkt sofort, auch wenn eines davon hängt.
+      const ready = await untilStopped(
+        stop.signal,
+        Promise.all([sending ? questionWithPage(sending, text) : turn.sent, atMost(gehirn.auffrischen(), KOPIE_WARTEN_MS)]),
+      );
       if (talk.current !== mine) return;
-      if (reply === null || (reply.end === 'gestoppt' && reply.text.trim() === '')) return giveBack();
-      const cost = reply.end !== 'gestoppt' && reply.usage ? costCents(model, reply.usage) : null;
-      change(() => ({ answer: reply.text, state: reply.end, cost }));
+      if (ready === null) return giveBack(); // „Stopp“, bevor etwas hinausging
+      const [sent] = ready;
+      if (sent !== turn.sent) change(() => ({ sent, imageFailed: sent.page?.image === null }));
+      // Mit dem, was die Kopie jetzt hat. Die Werkzeuge lesen sie, wie sie beim Aufruf ist, und frischen nie selbst auf.
+      const kopie = gehirn.jetzt();
+      const view = () => (kopie ? { dateien: kopie.dateien(), stand: kopie.stand() } : { dateien: [], stand: OHNE_KOPIE });
+      const antwort = await frage({
+        key: kiKey,
+        model,
+        system: systemBlocks(at, kopie?.stand() ?? null),
+        messages: buildMessages([...earlier, sent]),
+        tools: WERKZEUGE,
+        ausfuehren: (aufruf) => fuehreAus(aufruf, view(), todayVienna(at)),
+        signal: stop.signal,
+        onText: (delta) => {
+          shown += delta;
+          change((now) => ({ answer: now.answer + delta }));
+        },
+        onSchritt: (step) => {
+          if ('neu' in step) {
+            shown = '';
+            change(() => ({ answer: '' }));
+            return;
+          }
+          // Text vor einem Werkzeug wird eine graue Zeile und ist nicht mehr Teil der Antwort.
+          const notiz = 'notiz' in step;
+          lines.push(notiz ? step.notiz : step.zeile);
+          if (notiz) shown = '';
+          const schritte = [...lines];
+          change(() => (notiz ? { schritte, answer: '' } : { schritte }));
+        },
+      });
+      if (talk.current !== mine) return;
+      if (antwort.end === 'gestoppt') return stopped(antwort.pfade);
+      const cost = antwort.usage ? costCents(model, antwort.usage) : null;
+      change(() => ({ answer: antwort.text, state: antwort.end, cost, partial: antwort.partial, pfade: antwort.pfade }));
     } catch (error) {
       if (talk.current !== mine) return;
-      giveBack();
       // Nach „Stopp“ ist ein Fehler keiner mehr. Alles, was kein Fehler der Schnittstelle ist, zählt wie „nicht erreichbar“.
-      if (!stop.signal.aborted) setFailure(FAILURE_TEXT[error instanceof KiError ? error.reason : 'unavailable']);
+      if (stop.signal.aborted) return stopped();
+      const fehler: Fehler = {
+        satz: FAILURE_TEXT[error instanceof KiError ? error.reason : 'unavailable'],
+        code: error instanceof KiError ? error.code : null,
+      };
+      // Kam schon Text, bleibt er stehen, und der Fehler steht darunter. Sonst geht die Frage zurück ins Feld.
+      if (shown.trim() !== '') change(() => ({ answer: shown, state: 'fehler', failure: fehler.satz, code: fehler.code }));
+      else {
+        giveBack();
+        setFailure(fehler);
+      }
     } finally {
       if (request.current === stop) request.current = null;
     }
@@ -197,7 +290,7 @@ export function AskWindow({ engine, kiKey, model, page, away, control }: Props) 
   const startOver = () => {
     endTalk();
     setTurns([]);
-    setFailure('');
+    setFailure(null);
     focusField();
   };
 
@@ -209,7 +302,7 @@ export function AskWindow({ engine, kiKey, model, page, away, control }: Props) 
     setQuestion('');
     setWithPage(true);
     setTurns([]);
-    setFailure('');
+    setFailure(null);
   };
 
   const press = useActivation(gate, (b: Knopf) => b.run());
@@ -270,9 +363,13 @@ export function AskWindow({ engine, kiKey, model, page, away, control }: Props) 
           Neue Frage
         </button>
       </div>
-      <p class="frag-fehler" role="alert">
-        {failure}
+      <p class="frag-gehirn" role="status">
+        {brainLine(gehirn.stand, gehirn.laeuft)}
       </p>
+      <p class="frag-fehler" role="alert">
+        {failure?.satz ?? ''}
+      </p>
+      {failure !== null && failure.code !== null && <p class="frag-code">{`Fehlercode ${failure.code}`}</p>}
       <ol class="frag-verlauf">
         {turns.map((turn) => (
           <Round

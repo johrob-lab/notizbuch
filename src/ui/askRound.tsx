@@ -9,15 +9,18 @@ import { noteToVNodes, type NoteContext } from './noteView';
 import type { Pressable } from './pointerBits';
 import { FAILED } from './texts';
 
-// Eine Runde im Fenster „Frag Claude“ (AskWindow.tsx): die Frage, darunter klein die Uhrzeit und die Seite, die mitging, dann die
-// Antwort mit ihren Hinweisen und den Kosten. Die Antwort erscheint wie eine Notiz in der Karte Morgenbriefing (`renderNote` und
-// `noteToVNodes`): nur bekannte Elemente, nie HTML aus dem Text. Links auf einen Tag der App und mit http oder https bleiben Links (die ins Netz mit `noopener`), jede andere Adresse wird Text.
+// Eine Runde im Fenster „Frag Claude“ (AskWindow.tsx): die Frage, darunter klein die Uhrzeit und die Seite, die mitging, die grauen
+// Zeilen der Suche, dann die Antwort mit ihren Hinweisen und den Kosten. Die Antwort erscheint wie eine Notiz in der Karte
+// Morgenbriefing (`renderNote` und `noteToVNodes`): nur bekannte Elemente, nie HTML aus dem Text. Links auf einen Tag der App und mit http oder https bleiben Links (die ins Netz mit `noopener`), jede andere Adresse wird Text.
 
 /**
  * Eine Runde des Gesprächs. `label` ist der Name der Seite, die mit der Frage ging, `null` ohne Seite. `noteDay` ist der Tag der
  * Notiz, zu der die Antwort gehört: der Tag der Seite, die beim Fragen offen war, auch wenn sie nicht mitging, auf Woche, Monat oder
  * ohne Seite der Tag der Frage. `sent` ist, was mit der Frage an Claude ging (eine Nachfrage schickt es noch einmal mit). `cost` sind
- * die Kosten der Antwort in Cent, `null` ohne Zahlen und nach „Stopp“.
+ * die Kosten der Antwort in Cent über alle Schritte, `null` ohne Zahlen und nach „Stopp“, `partial` heißt: Es fehlten Zahlen, die
+ * Kosten sind eine Untergrenze. `schritte` sind die grauen Zeilen (je Werkzeugaufruf eine und Text, den Claude davor schrieb),
+ * `pfade` die Pfade aller Werkzeugergebnisse. Brach die Antwort nach dem ersten Text an einem Fehler ab (`fehler`), stehen in
+ * `failure` der Satz dazu und in `code` die Spur zur Ursache (`400`, `overloaded_error`), sonst `null`.
  */
 export type Turn = {
   id: number;
@@ -27,9 +30,14 @@ export type Turn = {
   noteDay: Day;
   sent: SentTurn;
   answer: string;
-  state: 'laeuft' | 'fertig' | 'gestoppt' | 'abgeschnitten';
+  state: 'laeuft' | 'fertig' | 'gestoppt' | 'abgeschnitten' | 'fehler';
   cost: number | null;
+  partial: boolean;
   imageFailed: boolean;
+  schritte: string[];
+  pfade: string[];
+  failure: string | null;
+  code: string | null;
 };
 
 const IMAGE_FAILED = 'Das Bild der Seite ließ sich nicht erstellen. Claude bekam nur die Angaben zur Seite.';
@@ -89,10 +97,23 @@ export function Round({ turn, actions }: { turn: Turn; actions: RoundActions }) 
     <li class="frag-runde">
       <p class="frag-frage">{turn.question}</p>
       <p class="frag-wann">{`${timeVienna(turn.at)} · ${turn.label ?? 'ohne Seite'}`}</p>
+      {turn.schritte.length > 0 && (
+        <ol class="frag-schritte">
+          {turn.schritte.map((schritt, i) => (
+            <li key={i}>{schritt}</li>
+          ))}
+        </ol>
+      )}
       <div class="frag-antwort">{waiting ? '…' : answer}</div>
       {turn.imageFailed && <p class="frag-hinweis">{IMAGE_FAILED}</p>}
       {turn.state === 'gestoppt' && <p class="frag-hinweis">{STOPPED}</p>}
       {turn.state === 'abgeschnitten' && <p class="frag-hinweis">{CUT}</p>}
+      {turn.failure !== null && (
+        <p class="frag-fehlersatz" role="alert">
+          {turn.failure}
+        </p>
+      )}
+      {turn.code !== null && <p class="frag-code">{`Fehlercode ${turn.code}`}</p>}
       {hasText && (
         <div class="frag-aktionen">
           <button type="button" class="knopf" {...press({ key: `kopieren-${turn.id}`, run: actions.onCopy })}>
@@ -113,7 +134,7 @@ export function Round({ turn, actions }: { turn: Turn; actions: RoundActions }) 
           {FAILED}
         </p>
       )}
-      {turn.cost !== null && <p class="frag-kosten">{costLabel(turn.cost)}</p>}
+      {turn.cost !== null && <p class="frag-kosten">{costLabel(turn.cost, turn.partial)}</p>}
     </li>
   );
 }

@@ -85,6 +85,10 @@ export type RepoMock = {
   failReads: boolean;
   /** Solange das `true` ist, antwortet GitHub auf jedes Schreiben und Löschen einer Datei mit einem Serverfehler (500). */
   failWrites: boolean;
+  /** Alle Dateien des Repos, Pfad (NFC) und Text. Nur zum Nachsehen im Test: Ändern geht über `commit`. */
+  readonly files: ReadonlyMap<string, string>;
+  /** Der neueste Commit auf `main`. */
+  head(): string;
   read(path: string): string | undefined;
   /** Eine Änderung von einem anderen Gerät: neuer Stand und neuer Commit, aber kein Eintrag in `puts`. */
   commit(path: string, text: string): void;
@@ -98,7 +102,7 @@ function walk(dir: string): string[] {
 }
 
 /** Die sha, die Git für diesen Inhalt vergibt. Gleicher Text, gleiche sha. */
-function blobSha(text: string): string {
+export function blobSha(text: string): string {
   const bytes = Buffer.from(text, 'utf8');
   return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
 }
@@ -166,12 +170,31 @@ function createRepo(
     return [...entries.values()];
   };
 
+  /** Die sha einer Datei, wie die Contents-API sie nennt: Dateien, die kein UTF-8 sind, haben eine eigene. */
+  const fileSha = (path: string, text: string) => (notUtf8.has(path) ? blobSha(`bytes ${path}`) : blobSha(text));
+
+  /** Der ganze Baum, wie ihn die Trees-API mit `recursive=1` liefert: jede Datei als `blob` mit Größe, jeder Ordner als `tree`. */
+  const treeEntries = () => {
+    const entries = new Map<string, Record<string, string | number>>();
+    for (const [filePath, fileText] of files) {
+      const parts = filePath.split('/');
+      for (let i = 1; i < parts.length; i++) {
+        const dir = parts.slice(0, i).join('/');
+        if (!entries.has(dir)) entries.set(dir, { path: dir, mode: '040000', type: 'tree', sha: blobSha(`tree ${dir}`) });
+      }
+      const size = notUtf8.has(filePath) ? NOT_UTF8.length : Buffer.byteLength(fileText, 'utf8');
+      entries.set(filePath, { path: filePath, mode: '100644', type: 'blob', sha: fileSha(filePath, fileText), size });
+    }
+    return [...entries.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  };
+
   const requests: string[] = [];
   const used: string[] = [];
 
   const mock: ReturnType<typeof createRepo> = {
     name,
     files,
+    head,
     puts,
     deletes,
     unhandled,
@@ -282,8 +305,18 @@ function createRepo(
         return json(route, 200, { files: [...new Set(paths)].map((filename) => ({ filename })) });
       }
 
+      // Der ganze Baum eines Commits, so holt ihn die Kopie von „Frag Claude“. Ohne `recursive=1` kennt der Mock die Trees-API nicht.
+      const tree = new RegExp(`^/repos/${name}/git/trees/([0-9a-f]+)$`).exec(url.pathname);
+      if (method === 'GET' && tree && url.searchParams.get('recursive') === '1') {
+        if (!commits.some((c) => c.sha === tree[1])) return json(route, 404, { message: 'Not Found' });
+        return json(route, 200, { sha: tree[1], tree: treeEntries(), truncated: false });
+      }
+
       const blob = new RegExp(`^/repos/${name}/git/blobs/([0-9a-f]+)$`).exec(url.pathname);
       if (method === 'GET' && blob) {
+        if ([...notUtf8].some((path) => files.has(path) && blobSha(`bytes ${path}`) === blob[1])) {
+          return json(route, 200, { sha: blob[1], encoding: 'base64', content: NOT_UTF8.toString('base64') });
+        }
         const found = [...files.values()].find((t) => blobSha(t) === blob[1]);
         if (found === undefined) return json(route, 404, { message: 'Not Found' });
         return json(route, 200, { sha: blob[1], encoding: 'base64', content: githubBase64(found) });
