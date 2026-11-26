@@ -42,7 +42,7 @@ const PENCIL_FILTER =
   '<filter id="bleistift"><feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves="1" seed="7" result="korn"/><feColorMatrix in="korn" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.4 1.9" result="maske"/><feComposite in="SourceGraphic" in2="maske" operator="in"/></filter>';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const PAGE_KINDS: readonly string[] = ['tag', 'woche', 'monat', 'besprechung'];
+const PAGE_KINDS: readonly string[] = ['tag', 'woche', 'monat', 'besprechung', 'sperren'];
 const INK_COLORS: readonly string[] = Object.keys(INK);
 /** Gruppe für Striche, die in keinem Feld liegen. */
 const FREI = 'frei';

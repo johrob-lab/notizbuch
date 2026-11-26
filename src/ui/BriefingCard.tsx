@@ -1,6 +1,6 @@
 import { Fragment } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { addToNote, editLine, relocate, STALE_NOTICE, tickLine } from '../lib/briefingEdit';
+import { addToNote, editLine, relocate, setBetraLine, STALE_NOTICE, tickLine } from '../lib/briefingEdit';
 import { parseSections, visibleText } from '../lib/dailyNote';
 import type { Day } from '../lib/dates';
 import { dailyNotePath } from '../lib/filenames';
@@ -13,12 +13,13 @@ import { AddForm } from './AddForm';
 import { cardStyle } from './cardStyle';
 import { noteToVNodes, type NoteContext } from './noteView';
 import { retryCues } from './retryCues';
-import { noteQueue, onNoteWrite } from './noteQueue';
+import { announceNoteWrite, noteQueue, onNoteWrite } from './noteQueue';
 import { FAILED } from './texts';
 
 // Die Karte „Morgenbriefing“ der Tagesseite: die Tagesnotiz (`05 Daily Notes/<Tag>.md`) zum Lesen, Abhaken, Bearbeiten und
-// Ergänzen. Was die Karte schreibt, geht immer vom neuesten Text der Notiz aus, trifft nur die Zeile, die man angetippt hat,
-// und lässt alles andere unberührt, auch die Marker `%%…%%`. Geschrieben wird erst, wenn die Notiz einmal gelesen ist.
+// Ergänzen, dazu die Betra-Nr. an den Erinnerungen „Betra anmelden“. Was die Karte schreibt, geht immer vom neuesten Text der
+// Notiz aus, trifft nur die Zeile, die man angetippt hat, und lässt alles andere unberührt, auch die Marker `%%…%%` (die
+// Betra-Nr. kommt als Wort in den Marker ihrer Zeile). Geschrieben wird erst, wenn die Notiz einmal gelesen ist.
 //
 // Jeder Tipp zählt: Was während eines Vorgangs angetippt wird, reiht sich hinter ihn ein (`noteQueue`, dieselbe Warteschlange wie
 // beim Fenster „Frag Claude“) und geht vom Ergebnis des vorigen aus. Ein Haken zeigt sich sofort, ob er
@@ -307,6 +308,22 @@ export function BriefingCard({ engine, day, rect }: Props) {
     );
   };
 
+  /**
+   * Trägt die Betra-Nr. an einer Erinnerung „Betra anmelden“ ein, in der Warteschlange wie jede Änderung. Hat sich die Zeile
+   * inzwischen geändert, findet `setBetraLine` sie an ihrer Sperre. Gibt es sie nicht mehr, wird nichts geschrieben, und die Karte
+   * sagt es. Steht die Nummer schon so da, gibt es nichts zu schreiben.
+   */
+  const onBetra = (line: number, source: string, nummer: string) => {
+    if (locked || current.current.phase !== 'bereit') return;
+    void act((latest) => {
+      const result = setBetraLine(latest, line, source, nummer);
+      if (!result.ok) return 'stale';
+      return result.text === latest ? null : { text: result.text };
+    }).then((outcome) => {
+      if (outcome === 'written') announceNoteWrite(engine, path);
+    });
+  };
+
   /** Ergänzt die Notiz. `true`, wenn der Eintrag in der Notiz steht. */
   const onAdd = async (wanted: string, asTask: boolean): Promise<boolean> => {
     const now = current.current;
@@ -328,8 +345,8 @@ export function BriefingCard({ engine, day, rect }: Props) {
     update((now) => ({ open: { ...now.open, [heading]: !(now.open[heading] ?? OPEN_AT_START.has(heading)) } }));
 
   // Die Handler, die die Notiz kennt, bleiben dieselben Funktionen: So ändert sich ihr Kontext nur, wenn sich wirklich etwas ändert.
-  const api = useRef({ onToggle, onEdit, onSave, onCancel });
-  api.current = { onToggle, onEdit, onSave, onCancel };
+  const api = useRef({ onToggle, onEdit, onSave, onCancel, onBetra });
+  api.current = { onToggle, onEdit, onSave, onCancel, onBetra };
   const handlers = useMemo(
     () => ({
       onToggle: (line: number, source: string) => api.current.onToggle(line, source),
@@ -337,6 +354,7 @@ export function BriefingCard({ engine, day, rect }: Props) {
       onDraft,
       onSave: (text: string) => api.current.onSave(text),
       onCancel: () => api.current.onCancel(),
+      onBetra: (line: number, source: string, nummer: string) => api.current.onBetra(line, source, nummer),
     }),
     [],
   );

@@ -141,6 +141,11 @@ body {
   margin-left: auto;
 }
 
+.sperrenkopf .fachlinie {
+  display: flex;
+  gap: 4px;
+}
+
 .seitenzahl {
   font-size: 15px;
   color: #4a5160;
@@ -421,6 +426,16 @@ body {
 
   .pill {
     padding: 0 8px;
+  }
+}
+
+/*
+ * Index, Jahr und To-Dos sind noch ohne Funktion: Bis 1100 Punkte Breite machen sie Platz für „Sperren“, damit die Leiste einzeilig
+ * bleibt und der Stand nicht an den Knopf „Vollbild“ stößt. Das gilt auch für ein halbes Fenster auf einem breiten Bildschirm.
+ */
+@media (max-width: 1100px) {
+  .ansichten .platzhalter {
+    display: none;
   }
 }
 
@@ -1722,6 +1737,16 @@ body {
   font-size: 17px;
 }
 
+/* Gelb und Rot wie in Obsidian (markdown.ts): `==…==` und der rote Span der Erinnerungen „Betra anmelden“. */
+.text mark {
+  background: #fff1a8;
+  color: inherit;
+}
+
+.text .rot {
+  color: #c62828;
+}
+
 /* Ein Eintrag: Kästchen (oder Punkt), Text, Stift. Was darunter gehört (eine Untergliederung), steht in einer eigenen Zeile. */
 .karte li.eintrag {
   display: flex;
@@ -1823,6 +1848,60 @@ body {
 
 .karte .bearbeiten input {
   flex: 1 1 100%;
+}
+
+/*
+ * Die Betra-Nr. an einer Erinnerung „Betra anmelden“ (noteView.tsx): Feld und „Eintragen“ stehen in der Zeile nach dem Text, rechts
+ * vor dem Stift. Bliebe dem Text daneben weniger als 16em (etwa 30 Zeichen), rücken beide samt Stift rechts unter ihn. Das Feld
+ * ist etwa 9 Ziffern breit, Feld und Knopf sind wie alles zum Tippen in der Karte 68 Einheiten hoch (44 Punkte). Der Stift bleibt
+ * beim Formular: Es hält rechts seinen Platz frei, und er rückt dort hinein. So bricht er nie allein in eine eigene Zeile um.
+ */
+.karte li.eintrag:has(> .betra) > .text {
+  flex-basis: 16em;
+}
+
+.karte li.eintrag > .betra:has(+ .stift) {
+  margin-right: 68px;
+}
+
+.karte li.eintrag > .betra + .stift {
+  margin-left: -68px;
+}
+
+.karte .betra {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+  max-width: 100%;
+  margin-left: auto;
+  padding: 4px 0;
+}
+
+.karte .betra input[type='text'] {
+  width: calc(9ch + 30px); /* 9 Ziffern, dazu Innenabstand und Rand */
+}
+
+/* Der Hinweis zu einer falschen Eingabe steht unter Feld und Knopf, so breit wie beide: `width: 0` macht das Formular nicht breiter. */
+.karte .betra-hinweis {
+  width: 0;
+  min-width: 100%;
+  color: #a32a24;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.karte .betra-hinweis:not(:empty) {
+  margin-top: 4px;
+}
+
+/* Die eingetragene Betra-Nr.: klein und grau nach dem Text. */
+.karte .betra-nr {
+  flex: none;
+  padding: 4px 8px;
+  color: #5f6862;
+  font-size: 18px;
 }
 
 .karte .karten-hinweis {

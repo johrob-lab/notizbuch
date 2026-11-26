@@ -1,9 +1,11 @@
 import { escAttr, escText } from '../ink/svg';
 import { MM, PAGE_H, PAGE_W, PAPER, type FieldBox, type PageKind } from '../ink/types';
-import { formatDayLong, isValidDay, isoWeekKey, monthGrid, monthKey, MONTHS, weekDays, type Day } from '../lib/dates';
+import { addDays, formatDayLong, isValidDay, isoWeekKey, monthGrid, monthKey, MONTHS, weekDays, type Day } from '../lib/dates';
 import { besprechungBase } from '../lib/filenames';
 import { holidaysAT } from '../lib/holidays';
 import { istTabelle } from '../lib/meetings';
+import { parseSperrenKey, quartalMonate, sperrenMonatsname } from '../lib/sperren';
+import { SPERREN_GEOMETRIE, SPERREN_MARKER, sperrenFeldId } from './sperren';
 import { TABELLE_SPALTEN, TABELLE_ZEILEN, tabelleGeometrie, zeilenFeld } from './tabelle';
 import { fitLines, geburtstagItem, moreLabel, prioItems, SEPARATOR, terminItems, textWidth, withHead, type AgendaDay, type AgendaItem } from './agenda';
 
@@ -487,6 +489,83 @@ export function tabelleLayout(meta: Record<string, string>): Layout {
 /** Das Layout einer Seite der Besprechung: die Tabelle nur bei `art` `tabelle`, sonst die Notizseite. */
 export function meetingLayout(meta: Record<string, string>): Layout {
   return istTabelle(meta) ? tabelleLayout(meta) : besprechungLayout(meta);
+}
+
+// ---------- Sperren ----------
+
+const SPERREN_TAGE = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+
+/** Das Quartal einer Fachlinie: drei Monatsspalten, je Tag eine Zeile mit zwei Schreibfeldern. Wirft bei einem ungültigen Schlüssel. */
+export function sperrenLayout(key: string): Layout {
+  const s = parseSperrenKey(key);
+  if (!s) throw new Error(`Ungültiger Sperrenschlüssel „${key}“.`);
+  const g = SPERREN_GEOMETRIE;
+  const months = quartalMonate(s);
+  const holiday = holidayLookup();
+  const days = (month: string): Day[] => {
+    const out: Day[] = [];
+    for (let d: Day = `${month}-01`; d.slice(0, 7) === month; d = addDays(d, 1)) out.push(d);
+    return out;
+  };
+  const fields: Layout['fields'] = [];
+  months.forEach((month, c) => {
+    for (const d of days(month)) {
+      const y = g.zeile0 + (dayNumber(d) - 1) * g.zeilenhoehe;
+      const wd = SPERREN_TAGE[weekdayIndex(d)];
+      for (const platz of [1, 2] as const) {
+        const [dd, mm, yy] = [d.slice(8, 10), d.slice(5, 7), d.slice(0, 4)];
+        fields.push({
+          id: sperrenFeldId(d, platz),
+          rect: [g.spalten[c] + g.label + (platz - 1) * g.platz, y, g.platz, g.zeilenhoehe],
+          datum: d,
+          label: `${wd} ${dd}.${mm}.${yy}, Platz ${platz}`,
+          paper: 'blanko',
+        });
+      }
+    }
+  });
+  return {
+    kind: 'sperren',
+    key,
+    fields,
+    cards: [],
+    background: once(() => {
+      let out = paper() + text(LEFT, 80, `Sperren ${s.fachlinie}`, { 'font-size': 40, 'font-weight': 700, fill: COLOR.text });
+      out += text(LEFT, 112, `${s.quartal}. Quartal ${s.jahr}`, { 'font-size': 20, fill: COLOR.muted });
+      let fills = '';
+      let lines = '';
+      let labels = '';
+      months.forEach((month, c) => {
+        const x = g.spalten[c];
+        const list = days(month);
+        const bottom = g.zeile0 + list.length * g.zeilenhoehe;
+        out += rect([x, g.zeile0 - 36, g.breite, 32], { rx: 6, fill: COLOR.header });
+        out += text(x + 12, g.zeile0 - 14, `${sperrenMonatsname(month)} ${month.slice(0, 4)}`, {
+          'font-size': 18,
+          'font-weight': 700,
+          fill: COLOR.label,
+        });
+        for (const d of list) {
+          const y = g.zeile0 + (dayNumber(d) - 1) * g.zeilenhoehe;
+          const wi = weekdayIndex(d);
+          const name = holiday(d);
+          if (name) fills += rect([x, y, g.breite, g.zeilenhoehe], { fill: COLOR.holidayFill });
+          else if (wi >= 5) fills += rect([x, y, g.breite, g.zeilenhoehe], { fill: COLOR.soft });
+          const ink = name ? COLOR.holiday : COLOR.text;
+          labels += text(x + 8, y + (wi === 0 ? 20 : 28), `${d.slice(8, 10)} ${SPERREN_TAGE[wi]}`, { 'font-size': 16, 'font-weight': 700, fill: ink });
+          if (wi === 0) {
+            labels += text(x + 8, y + 36, `KW ${Number(isoWeekKey(d).slice(6))}`, { 'font-size': 10, fill: name ? COLOR.holiday : COLOR.faint });
+          }
+          lines += `M${num(x)} ${num(y)}h${num(g.breite)}`;
+          lines += `M${num(x + g.label + g.platz)} ${num(y)}v${g.zeilenhoehe}`;
+        }
+        lines += `M${num(x)} ${num(bottom)}h${num(g.breite)}`;
+        lines += `M${num(x + g.label)} ${num(g.zeile0)}V${num(bottom)}`;
+        out += rect([x, g.zeile0, g.breite, bottom - g.zeile0], { fill: 'none', stroke: COLOR.frame, 'stroke-width': 1.5 });
+      });
+      return out + fills + `<path d="${lines}" fill="none" stroke="${COLOR.line}" stroke-width="1.2"/>` + labels + SPERREN_MARKER;
+    }),
+  };
 }
 
 // ---------- Tippen und Heute ----------

@@ -26,6 +26,7 @@ function context(md: string, over: Partial<NoteContext> = {}): NoteContext {
     onDraft: vi.fn(),
     onSave: vi.fn(),
     onCancel: vi.fn(),
+    onBetra: vi.fn(),
     ...over,
   };
 }
@@ -258,10 +259,64 @@ test('tables, code, emphasis and line breaks come through', () => {
   expect([...host.querySelectorAll('td')].map((c) => c.textContent)).toEqual(['1', '2']);
 });
 
+test('yellow and red keep nothing of hostile markup but their fixed class', () => {
+  const html =
+    '<p><mark onclick="alert(1)" style="color:red" class="x">Gelb</mark><span class="rot x" id="y" onclick="alert(2)" style="position:fixed">Rot<img src="https://evil.example/p.png"></span></p>';
+  const host = show(html, context(''));
+  const mark = host.querySelector('mark')!;
+  expect(mark.textContent).toBe('Gelb');
+  expect([...mark.attributes].map((a) => a.name)).toEqual([]);
+  const rot = host.querySelector('span.rot')!;
+  expect(rot.textContent).toBe('Rot');
+  expect([...rot.attributes].map((a) => `${a.name}=${a.value}`)).toEqual(['class=rot']);
+  expect(host.querySelector('img')).toBeNull();
+});
+
+// Eine Erinnerung „Betra anmelden“ in Rot, wie das Morgenbriefing sie schreibt (erfundener Abschnitt).
+const ROT = '- **<span style="color:#c62828">Betra anmelden bis Fr 18.12.: Muster Abschnitt 1, Mo 01.03.2027 (IB)</span>** %%sperre:IB-2027-03-01-1 rot%%';
+
+test('while a reminder is being edited it has no field for the Betra number', () => {
+  const md = `${ROT}\n`;
+  expect(show(renderNote(md), context(md)).querySelector('form.betra')).not.toBeNull();
+  const editing = show(renderNote(md), context(md, { editing: { line: 0, saving: false }, draft: { current: 'x' } }));
+  expect(editing.querySelector('input[aria-label="Text bearbeiten"]')).not.toBeNull();
+  expect(editing.querySelector('form.betra')).toBeNull();
+});
+
+test('the field keeps what is typed while its reminder changes, and starts empty for another sperre at the same place', async () => {
+  const host = document.createElement('div');
+  document.body.append(host);
+  hosts.push(host);
+  const draw = (md: string) => render(h(Fragment, null, noteToVNodes(renderNote(md), context(md))), host);
+  const field = () => host.querySelector<HTMLInputElement>('form.betra input')!;
+  draw(`${ROT}\n`);
+  field().value = '12345';
+  field().dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  // Das Morgenbriefing lief neu, die Stufe ist jetzt eine andere: dasselbe Feld, das Getippte bleibt.
+  draw(`${ROT.replace(' rot%%', ' gelb%%')}\n`);
+  expect(field().value).toBe('12345');
+  // An derselben Stelle steht jetzt eine andere Sperre: Ihr Feld beginnt leer.
+  draw(`${ROT.replace('IB-2027-03-01-1', 'IB-2027-03-02-1')}\n`);
+  expect(field().value).toBe('');
+});
+
 test('a list item whose line the note does not know gets no pencil and no checkbox', () => {
   const html = '<ul><li data-line="40"><input type="checkbox" data-line="40"> fremd</li></ul>';
   const host = show(html, context('nur eine Zeile'));
   expect(pencils(host)).toHaveLength(0);
   expect(boxes(host)).toHaveLength(0);
   expect(host.textContent).toContain('fremd');
+});
+
+test('the names of the checkbox and the pen at a yellow and a red reminder have no markup', () => {
+  const gelb = '- [ ] **==Betra anmelden bis Fr 18.12.: Muster Abschnitt 1, Mo 01.03.2027 (IB)==** %%sperre:IB-2027-03-01-1 gelb%%';
+  const rot = '- [ ] **<span style="color:#c62828">Betra anmelden bis Fr 18.12.: Muster Abschnitt 2, Mo 01.03.2027 (IB)</span>** %%sperre:IB-2027-03-02-1 rot%%';
+  const md = `${gelb}\n${rot}\n`;
+  const host = show(renderNote(md), context(md));
+  const names = [...boxes(host), ...pencils(host)].map((el) => el.getAttribute('aria-label') ?? '');
+  expect(names).toHaveLength(4);
+  for (const name of names) expect(name).not.toMatch(/\*\*|==|<|span|style/);
+  expect(names[0]).toBe('Betra anmelden bis Fr 18.12.: Muster Abschnitt 1, Mo 01.03.2027 (IB)');
+  expect(names[1]).toBe('Betra anmelden bis Fr 18.12.: Muster Abschnitt 2, Mo 01.03.2027 (IB)');
 });

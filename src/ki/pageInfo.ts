@@ -1,6 +1,7 @@
 import type { PageKind } from '../ink/types';
 import { MONTHS, formatDayLong, formatDayShort, isValidDay, weekDays, type Day } from '../lib/dates';
 import { pagesLabel, type DayEntry } from '../lib/dayMeetings';
+import { parseSperrenKey, quartalMonate, sperrenMonatsname, sperrenTitel } from '../lib/sperren';
 
 // Was Claude über die offene Seite erfährt, als Text: der Kurzname für den Schalter, die Kopfzeile und die Angaben zu
 // einem Tag. Reine Rechnung ohne DOM und ohne Netz.
@@ -19,6 +20,7 @@ export function pageLabel(kind: PageKind, key: string, meta: Record<string, stri
   if (kind === 'tag') return formatDayLong(key);
   if (kind === 'woche') return `KW ${weekNumber(key)} ${key.slice(0, 4)}`;
   if (kind === 'monat') return monthName(key);
+  if (kind === 'sperren') return sperrenTitel(key);
   return `${meta.thema || 'Besprechung'}, Seite ${meta.seitennr || 1}`;
 }
 
@@ -30,6 +32,14 @@ export function pageHeader(kind: PageKind, key: string, meta: Record<string, str
     return `Wochenseite KW ${weekNumber(key)}, ${formatDayShort(days[0])} bis ${formatDayLong(days[6])}`;
   }
   if (kind === 'monat') return `Monatsseite ${monthName(key)}`;
+  if (kind === 'sperren') {
+    const s = parseSperrenKey(key);
+    if (!s) return `Sperrenkalender ${key}`;
+    const months = quartalMonate(s);
+    const von = sperrenMonatsname(months[0]);
+    const bis = sperrenMonatsname(months[2]);
+    return `Sperrenkalender ${s.fachlinie}, ${s.quartal}. Quartal ${s.jahr} (${von} bis ${bis} ${s.jahr})`;
+  }
   let text = 'Besprechung';
   if (meta.thema) text += ` „${meta.thema}“`;
   if (meta.datum && isValidDay(meta.datum)) text += ` am ${formatDayLong(meta.datum)}`;

@@ -1,6 +1,20 @@
 import { expect, test } from 'vitest';
 import { appendErgaenzung, newDailyNote } from '../../src/lib/dailyNote';
-import { addItemsToNote, addToNote, editLine, findLine, idsOf, relocate, STALE_NOTICE, tickLine } from '../../src/lib/briefingEdit';
+import {
+  addItemsToNote,
+  addToNote,
+  BETRA_FALSCH,
+  betraNummer,
+  betraOf,
+  editLine,
+  findLine,
+  idsOf,
+  relocate,
+  setBetraLine,
+  sperreOf,
+  STALE_NOTICE,
+  tickLine,
+} from '../../src/lib/briefingEdit';
 import { fixture, lineOf } from './helpers';
 
 // Die Entscheidungen hinter der Karte „Morgenbriefing“: Jede Änderung geht vom neuesten Text aus, trifft nur die Zeile, die man
@@ -193,4 +207,72 @@ test('a missing section or note is created', () => {
 test('no items, no change', () => {
   expect(addItemsToNote(note, '2026-10-29', [])).toBeNull();
   expect(addItemsToNote(null, '2026-10-29', [])).toBeNull();
+});
+
+// ---------- Die Betra-Nr. an einer Erinnerung „Betra anmelden“ ----------
+
+const rot = '- **<span style="color:#c62828">Betra anmelden bis Fr 18.12.: Muster Abschnitt 1, Mo 01.03.2027 (IB)</span>** %%sperre:IB-2027-03-01-1 rot%%';
+const md = `# 2026-12-18\n\n## Morgenbriefing (automatisch)\n### Offene Punkte\nSperren und Betra\n${rot}\n`;
+
+test('the hint for a wrong Betra number says what is allowed', () => {
+  expect(BETRA_FALSCH).toBe('Bitte nur die Betra-Nr. eintragen, 5 bis 8 Ziffern.');
+});
+
+test('a Betra number is 5 to 8 digits, spaces at the edges do not count', () => {
+  expect(betraNummer(' 1234567 ')).toBe('1234567');
+  expect(betraNummer('12345')).toBe('12345');
+  expect(betraNummer('12345678')).toBe('12345678');
+  for (const wrong of ['12a4567', '1234', '123456789', '123 4567', '', '   ', '１２３４５']) expect(betraNummer(wrong), wrong).toBeNull();
+});
+
+test('sperreOf and betraOf read the words of the markers, not the text', () => {
+  expect(sperreOf(rot)).toBe('IB-2027-03-01-1');
+  expect(betraOf(rot)).toBeNull();
+  expect(betraOf(md.replace('rot%%', 'rot betra:1234567%%').split('\n')[5])).toBe('1234567');
+  expect(sperreOf(`${rot}\r`)).toBe('IB-2027-03-01-1');
+  expect(sperreOf('- Betra anmelden sperre:IB-2027-03-01-1')).toBeNull();
+  expect(sperreOf('- Ohne Wert %%sperre:%%')).toBeNull();
+  expect(sperreOf('- Andere Kennung %%ob:k3x9%%')).toBeNull();
+  expect(sperreOf('### Offene Punkte')).toBeNull();
+});
+
+test('a Betra number goes into the marker of its reminder, a second one replaces it', () => {
+  const r = setBetraLine(md, 5, rot, '1234567');
+  expect(r).toEqual({ ok: true, text: md.replace('rot%%', 'rot betra:1234567%%') });
+  // zweites Eintragen ersetzt die Nummer, es bleibt ein betra:
+  const once = md.replace('rot%%', 'rot betra:1234567%%');
+  expect(setBetraLine(once, 5, once.split('\n')[5], '7654321')).toEqual({ ok: true, text: md.replace('rot%%', 'rot betra:7654321%%') });
+});
+
+test('a reminder that changed meanwhile is found by its sperre', () => {
+  // Zeile hat sich geändert (Stufe jetzt gelb, eine Zeile tiefer): über sperre: gefunden
+  const gelb = rot.replace(' rot%%', ' gelb%%');
+  const moved = md.replace(rot, `- Andere Zeile\n${gelb}`);
+  expect(setBetraLine(moved, 5, rot, '1234567')).toEqual({ ok: true, text: moved.replace('gelb%%', 'gelb betra:1234567%%') });
+  // Eine andere Zeile mit einer der Kennungen, aber einer anderen Sperre, ist es nicht.
+  const shown = rot.replace('rot%%', 'rot betra:1234567%%');
+  const other = md.replace(rot, '- Betra anmelden bis Mo 21.12.: Muster Abschnitt 2 %%sperre:IB-2027-03-04-1 betra:1234567%%');
+  expect(setBetraLine(other, 5, shown, '7654321')).toEqual({ ok: false });
+});
+
+test('without a sperre, without the note, or when the reminder is gone or not clear, nothing is written', () => {
+  // ohne sperre: oder ohne Notiz: nichts
+  expect(setBetraLine(md, 3, '### Offene Punkte', '1234567')).toEqual({ ok: false });
+  expect(setBetraLine(null, 5, rot, '1234567')).toEqual({ ok: false });
+  expect(setBetraLine(md.replace(`${rot}\n`, ''), 5, rot, '1234567')).toEqual({ ok: false });
+  // Dieselbe Sperre zweimal, und keine steht an der gesehenen Stelle: Welche gemeint war, lässt sich nicht sagen.
+  const normal = '- Betra anmelden bis Fr 18.12.: Muster Abschnitt 1, Mo 01.03.2027 (IB) %%sperre:IB-2027-03-01-1%%';
+  const twice = md.replace(rot, `- Neu oben\n${rot.replace(' rot%%', ' gelb%%')}\n${rot}`);
+  expect(setBetraLine(twice, 5, normal, '1234567')).toEqual({ ok: false });
+  // Was keine Betra-Nr. ist, kommt nie in einen Marker.
+  for (const wrong of ['12a4567', '1234', ' 1234567', '1234567%%', '']) expect(setBetraLine(md, 5, rot, wrong), wrong).toEqual({ ok: false });
+});
+
+test('a Betra number keeps the line endings of a Windows note and everything else in the line', () => {
+  // CRLF bleibt
+  const crlf = md.replace(/\n/g, '\r\n');
+  expect(setBetraLine(crlf, 5, rot + '\r', '1234567')).toEqual({ ok: true, text: crlf.replace('rot%%', 'rot betra:1234567%%') });
+  // Leerraum im Marker und ein zweiter Marker bleiben, wie sie sind.
+  const spaced = md.replace('rot%%', 'rot %% %%ob:k3x9%%');
+  expect(setBetraLine(spaced, 5, spaced.split('\n')[5], '1234567')).toEqual({ ok: true, text: spaced.replace('rot %%', 'rot betra:1234567 %%') });
 });

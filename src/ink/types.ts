@@ -51,7 +51,7 @@ export type Stroke = {
   pts: Pt[];
 };
 
-export type PageKind = 'tag' | 'woche' | 'monat' | 'besprechung';
+export type PageKind = 'tag' | 'woche' | 'monat' | 'besprechung' | 'sperren';
 
 export type Page = {
   kind: PageKind;

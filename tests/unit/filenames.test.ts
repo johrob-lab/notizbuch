@@ -9,6 +9,10 @@ import {
   dailyNotePath,
   monatPagePath,
   sanitizeThema,
+  sperrenCsvName,
+  sperrenCsvPath,
+  sperrenJsonPath,
+  sperrenPagePath,
   tabelleCsvPath,
   tabelleJsonPath,
   tagPagePath,
@@ -104,4 +108,14 @@ test('the CSV and its store sit next to the pages of the meeting', () => {
   expect(tabelleJsonPath(base)).toBe('07 Anhänge/Notizbuch/2026/2026-10-29 0800 Abstimmung Beispiel 2027 Tabelle.json');
   expect(() => assertAllowedPath(tabelleCsvPath(base), 'read')).not.toThrow();
   expect(() => assertAllowedPath(tabelleJsonPath(base), 'read')).not.toThrow();
+});
+
+test('Pfade und Namen der Sperrenseiten', () => {
+  expect(sperrenPagePath('IB-2027-Q1')).toBe('07 Anhänge/Notizbuch/2027/2027-Q1 Sperren IB.svg');
+  expect(sperrenCsvPath('Lehne', 2027)).toBe('07 Anhänge/Notizbuch/2027/Sperren Lehne 2027.csv');
+  expect(sperrenJsonPath('IB', 2027)).toBe('07 Anhänge/Notizbuch/2027/Sperren IB 2027.json');
+  expect(sperrenCsvName('IB', 2027)).toBe('Sperren IB 2027.csv');
+  expect(() => sperrenPagePath('IB-2027-Q5')).toThrow();
+  expect(pageName('07 Anhänge/Notizbuch/2027/2027-Q1 Sperren IB.svg')).toBe('Sperren IB, 1. Quartal 2027');
+  expect(pageName('07 Anhänge/Notizbuch/2027/2027-Q5 Sperren IB.svg')).toBe('2027-Q5 Sperren IB');
 });

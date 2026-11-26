@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test } from 'vitest';
 import { buildSamples, type Sample } from '../../scripts/samples/pages';
 import { parsePage } from '../../src/ink/svg';
-import { besprechungPagePath, monatPagePath, tagPagePath, wochePagePath } from '../../src/lib/filenames';
+import { besprechungPagePath, monatPagePath, sperrenPagePath, tagPagePath, wochePagePath } from '../../src/lib/filenames';
 import { assertAllowedPath } from '../../src/sync/paths';
 
 // Die Beispielseiten für den Trockenlauf und den Probebetrieb. Erfundener Inhalt, erzeugt mit den echten Funktionen
@@ -43,6 +43,7 @@ describe('sample pages', () => {
       `lauf3-nachtrag: ${tagPagePath(DAY)}`,
       `stifte: ${tagPagePath(PEN_DAY)}`,
       `tabelle: ${besprechungPagePath('2026-10-30 0900 Abstimmung Muster 2027', 1)}`,
+      `sperren: ${sperrenPagePath('IB-2027-Q1')}`,
     ]);
   });
 
@@ -122,8 +123,20 @@ describe('sample pages', () => {
     expect(page.strokes.length).toBe(sample.page.strokes.length);
   });
 
+  test('the Sperren sample has strokes in exactly the five fields of the invented entries', () => {
+    const sample = find(samples, 'sperren', '07 Anhänge/Notizbuch/2027/2027-Q1 Sperren IB.svg');
+    expect(sample.svg).toContain('data-seite="sperren"');
+    expect(sample.svg).toContain('data-schluessel="IB-2027-Q1"');
+    const groups = [...sample.svg.matchAll(/<g data-feld="([^"]+)"/g)].map((m) => m[1]);
+    expect(groups.sort()).toEqual(['sperre-2027-02-15-1', 'sperre-2027-02-16-1', 'sperre-2027-02-16-2', 'sperre-2027-02-17-1', 'sperre-2027-03-01-1']);
+    const page = parsePage(sample.svg);
+    expect(page).toMatchObject({ kind: 'sperren', key: 'IB-2027-Q1' });
+    expect(page.strokes.length).toBe(sample.page.strokes.length);
+    expect(buildSamples().find((s) => s.folder === 'sperren')?.svg).toBe(sample.svg);
+  });
+
   test('the older samples stay ballpoint pages of version 1', () => {
-    const older = samples.filter((s) => s.folder !== 'stifte' && s.folder !== 'tabelle');
+    const older = samples.filter((s) => s.folder !== 'stifte' && s.folder !== 'tabelle' && s.folder !== 'sperren');
     expect(older.length).toBe(6);
     for (const sample of older) {
       expect(new Set(parsePage(sample.svg).strokes.map((s) => s.tool)), sample.path).toEqual(new Set(['kugel']));

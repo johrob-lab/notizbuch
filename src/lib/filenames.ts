@@ -1,4 +1,5 @@
 import { formatDayLong, MONTHS, type Day } from './dates';
+import { parseSperrenKey, sperrenTitel, type Fachlinie } from './sperren';
 
 const DAILY_NOTES_DIR = '05 Daily Notes';
 export const PAGES_DIR = '07 Anhänge/Notizbuch';
@@ -26,6 +27,27 @@ export function wochePagePath(weekKey: string): string {
 
 export function monatPagePath(monthKey: string): string {
   return `${PAGES_DIR}/${monthKey.slice(0, 4)}/${monthKey} Monat.svg`;
+}
+
+/** Die Seite eines Quartals, zum Beispiel `2027-Q1 Sperren IB.svg`. Wirft bei einem ungültigen Schlüssel. */
+export function sperrenPagePath(key: string): string {
+  const s = parseSperrenKey(key);
+  if (!s) throw new Error(`Ungültiger Sperren-Schlüssel: ${key}`);
+  return `${PAGES_DIR}/${s.jahr}/${s.jahr}-Q${s.quartal} Sperren ${s.fachlinie}.svg`;
+}
+
+export function sperrenCsvName(f: Fachlinie, jahr: number): string {
+  return `Sperren ${f} ${jahr}.csv`;
+}
+
+/** Die Liste aller Sperren einer Fachlinie und eines Jahres, neben den Seiten. */
+export function sperrenCsvPath(f: Fachlinie, jahr: number): string {
+  return `${PAGES_DIR}/${jahr}/${sperrenCsvName(f, jahr)}`;
+}
+
+/** Der JSON-Speicher dazu. */
+export function sperrenJsonPath(f: Fachlinie, jahr: number): string {
+  return `${PAGES_DIR}/${jahr}/Sperren ${f} ${jahr}.json`;
 }
 
 /**
@@ -73,6 +95,8 @@ export function pageName(path: string): string {
   if (week) return `KW ${week[2]} / ${week[1]}`;
   const month = /^(\d{4})-(\d{2}) Monat\.svg$/.exec(file);
   if (month && Number(month[2]) >= 1 && Number(month[2]) <= 12) return `${MONTHS[Number(month[2]) - 1]} ${month[1]}`;
+  const sperren = /^(\d{4})-Q([1-4]) Sperren (IB|Lehne)\.svg$/.exec(file);
+  if (sperren) return sperrenTitel(`${sperren[3]}-${sperren[1]}-Q${sperren[2]}`);
   const meeting = /^\d{4}-\d{2}-\d{2} \d* (.+) S(\d+)\.svg$/.exec(file);
   if (meeting) return `${meeting[1]}, Seite ${meeting[2]}`;
   return file.replace(/\.svg$/, '');

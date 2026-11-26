@@ -1,13 +1,14 @@
+import { stepSperrenKey, parseSperrenKey, quartalMonate } from '../lib/sperren';
 import { addDays, isValidDay, isoWeekKey, monthKey, todayVienna, weekDays, type Day } from '../lib/dates';
 
 // Die Adresse (`window.location.hash`) bestimmt, welche Seite offen ist. Jede Seite hat genau eine gültige Adresse,
 // und `parseRoute` liest nur Adressen mit einem Schlüssel, den es gibt: Alles andere zeigt den heutigen Tag.
 
-export type View = 'tag' | 'woche' | 'monat' | 'besprechung' | 'besprechungen' | 'einstellungen';
+export type View = 'tag' | 'woche' | 'monat' | 'besprechung' | 'besprechungen' | 'einstellungen' | 'sperren';
 
 /**
  * Eine Seite des Notizbuchs. Der Schlüssel ist je nach Ansicht der Tag (`2026-10-29`), die Woche (`2026-W44`),
- * der Monat (`2026-10`) oder der Name der Besprechung ohne Seitennummer. Die Einstellungen und die Liste der Besprechungen haben keinen Schlüssel.
+ * der Monat (`2026-10`) oder der Name der Besprechung ohne Seitennummer, bei den Sperren das Quartal einer Fachlinie (`IB-2027-Q1`). Die Einstellungen und die Liste der Besprechungen haben keinen Schlüssel.
  */
 export type Route = { view: View; key: string; n?: number };
 
@@ -21,6 +22,7 @@ const WEEK = /^\d{4}-W\d{2}$/;
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const COUNT = /^[1-9]\d*$/;
 const PAGE_ADDRESS = /^#\/(tag|woche|monat)\/(.*)$/;
+const SPERREN_ADDRESS = /^#\/sperren\/(.*)$/;
 const MEETING_ADDRESS = /^#\/besprechung\/([^/]+)\/(.*)$/;
 
 function isValidWeek(key: string): boolean {
@@ -54,6 +56,9 @@ function read(hash: string): Route | null {
     const view = page[1] as 'tag' | 'woche' | 'monat';
     return isValidKey(view, page[2]) ? { view, key: page[2] } : null;
   }
+
+  const sperren = SPERREN_ADDRESS.exec(hash);
+  if (sperren) return parseSperrenKey(sperren[1]) ? { view: 'sperren', key: sperren[1] } : null;
 
   const meeting = MEETING_ADDRESS.exec(hash);
   if (meeting && COUNT.test(meeting[2]) && Number.isSafeInteger(Number(meeting[2]))) {
@@ -90,6 +95,7 @@ function stepMonth(key: string, delta: number): string {
 // Besprechung blättert die Seite selbst (siehe `Steps`): Welche Seiten es gibt, steht nicht in der Adresse.
 function step(r: Route, delta: 1 | -1): Route {
   if (r.view === 'besprechung' || r.view === 'besprechungen' || r.view === 'einstellungen') return r;
+  if (r.view === 'sperren') return { view: 'sperren', key: stepSperrenKey(r.key, delta) };
   let key: string;
   if (r.view === 'tag') key = addDays(r.key, delta);
   else if (r.view === 'woche') key = isoWeekKey(addDays(weekDays(r.key)[0], 7 * delta));
@@ -116,6 +122,12 @@ export function shownDay(r: Route, today: Day = todayVienna()): Day {
     return days.includes(today) ? today : days[0];
   }
   if (r.view === 'monat') return monthKey(today) === r.key ? today : `${r.key}-01`;
+  if (r.view === 'sperren') {
+    const s = parseSperrenKey(r.key);
+    if (!s) return today;
+    const months = quartalMonate(s);
+    return months.includes(monthKey(today)) ? today : `${months[0]}-01`;
+  }
   const day = r.key.slice(0, 10);
   return r.view === 'besprechung' && isValidDay(day) ? day : today;
 }
@@ -143,6 +155,7 @@ export const STEP_LABELS: Record<Route['view'], [string, string]> = {
   monat: ['Voriger Monat', 'Nächster Monat'],
   besprechung: ['Vorige Seite', 'Nächste Seite'],
   besprechungen: ['Vorige Seite', 'Nächste Seite'],
+  sperren: ['Voriges Quartal', 'Nächstes Quartal'],
   einstellungen: ['Vorige Seite', 'Nächste Seite'],
 };
 

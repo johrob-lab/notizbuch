@@ -15,16 +15,15 @@ import {
   pageLabel,
   projectNames,
 } from '../lib/meetings';
-import { csvDateiname, ERNEUT_TIPPEN, KEINE_CSV, neuesterStrich, OHNE_NETZ, standHinweis } from '../lib/tabelleCsv';
+import { csvDateiname, KEINE_CSV, neuesterStrich } from '../lib/tabelleCsv';
 import { meetingLayout } from '../pages/layouts';
 import { meetingPageText } from '../pages/meetingText';
-import { OfflineError, type ListDir, type ReadFile } from '../sync/github';
+import { type ListDir, type ReadFile } from '../sync/github';
 import { normalizePath } from '../sync/paths';
-import { csvAusgeben } from './csvAusgabe';
 import { confirmDialog } from './Dialog';
 import { PageView, type Kopf, type KopfTools, type PageProps } from './PageView';
 import { routeHash, type Steps } from './router';
-import { FAILED } from './texts';
+import { useCsvDownload } from './useCsvDownload';
 
 // Eine Seite einer Besprechung: Über der Schreibfläche steht ein Formular für Thema, Datum, Zeit, Ort und Projekt, daneben
 // die Leiste für die Seiten (welche Seite von wie vielen, neue Seite, Seite löschen). Das Formular ist HTML und nicht auf
@@ -48,8 +47,6 @@ const QUESTION = 'Seite wirklich löschen?';
 const ART_QUESTION = 'Auf der Seite steht schon etwas. Art trotzdem ändern?';
 const ADD_FAILED = 'Die neue Seite konnte nicht angelegt werden. Bitte noch einmal versuchen.';
 const DELETE_FAILED = 'Die Seite konnte nicht gelöscht werden. Bitte noch einmal versuchen.';
-/** So lange gilt eine geladene CSV nach einem gescheiterten Teilen, danach lädt der nächste Tipp sie neu. */
-const KEEP_CSV_MS = 60_000;
 
 /** Die Nummern der Seiten dieser Besprechung unter den Dateinamen. */
 const pagesOf = (names: string[], base: string): number[] => listMeetings(names, base.slice(0, 10)).find((meeting) => meeting.base === base)?.pages ?? [];
@@ -198,7 +195,7 @@ export function BesprechungPage({ base: address, n, listDir, readFile, onSteps, 
   const [listed, setListed] = useState<number[] | null>(null);
   const [local, setLocal] = useState<{ present: number[]; deleted: number[] }>({ present: [], deleted: [] });
   const [problem, setProblem] = useState('');
-  const [hinweis, setHinweis] = useState('');
+  const { hinweis, download } = useCsvDownload({ readFile, readOnly: rest.readOnly });
   // Zählt die Versuche, die Seite neu zu öffnen: Scheitert das Löschen, ist die Sitzung der Seite beendet.
   const [attempt, setAttempt] = useState(0);
   const busy = useRef(false);
@@ -344,49 +341,6 @@ export function BesprechungPage({ base: address, n, listDir, readFile, onSteps, 
     }
   };
 
-  // Die CSV holt die App von GitHub (die Abendroutine schreibt sie dort) und gibt sie unverändert aus: am Firmen-PC als Download,
-  // sonst über das Teilen-Blatt. Hat die Seite neuere Striche als die CSV, kommt die Datei trotzdem, mit einem Hinweis.
-  // Das Teilen braucht den Fingertipp noch frisch (iOS). Dauert das Laden zu lang, scheitert es mit `NotAllowedError`: Dann bleibt
-  // der geladene Text für den nächsten Tipp liegen, der ohne Warten teilt. Er gilt nur für diesen einen Tipp, nur auf dieser Seite
-  // und nur eine Minute lang (`KEEP_CSV_MS`, gemessen beim nächsten Tipp): Ein späterer Tipp lädt die CSV neu, denn die
-  // Abendroutine kann sie inzwischen neu geschrieben haben. Liegt die Zeit des Behaltens in der Zukunft (Uhr zurückgestellt),
-  // gilt der Text ebenfalls als verfallen.
-  const downloading = useRef(false);
-  const loaded = useRef<{ csv: string; at: number } | null>(null);
-  const download = async (tools: KopfTools) => {
-    if (downloading.current) return;
-    downloading.current = true;
-    const kept = loaded.current;
-    loaded.current = null;
-    setHinweis('');
-    try {
-      const age = kept === null ? -1 : Date.now() - kept.at;
-      const csv = kept !== null && age >= 0 && age < KEEP_CSV_MS ? kept.csv : await readFile(tabelleCsvPath(base));
-      if (csv === null) {
-        setHinweis(KEINE_CSV);
-        return;
-      }
-      try {
-        await csvAusgeben(csv, csvDateiname(base), rest.readOnly ? 'laden' : 'teilen');
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'NotAllowedError') {
-          loaded.current = { csv, at: Date.now() };
-          setHinweis(ERNEUT_TIPPEN);
-          return;
-        }
-        throw error;
-      }
-      // Der Zeilenspeicher kommt erst nach der Ausgabe. Ein fehlender oder unlesbarer ist kein Grund, die Datei zurückzuhalten.
-      const store = await readFile(tabelleJsonPath(base)).catch(() => null);
-      setHinweis(standHinweis(store, n, neuesterStrich(tools.current())) ?? '');
-    } catch (error) {
-      if (error instanceof OfflineError) setHinweis(OHNE_NETZ);
-      else if (!(error instanceof DOMException && error.name === 'AbortError')) setHinweis(FAILED);
-    } finally {
-      downloading.current = false;
-    }
-  };
-
   const head: Kopf = {
     ...kopf,
     form: (tools) => (
@@ -401,7 +355,9 @@ export function BesprechungPage({ base: address, n, listDir, readFile, onSteps, 
         onAdd={() => void addPage(tools)}
         onDelete={() => void deletePage(tools)}
         onArt={(select) => void changeArt(tools, select)}
-        onDownload={() => void download(tools)}
+        onDownload={() =>
+          void download({ csvPath: tabelleCsvPath(base), jsonPath: tabelleJsonPath(base), name: csvDateiname(base), seite: n, neuester: neuesterStrich(tools.current()), keine: KEINE_CSV })
+        }
       />
     ),
   };

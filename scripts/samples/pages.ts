@@ -8,8 +8,8 @@ import type { PenKind } from '../../src/ink/pens';
 import { StrokeBuilder } from '../../src/ink/stroke';
 import { serializePage, storedForm } from '../../src/ink/svg';
 import { SMOOTHING, type InkColor, type Page, type Stroke } from '../../src/ink/types';
-import { besprechungPagePath, monatPagePath, tagPagePath, wochePagePath } from '../../src/lib/filenames';
-import { besprechungLayout, monatLayout, tabelleLayout, tagLayout, wocheLayout, type Layout, type Rect } from '../../src/pages/layouts';
+import { besprechungPagePath, monatPagePath, sperrenPagePath, tagPagePath, wochePagePath } from '../../src/lib/filenames';
+import { besprechungLayout, monatLayout, sperrenLayout, tabelleLayout, tagLayout, wocheLayout, type Layout, type Rect } from '../../src/pages/layouts';
 import { tabelleGeometrie } from '../../src/pages/tabelle';
 import { GAP, GLYPHS, type Pt } from './font';
 
@@ -304,6 +304,32 @@ function tablePage(): Built {
   });
 }
 
+/**
+ * Sperrenseite des 1. Quartals 2027 (Fachlinie IB) mit erfundenen Einträgen: ein Abschnitt in Platz 1 an drei Werktagen (15. bis 17.2.),
+ * am 16.2. dazu Gleis und Uhrzeit in Platz 2, und am 1.3. ein durchgestrichenes Wort. Die Schrift ist klein, damit der Text in die
+ * schmalen Felder passt: jeder Strich liegt mit seiner Mitte im Feld, das ihn aufnimmt.
+ */
+function sperrenPage(): Built {
+  const key = 'IB-2027-Q1';
+  const layout = sperrenLayout(key);
+  return seeded(20270215, (rng) => {
+    const s = new Scribe(rng, Date.UTC(2026, 10, 25, 9, 0)); // 25.11.2026, ab 10:00 Uhr Wiener Zeit
+    const write = (id: string, str: string, color: InkColor): { x0: number; x1: number; base: number } => {
+      const r = field(layout, id);
+      const base = r[1] + 30;
+      const { x0, x1 } = s.text(str, r[0] + 4, base, color, 1.0);
+      if (x1 > r[0] + r[2] - 4) throw new Error(`Text „${str}“ passt nicht in Feld ${id}`);
+      return { x0, x1, base };
+    };
+    for (const id of ['sperre-2027-02-15-1', 'sperre-2027-02-16-1', 'sperre-2027-02-17-1']) write(id, 'Muster Abschnitt 1', 'schwarz');
+    write('sperre-2027-02-16-2', 'Nord Gl. 2 8-14', 'blau');
+    // Ein Wort, das gleich wieder durchgestrichen wird
+    const w = write('sperre-2027-03-01-1', 'Muster', 'schwarz');
+    s.stroke([[w.x0 - 2, w.base - 5], [(w.x0 + w.x1) / 2, w.base - 5.8], [w.x1 + 2, w.base - 4.6]], 'schwarz');
+    return { page: { kind: 'sperren', key, meta: {}, strokes: s.strokes }, layout };
+  });
+}
+
 function weekPage(): Built {
   const key = '2026-W44';
   const layout = wocheLayout(key);
@@ -355,7 +381,7 @@ function monthPage(): Built {
 
 /** Eine fertige Beispielseite: wohin sie im Ausgabeordner gehört und ihr SVG-Text. */
 export type Sample = {
-  /** Unterordner der Ausgabe: `lauf1`, `monat`, `lauf3-nachtrag`, `stifte` oder `tabelle`. */
+  /** Unterordner der Ausgabe: `lauf1`, `monat`, `lauf3-nachtrag`, `stifte`, `tabelle` oder `sperren`. */
   folder: string;
   /** Pfad im Vault, zum Beispiel `07 Anhänge/Notizbuch/2026/2026-10-29 Tag.svg`. */
   path: string;
@@ -371,6 +397,7 @@ export type Sample = {
  * - `lauf3-nachtrag`: dieselbe Tagesseite, am Nachmittag weitergeschrieben
  * - `stifte`: Tagesseite vom 30.10.2026 mit je einer Zeile in Kugelschreiber, Fineliner, Füllfeder und Bleistift (Version 2)
  * - `tabelle`: Tabellenseite der Arbeitsvorbereitung vom 30.10.2026 (Version 3)
+ * - `sperren`: Sperrenseite IB, 1. Quartal 2027, mit erfundenen Einträgen
  */
 export function buildSamples(): Sample[] {
   const samples: Sample[] = [];
@@ -389,5 +416,6 @@ export function buildSamples(): Sample[] {
   add('stifte', tagPagePath(PEN_DAY), penPage());
   const table = tablePage();
   add('tabelle', besprechungPagePath(table.layout.key, 1), table);
+  add('sperren', sperrenPagePath('IB-2027-Q1'), sperrenPage());
   return samples;
 }
