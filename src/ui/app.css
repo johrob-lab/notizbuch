@@ -2477,6 +2477,60 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* Die Quellen unter der Antwort: eine kleine Überschrift und je Quelle ein Knopf. */
+.frag-quellen {
+  margin: 6px 0;
+}
+
+.frag-quellen h4 {
+  margin: 0 0 4px;
+  color: #5f6862;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.frag-quellenknoepfe {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.frag-quelle {
+  min-height: 40px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* Die Ansicht zum Lesen: statt des Verlaufs die Notiz einer Quelle, nur zum Lesen. */
+.frag-lesen {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--linie);
+}
+
+.frag-lesen h3 {
+  margin: 0;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.frag-lesetext {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+.frag-lesen .knopf {
+  align-self: flex-start;
+}
+
 /* Die Antwort wie eine Notiz, nur kleiner als in der Karte Morgenbriefing. */
 .frag-antwort {
   font-size: 16px;

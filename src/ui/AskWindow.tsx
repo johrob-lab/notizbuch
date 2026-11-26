@@ -1,6 +1,9 @@
+import type { JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { csvZeilen } from '../gehirn/daten';
 import type { KopieStand } from '../gehirn/kopie';
-import { fuehreAus, WERKZEUGE } from '../gehirn/werkzeuge';
+import { quellenAus, quellenZeile, type Quelle } from '../gehirn/quellen';
+import { findePfad, fuehreAus, WERKZEUGE } from '../gehirn/werkzeuge';
 import { GestureFilter } from '../ink/gestures';
 import { FAILURE_TEXT, KiError } from '../ki/claude';
 import { costCents } from '../ki/cost';
@@ -8,12 +11,14 @@ import { frage } from '../ki/gespraech';
 import { pageImage } from '../ki/pageImage';
 import { buildMessages, systemBlocks, type SentTurn } from '../ki/prompt';
 import { todayVienna } from '../lib/dates';
+import { dailyNotePath } from '../lib/filenames';
 import type { KiModel } from '../lib/settings';
 import type { SyncEngine } from '../sync/engine';
 import type { CopyClient } from '../sync/github';
 import type { AskPage } from './ask';
-import { Round, type Turn } from './askRound';
+import { Round, readOnlyNodes, type Turn } from './askRound';
 import { useRoundActions } from './askTakeover';
+import { routeHash } from './router';
 import { keepFocusAfterTap, watchHand } from './palmGuard';
 import { useActivation, type Pressable } from './pointerBits';
 import { KOPIE_WARTEN_MS, useKopie } from './useKopie';
@@ -55,7 +60,12 @@ type Knopf = Pressable & { run(): void };
 type Fehler = { satz: string; code: string | null };
 
 /** Was die Werkzeuge ohne Kopie sehen (die Datenbank ließ sich nicht öffnen): nichts. */
-const OHNE_KOPIE: KopieStand = { geladen: 0, gesamt: 0, vollstaendig: false, ohneNetz: false };
+const OHNE_KOPIE: KopieStand = {
+  geladen: 0,
+  gesamt: 0,
+  vollstaendig: false,
+  ohneNetz: false,
+};
 
 /** Die Frage mit der Seite: ihre Angaben als Text und ihr Bild, beides zugleich gelesen. Ohne Bild ist `image` `null`. */
 async function questionWithPage(page: AskPage, question: string): Promise<SentTurn> {
@@ -83,6 +93,52 @@ async function atMost(promise: Promise<unknown>, ms: number): Promise<void> {
   }
 }
 
+/** Der Text einer CSV als Liste, eine Zeile je Punkt. */
+const csvListe = (text: string) => (
+  <ul>
+    {csvZeilen(text).map((zeile, i) => (
+      <li key={i}>{zeile}</li>
+    ))}
+  </ul>
+);
+
+/**
+ * Die Ansicht zum Lesen: die Notiz einer Quelle aus der Kopie, nur zum Lesen, mit dem Abschnitt der Quelle in Sicht. Darunter
+ * „Zurück zur Antwort“. Fehlt die Notiz inzwischen in der Kopie, steht ein Satz.
+ */
+function Lesen({
+  quelle,
+  text,
+  press,
+  onZurueck,
+}: {
+  quelle: Quelle;
+  text: string | null;
+  press: (b: Knopf) => JSX.IntrinsicElements['button'];
+  onZurueck(): void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || !quelle.abschnitt) return;
+    const gesucht = quelle.abschnitt.trim().toLowerCase();
+    const kopf = [...el.querySelectorAll('h1, h2, h3, h4, h5, h6')].find((h) => (h.textContent ?? '').trim().toLowerCase() === gesucht);
+    kopf?.scrollIntoView({ block: 'start' });
+  }, [quelle, text]);
+  const csv = /\.csv$/i.test(quelle.pfad);
+  return (
+    <div class="frag-lesen">
+      <h3>{quelle.etikett}</h3>
+      <div ref={box} class="frag-antwort frag-lesetext">
+        {text === null ? <p>Diese Notiz ist nicht mehr in der Kopie.</p> : csv ? csvListe(text) : readOnlyNodes(text)}
+      </div>
+      <button type="button" class="knopf" {...press({ key: 'zurueck', run: onZurueck })}>
+        Zurück zur Antwort
+      </button>
+    </div>
+  );
+}
+
 /**
  * Die Zeile zur Kopie unter den Knöpfen: während des Ladens der Fortschritt, nach einem Laden ohne Netz, was fehlt. Ist die Kopie
  * vollständig, steht nichts da, auch nicht für den Augenblick, in dem sie beim Öffnen nachsieht.
@@ -108,6 +164,8 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
   /** Das Gespräch, die neueste Runde zuerst. */
   const [turns, setTurns] = useState<Turn[]>([]);
   const [failure, setFailure] = useState<Fehler | null>(null);
+  /** Die Quelle, die das Fenster statt des Verlaufs zeigt, `null` ohne. */
+  const [lesen, setLesen] = useState<Quelle | null>(null);
   const gehirn = useKopie(client);
   // Die Runden, wie sie zuletzt gezeichnet wurden: Eine Nachfrage schickt die früheren mit.
   const turnsNow = useRef(turns);
@@ -205,6 +263,7 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
     };
     setQuestion('');
     setFailure(null);
+    setLesen(null);
     field.current?.blur(); // am iPad geht die Tastatur zu
     setTurns((all) => [turn, ...all]);
 
@@ -266,7 +325,13 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
       if (talk.current !== mine) return;
       if (antwort.end === 'gestoppt') return stopped(antwort.pfade);
       const cost = antwort.usage ? costCents(model, antwort.usage) : null;
-      change(() => ({ answer: antwort.text, state: antwort.end, cost, partial: antwort.partial, pfade: antwort.pfade }));
+      change(() => ({
+        answer: antwort.text,
+        state: antwort.end,
+        cost,
+        partial: antwort.partial,
+        pfade: antwort.pfade,
+      }));
     } catch (error) {
       if (talk.current !== mine) return;
       // Nach „Stopp“ ist ein Fehler keiner mehr. Alles, was kein Fehler der Schnittstelle ist, zählt wie „nicht erreichbar“.
@@ -276,7 +341,13 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
         code: error instanceof KiError ? error.code : null,
       };
       // Kam schon Text, bleibt er stehen, und der Fehler steht darunter. Sonst geht die Frage zurück ins Feld.
-      if (shown.trim() !== '') change(() => ({ answer: shown, state: 'fehler', failure: fehler.satz, code: fehler.code }));
+      if (shown.trim() !== '')
+        change(() => ({
+          answer: shown,
+          state: 'fehler',
+          failure: fehler.satz,
+          code: fehler.code,
+        }));
       else {
         giveBack();
         setFailure(fehler);
@@ -291,6 +362,7 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
     endTalk();
     setTurns([]);
     setFailure(null);
+    setLesen(null);
     focusField();
   };
 
@@ -303,8 +375,21 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
     setWithPage(true);
     setTurns([]);
     setFailure(null);
+    setLesen(null);
   };
 
+  /** Die Quellen einer Runde: nur Notizen, die es in der Kopie gibt und die in dieser Frage vorkamen (oder die Tagesnotiz der Seite, die mitging). */
+  const quellenVon = (turn: Turn): Quelle[] => {
+    const dateien = gehirn.kopie?.dateien();
+    if (!dateien || turn.state === 'laeuft' || turn.state === 'fehler' || !turn.answer.includes('Quellen:')) return [];
+    const erlaubt = turn.label !== null ? [...turn.pfade, dailyNotePath(turn.noteDay)] : turn.pfade;
+    return quellenAus(turn.answer, (pfad) => findePfad(dateien, pfad), erlaubt);
+  };
+  /** Eine Tagesnotiz öffnet den Tag in der App, das Fenster bleibt offen. Jede andere Notiz öffnet die Ansicht zum Lesen. */
+  const openQuelle = (quelle: Quelle) => {
+    if (quelle.tag !== null) window.location.hash = routeHash({ view: 'tag', key: quelle.tag });
+    else setLesen(quelle);
+  };
   const press = useActivation(gate, (b: Knopf) => b.run());
   const round = useRoundActions(engine);
   const empty = question.trim() === '';
@@ -342,7 +427,11 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
           aria-checked={withPage}
           aria-label={`Seite mitschicken: ${pageName}`}
           disabled={!page}
-          {...press({ key: 'seite', disabled: !page, run: () => setWithPage((on) => !on) })}
+          {...press({
+            key: 'seite',
+            disabled: !page,
+            run: () => setWithPage((on) => !on),
+          })}
         >
           <span class="frag-spur" />
           <span class="frag-schaltertext">
@@ -355,7 +444,9 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
           type="button"
           class="knopf primaer"
           disabled={!busy && empty}
-          {...press(busy ? { key: 'stopp', run: () => request.current?.abort() } : { key: 'fragen', disabled: empty, run: () => void ask() })}
+          {...press(
+            busy ? { key: 'stopp', run: () => request.current?.abort() } : { key: 'fragen', disabled: empty, run: () => void ask() },
+          )}
         >
           {busy ? 'Stopp' : 'Fragen'}
         </button>
@@ -370,20 +461,37 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
         {failure?.satz ?? ''}
       </p>
       {failure !== null && failure.code !== null && <p class="frag-code">{`Fehlercode ${failure.code}`}</p>}
-      <ol class="frag-verlauf">
-        {turns.map((turn) => (
-          <Round
-            key={turn.id}
-            turn={turn}
-            actions={{
-              take: round.taking[turn.id] ?? 'nein',
-              copy: round.copying[turn.id] ?? 'nein',
-              onTake: () => void round.take(turn),
-              onCopy: () => void round.copy(turn),
-              press,
-            }}
-          />
-        ))}
+      {lesen !== null && (
+        <Lesen quelle={lesen} text={gehirn.kopie?.text(lesen.pfad) ?? null} press={press} onZurueck={() => setLesen(null)} />
+      )}
+      <ol class="frag-verlauf" hidden={lesen !== null}>
+        {turns.map((turn) => {
+          const quellen = quellenVon(turn);
+          return (
+            <Round
+              key={turn.id}
+              turn={turn}
+              actions={{
+                take: round.taking[turn.id] ?? 'nein',
+                copy: round.copying[turn.id] ?? 'nein',
+                onTake: () =>
+                  void round.take(
+                    turn,
+                    quellen.length > 0
+                      ? quellenZeile(
+                          quellen,
+                          (gehirn.kopie?.dateien() ?? []).map((d) => d.path),
+                        )
+                      : undefined,
+                  ),
+                onCopy: () => void round.copy(turn),
+                quellen,
+                onQuelle: openQuelle,
+                press,
+              }}
+            />
+          );
+        })}
       </ol>
     </section>
   );

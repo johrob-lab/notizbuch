@@ -1,3 +1,4 @@
+import { ohneQuellenZeile } from '../gehirn/quellen';
 import type { NoteItem } from '../lib/briefingEdit';
 
 // Aus Frage und Antwort werden die Punkte, die „In Ergänzungen übernehmen“ an die Tagesnotiz hängt: zuerst die Frage mit der
@@ -37,8 +38,12 @@ function itemOf(raw: string): NoteItem | null {
 
 const keep = (text: string, asTask: boolean): NoteItem | null => (text.trim() === '' ? null : { text: text.trim(), asTask });
 
-/** Die Punkte für die Notiz: die Frage (`Claude, HH:MM: …`, auf einer Zeile), danach jede Zeile der Antwort der Reihe nach. */
-export function answerItems(question: string, answer: string, time: string): NoteItem[] {
-  const lines = answer.split('\n').flatMap((line) => itemOf(line) ?? []);
-  return [{ text: `Claude, ${time}: ${question.replace(/\s+/g, ' ').trim()}`, asTask: false }, ...lines];
+/**
+ * Die Punkte für die Notiz: die Frage (`Claude, HH:MM: …`, auf einer Zeile), danach jede Zeile der Antwort der Reihe nach, ohne die
+ * Zeile `Quellen:` der Antwort. Mit `quellen` (die Zeile aus `quellenZeile`) kommt sie als letzter Punkt, ohne Kästchen.
+ */
+export function answerItems(question: string, answer: string, time: string, quellen?: string): NoteItem[] {
+  const lines = ohneQuellenZeile(answer).split('\n').flatMap((line) => itemOf(line) ?? []);
+  const source: NoteItem[] = quellen ? [{ text: quellen, asTask: false }] : [];
+  return [{ text: `Claude, ${time}: ${question.replace(/\s+/g, ' ').trim()}`, asTask: false }, ...lines, ...source];
 }

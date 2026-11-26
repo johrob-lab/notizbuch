@@ -56,3 +56,19 @@ test('every leading quote sign goes', () => {
     { text: 'Aufgabe', asTask: true },
   ]);
 });
+
+test('mit Quellen ist die Zeile der letzte Punkt, die Zeile der Antwort kein eigener', () => {
+  const zeile = 'Quellen: [[2026-11-26]], [[Beispiel Projekt]]';
+  const items = answerItems('F', 'Antwort.\nQuellen: 05 Daily Notes/2026-11-26.md | 02 Projekte/Beispiel Projekt.md', '14:05', zeile);
+  expect(texts(items)).toEqual(['Claude, 14:05: F', 'Antwort.', zeile]);
+  expect(items[2].asTask).toBe(false);
+  // Ohne Quellen im Aufruf fehlt auch die Zeile der Antwort.
+  expect(texts(answerItems('F', 'Antwort.\nQuellen: a', '14:05'))).toEqual(['Claude, 14:05: F', 'Antwort.']);
+});
+
+test('die Klammern der Quellen bleiben in der Notiz unverändert', () => {
+  const zeile = 'Quellen: [[2026-11-26]], [[Beispiel Projekt]]';
+  const items = answerItems('F', 'Antwort', '14:05', zeile);
+  const note = addItemsToNote(newDailyNote('2026-11-26'), '2026-11-26', items)!;
+  expect(note).toContain(`\n- ${zeile}`);
+});

@@ -1,5 +1,5 @@
 import { expect, test as base, type Page } from '@playwright/test';
-import { blobSha, headPolls, openSeeded, type RepoMock } from './helpers/app';
+import { blobSha, headPolls, openSeeded, queued, type RepoMock } from './helpers/app';
 import { mockClaude, type ClaudeMock } from './helpers/claude';
 import { touch } from './helpers/pointer';
 
@@ -199,4 +199,87 @@ test('Fragen beim ersten Laden ohne Netz', async ({ page }) => {
   expect(result.tool_use_id).toBe('toolu_test_1');
   expect(result.content.endsWith(`Hinweis: Die Kopie ist noch nicht vollständig (1 von ${N} Notizen).`)).toBe(true);
   await expect(brainLine(page)).toHaveText(offline);
+});
+
+// Quellen unter der Antwort: Die Zeile „Quellen:“ ist nie zu sehen, jede Quelle ist ein Knopf, aber nur, wenn es die Notiz gibt
+// und sie in dieser Frage vorkam (Review Focus 3).
+
+const TAGESNOTIZ_25 = '05 Daily Notes/2026-11-25.md';
+const KRANICH = '02 Projekte/Projekt Kranich.md';
+const sourceButtons = (page: Page) => askWindow(page).locator('.frag-quelle');
+
+/** Claude sucht „Beispiel“ (Tagesnotiz vom 25.11.) und liest Projekt Kranich, dann antwortet es mit der Zeile `quellen`. */
+function antwortMitQuellen(claude: ClaudeMock, quellen: string): void {
+  claude.queue = [
+    { tools: [{ name: 'suchen', input: { text: 'Beispiel' } }] },
+    { tools: [{ name: 'lesen', input: { pfad: KRANICH } }] },
+    { text: `Die Bestellung geht am 27.11. hinaus.\nQuellen: ${quellen}` },
+  ];
+}
+
+test('Quellen unter der Antwort', async ({ page }) => {
+  const { claude } = await start(page);
+  antwortMitQuellen(claude, `${TAGESNOTIZ_25}#Besprechungen | ${KRANICH}`);
+  await openAsk(page);
+  await askWithEnter(page, 'Was gibt es zur Bestellung Beispiel?');
+  await expect(costs(page)).toHaveCount(1);
+  // Die Zeile „Quellen:“ steht nicht in der Antwort.
+  await expect(answers(page)).toHaveText(['Die Bestellung geht am 27.11. hinaus.']);
+  await expect(askWindow(page).locator('.frag-quellen h4')).toHaveText('Quellen');
+  await expect(sourceButtons(page)).toHaveText(['Mi 25.11.2026 (Besprechungen)', 'Projekt Kranich']);
+
+  // Die Tagesnotiz öffnet den Tag in der App, das Fenster bleibt offen.
+  await sourceButtons(page).first().click();
+  await expect(page).toHaveURL(/#\/tag\/2026-11-25$/);
+  await expect(askWindow(page)).toBeVisible();
+  await expect(answers(page)).toHaveCount(1);
+});
+
+test('Lesen und zurück', async ({ page }) => {
+  const { claude } = await start(page);
+  antwortMitQuellen(claude, `${TAGESNOTIZ_25} | ${KRANICH}`);
+  await openAsk(page);
+  await askWithEnter(page, 'Was gibt es zur Bestellung Beispiel?');
+  await expect(sourceButtons(page)).toHaveCount(2);
+
+  await sourceButtons(page).nth(1).click();
+  const reading = askWindow(page).locator('.frag-lesen');
+  await expect(reading.locator('h3')).toHaveText('Projekt Kranich');
+  await expect(reading).toContainText('Erfundenes Projekt für die Tests.');
+  await expect(askWindow(page).locator('.frag-verlauf')).toBeHidden();
+  // Feld und Knöpfe oben bleiben.
+  await expect(field(page)).toBeVisible();
+  await expect(windowButton(page, 'Fragen')).toBeVisible();
+
+  await windowButton(page, 'Zurück zur Antwort').click();
+  await expect(reading).toHaveCount(0);
+  await expect(answers(page)).toHaveText(['Die Bestellung geht am 27.11. hinaus.']);
+  await expect(sourceButtons(page)).toHaveCount(2);
+});
+
+test('falsche Quelle', async ({ page }) => {
+  const { claude } = await start(page);
+  // Eine Notiz, die es nicht gibt, und eine, die es gibt, die aber in dieser Frage nicht vorkam (Projekt Reiher).
+  antwortMitQuellen(claude, `01 Inbox/Gibt es nicht.md | 06 Archiv/Projekt Reiher.md | ${KRANICH}`);
+  await openAsk(page);
+  await askWithEnter(page, 'Was gibt es zur Bestellung Beispiel?');
+  await expect(answers(page)).toHaveText(['Die Bestellung geht am 27.11. hinaus.']);
+  await expect(sourceButtons(page)).toHaveText(['Projekt Kranich']);
+});
+
+test('Übernehmen mit Quellen', async ({ page }) => {
+  const { claude, repo } = await start(page);
+  antwortMitQuellen(claude, `${TAGESNOTIZ_25} | ${KRANICH}`);
+  await openAsk(page);
+  await askWithEnter(page, 'Was gibt es zur Bestellung Beispiel?');
+  await expect(sourceButtons(page)).toHaveCount(2);
+  await windowButton(page, 'In Ergänzungen übernehmen').click();
+  await expect(windowButton(page, 'Übernommen')).toBeDisabled();
+  // Die Notiz geht in die Warteschlange der App und von dort als PUT an GitHub.
+  const NOTE = '05 Daily Notes/2026-11-26.md';
+  const written = async () => repo.puts.find((put) => put.path === NOTE)?.text ?? (await queued(page))[NOTE] ?? '';
+  await expect.poll(written).toContain('- Quellen: [[2026-11-25]], [[Projekt Kranich]]');
+  const text = await written();
+  expect(text).toContain('- Die Bestellung geht am 27.11. hinaus.');
+  expect(text).not.toContain('Quellen: 05 Daily Notes');
 });

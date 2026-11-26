@@ -1,5 +1,6 @@
 import type { ComponentChildren, JSX } from 'preact';
 import { useMemo } from 'preact/hooks';
+import { ohneQuellenZeile, type Quelle } from '../gehirn/quellen';
 import { costLabel } from '../ki/cost';
 import type { SentTurn } from '../ki/prompt';
 import { timeVienna, type Day } from '../lib/dates';
@@ -60,17 +61,28 @@ export type RoundActions = {
   copy: CopyState;
   onTake(): void;
   onCopy(): void;
+  /** Die Quellen dieser Runde (leer ohne, nach einem Fehler und solange sie läuft) und was ein Tipp auf eine tut. */
+  quellen: Quelle[];
+  onQuelle(quelle: Quelle): void;
   press(b: Pressable & { run(): void }): JSX.IntrinsicElements['button'];
 };
 
-const TAKE_LABEL: Record<TakeState, string> = { nein: 'In Ergänzungen übernehmen', laeuft: 'Wird übernommen …', fertig: 'Übernommen', fehler: 'In Ergänzungen übernehmen' };
-const COPY_LABEL: Record<CopyState, string> = { nein: 'Kopieren', kopiert: 'Kopiert', fehler: 'Kopieren ging nicht.' };
+const TAKE_LABEL: Record<TakeState, string> = {
+  nein: 'In Ergänzungen übernehmen',
+  laeuft: 'Wird übernommen …',
+  fertig: 'Übernommen',
+  fehler: 'In Ergänzungen übernehmen',
+};
+const COPY_LABEL: Record<CopyState, string> = {
+  nein: 'Kopieren',
+  kopiert: 'Kopiert',
+  fehler: 'Kopieren ging nicht.',
+};
 
 const ignore = (): void => undefined;
 
-/** Die Antwort als Bauteile, nur zum Lesen: Aufgaben haben ein gesperrtes Kästchen, es gibt keinen Stift und nichts zu bearbeiten. */
-function answerNodes(answer: string): ComponentChildren {
-  const md = visibleMarkdown(answer);
+/** Markdown als Bauteile, nur zum Lesen (die Antwort und die Notiz der Ansicht zum Lesen): Aufgaben haben ein gesperrtes Kästchen, es gibt keinen Stift und nichts zu bearbeiten. */
+export function readOnlyNodes(md: string): ComponentChildren {
   const ctx: NoteContext = {
     lines: md.split('\n'),
     editing: null,
@@ -85,6 +97,9 @@ function answerNodes(answer: string): ComponentChildren {
   };
   return noteToVNodes(renderNote(md), ctx);
 }
+
+/** Die Antwort ohne die Zeile `Quellen:`, wie eine Notiz zum Lesen. */
+const answerNodes = (answer: string): ComponentChildren => readOnlyNodes(visibleMarkdown(ohneQuellenZeile(answer)));
 
 /** Eine Runde. Die Antwort wird nur neu zerlegt, wenn ihr Text sich ändert: Während eine Antwort läuft, bleiben die älteren, wie sie sind. */
 export function Round({ turn, actions }: { turn: Turn; actions: RoundActions }) {
@@ -114,6 +129,25 @@ export function Round({ turn, actions }: { turn: Turn; actions: RoundActions }) 
         </p>
       )}
       {turn.code !== null && <p class="frag-code">{`Fehlercode ${turn.code}`}</p>}
+      {actions.quellen.length > 0 && (
+        <div class="frag-quellen">
+          <h4>Quellen</h4>
+          <div class="frag-quellenknoepfe">
+            {actions.quellen.map((quelle, i) => (
+              <button
+                type="button"
+                class="knopf frag-quelle"
+                {...press({
+                  key: `quelle-${turn.id}-${i}`,
+                  run: () => actions.onQuelle(quelle),
+                })}
+              >
+                {quelle.etikett}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {hasText && (
         <div class="frag-aktionen">
           <button type="button" class="knopf" {...press({ key: `kopieren-${turn.id}`, run: actions.onCopy })}>
@@ -123,7 +157,11 @@ export function Round({ turn, actions }: { turn: Turn; actions: RoundActions }) 
             type="button"
             class="knopf"
             disabled={take === 'laeuft' || take === 'fertig'}
-            {...press({ key: `uebernehmen-${turn.id}`, disabled: take === 'laeuft' || take === 'fertig', run: actions.onTake })}
+            {...press({
+              key: `uebernehmen-${turn.id}`,
+              disabled: take === 'laeuft' || take === 'fertig',
+              run: actions.onTake,
+            })}
           >
             {TAKE_LABEL[take]}
           </button>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { ohneQuellenZeile } from '../gehirn/quellen';
 import { answerItems } from '../ki/answerItems';
 import { addItemsToNote } from '../lib/briefingEdit';
 import { timeVienna } from '../lib/dates';
@@ -19,14 +20,14 @@ export type CopyState = 'nein' | 'kopiert' | 'fehler';
 /** So lange zeigt „Kopieren“ das Ergebnis. */
 export const COPY_MS = 2000;
 
-/** Hängt Frage und Antwort der Runde an „Ergänzungen“ ihrer Tagesnotiz. Wirft, wenn etwas nicht klappt (auch ohne Netz). */
-export async function takeOver(engine: SyncEngine, turn: Turn): Promise<void> {
+/** Hängt Frage, Antwort und (mit `quellen`, der Zeile aus `quellenZeile`) die Quellen der Runde an „Ergänzungen“ ihrer Tagesnotiz. Wirft, wenn etwas nicht klappt (auch ohne Netz). */
+export async function takeOver(engine: SyncEngine, turn: Turn, quellen?: string): Promise<void> {
   const path = dailyNotePath(turn.noteDay);
   await noteQueue(engine, path)(async () => {
     const { text, unknown } = await engine.lookupFresh(path);
     // Ob es die Notiz gibt, ist offen (kein Netz): Nichts schreiben, sonst entstünde neben ihr eine zweite.
     if (unknown) throw new Error('offline');
-    const next = addItemsToNote(text, turn.noteDay, answerItems(turn.question, turn.answer, timeVienna(turn.at)));
+    const next = addItemsToNote(text, turn.noteDay, answerItems(turn.question, turn.answer, timeVienna(turn.at), quellen));
     if (next !== null) await engine.write(path, next, 'md');
   });
   announceNoteWrite(engine, path);
@@ -54,12 +55,12 @@ export function useRoundActions(engine: SyncEngine) {
     if (!gone.current) setTaking(takeNow.current);
   };
 
-  const take = async (turn: Turn): Promise<void> => {
+  const take = async (turn: Turn, quellen?: string): Promise<void> => {
     const now = takeNow.current[turn.id] ?? 'nein';
     if (now !== 'nein' && now !== 'fehler') return;
     setTake(turn.id, 'laeuft');
     try {
-      await takeOver(engine, turn);
+      await takeOver(engine, turn, quellen);
       setTake(turn.id, 'fertig');
     } catch {
       setTake(turn.id, 'fehler');
@@ -69,7 +70,7 @@ export function useRoundActions(engine: SyncEngine) {
   const copy = async (turn: Turn): Promise<void> => {
     let result: CopyState = 'kopiert';
     try {
-      await navigator.clipboard.writeText(turn.answer);
+      await navigator.clipboard.writeText(ohneQuellenZeile(turn.answer));
     } catch {
       result = 'fehler';
     }
