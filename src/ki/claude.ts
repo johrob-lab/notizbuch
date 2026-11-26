@@ -54,6 +54,8 @@ export function failureOf(status: number, type?: string, message?: string): KiFa
 export type TextBlock = { type: 'text'; text: string };
 export type ImageBlock = { type: 'image'; source: { type: 'base64'; media_type: 'image/png'; data: string } };
 export type ApiMessage = { role: 'user' | 'assistant'; content: string | (TextBlock | ImageBlock)[] };
+/** Ein Werkzeug, das Claude aufrufen darf (Name, Beschreibung, JSON-Schema der Eingabe). */
+export type ToolDefinition = { name: string; description: string; input_schema: Record<string, unknown> };
 export type Usage = {
   input_tokens: number;
   output_tokens: number;
