@@ -1,7 +1,8 @@
-import { afterEach, expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 import {
   askClaude,
   checkKey,
+  KEY_CHECK_TIMEOUT_MS,
   failureOf,
   KiError,
   looksLikeKey,
@@ -351,8 +352,31 @@ test('checkKey asks the free token counter', async () => {
   const off = (async () => {
     throw new TypeError('Failed to fetch');
   }) as typeof fetch;
+  setOnLine(false);
   expect(await checkKey(KEY, 'sonnet', off)).toBe('offline');
+  setOnLine(true);
+  expect(await checkKey(KEY, 'sonnet', off)).toBe('unavailable');
   expect(await checkKey(KEY, 'sonnet', streamOf(['{}'], { status: 529 }))).toBe('unavailable');
+});
+
+test('checkKey gives up after the time limit and says unavailable', async () => {
+  vi.useFakeTimers();
+  try {
+    // Eine Verbindung, die nie antwortet, sondern nur auf den Abbruch wartet.
+    const hang = ((_url: string, init: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new DOMException('abgebrochen', 'AbortError')));
+      })) as unknown as typeof fetch;
+    expect(KEY_CHECK_TIMEOUT_MS).toBe(15_000);
+    let result: unknown = 'offen';
+    void checkKey(KEY, 'sonnet', hang).then((r) => (result = r));
+    await vi.advanceTimersByTimeAsync(KEY_CHECK_TIMEOUT_MS - 1);
+    expect(result).toBe('offen');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(result).toBe('unavailable');
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test('looksLikeKey', () => {

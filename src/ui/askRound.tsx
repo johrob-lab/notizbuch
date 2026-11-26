@@ -110,6 +110,10 @@ export function Round({ turn, actions }: { turn: Turn; actions: RoundActions }) 
   // Knöpfe gibt es nur für eine Runde mit Text, nicht, solange sie noch läuft.
   const hasText = turn.state !== 'laeuft' && turn.answer.trim() !== '';
   const { take, copy, press } = actions;
+  // Die Hinweise unter der Antwort, in dieser Reihenfolge.
+  const hints = [turn.imageFailed && IMAGE_FAILED, turn.state === 'gestoppt' && STOPPED, turn.state === 'abgeschnitten' && CUT].filter(
+    (hint): hint is string => hint !== false,
+  );
   return (
     <li class="frag-runde">
       <p class="frag-frage">{turn.question}</p>
@@ -122,9 +126,11 @@ export function Round({ turn, actions }: { turn: Turn; actions: RoundActions }) 
         </ol>
       )}
       <div class="frag-antwort">{waiting ? '…' : answer}</div>
-      {turn.imageFailed && <p class="frag-hinweis">{IMAGE_FAILED}</p>}
-      {turn.state === 'gestoppt' && <p class="frag-hinweis">{STOPPED}</p>}
-      {turn.state === 'abgeschnitten' && <p class="frag-hinweis">{CUT}</p>}
+      {hints.map((hint) => (
+        <p key={hint} class="frag-hinweis">
+          {hint}
+        </p>
+      ))}
       {turn.failure !== null && (
         <p class="frag-fehlersatz" role="alert">
           {turn.failure}

@@ -307,22 +307,31 @@ export function looksLikeKey(key: string): boolean {
   return /^sk-ant-[A-Za-z0-9_-]+$/.test(key.trim());
 }
 
+/** So lange wartet die Probe des Schlüssels, dann gilt Claude als nicht erreichbar. */
+export const KEY_CHECK_TIMEOUT_MS = 15_000;
+
 /**
  * Prüft den Schlüssel beim Speichern am kostenlosen Zähler für Token. `null` heißt: Der Schlüssel passt.
  * Sonst der Grund, warum nicht.
  */
 export async function checkKey(key: string, model: KiModel, fetchFn?: typeof fetch): Promise<KiFailure | null> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), KEY_CHECK_TIMEOUT_MS);
   try {
     const send = fetchFn ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
     const res = await send(COUNT_URL, {
       method: 'POST',
       headers: headers(key),
       body: JSON.stringify({ model: MODEL_IDS[model], messages: [{ role: 'user', content: 'Hallo' }] }),
+      signal: abort.signal,
     });
     if (res.ok) return null;
     const e = await errorOf(res);
     return failureOf(res.status, e.type, e.message);
   } catch (e) {
-    return e instanceof TypeError ? 'offline' : 'unavailable';
+    // Wie bei `askClaude`: `offline` nur, wenn der Browser es selbst sagt. Ein Abbruch nach der Zeitgrenze ist `unavailable`.
+    return e instanceof TypeError && navigator.onLine === false ? 'offline' : 'unavailable';
+  } finally {
+    clearTimeout(timer);
   }
 }

@@ -23,10 +23,8 @@ import { useActivation, type Pressable } from './pointerBits';
 import { KOPIE_WARTEN_MS, useKopie } from './useKopie';
 
 // Das Fenster „Frag Claude“: eine Frage tippen oder diktieren, die offene Seite mitschicken, die Antwort lesen. Es gehört der App,
-// nicht der Seite: Darum bleibt es offen, wenn man blättert, und nennt immer die Seite, die gerade offen ist (`page`). In den
-// Einstellungen und in der Liste der Besprechungen ist es versteckt (`away`) und behält, was im Feld steht. Es liegt außerhalb der
-// Bühne: Die Schreibfläche sieht nie, was auf ihm geschieht. Ein Stiftstrich darauf wird also nie Tinte, Finger und Rad bewegen
-// die Seite nicht. Vor der Hand, die beim Schreiben aufliegt, schützt es dasselbe Tor wie die Seite (`watchHand` in palmGuard.ts).
+// nicht der Seite, und bleibt beim Blättern offen (in Einstellungen und Liste der Besprechungen versteckt, `away`). Es liegt außerhalb
+// der Bühne: Ein Stiftstrich darauf wird nie Tinte, vor der aufliegenden Hand schützt dasselbe Tor wie die Seite (`watchHand`).
 // Gefragt wird nur mit „Fragen“ oder Enter. Öffnen und Fragen frischen nur die Kopie des Vaults bei GitHub auf (useKopie.ts).
 
 /** Was die App mit dem Fenster tun kann. */
@@ -69,7 +67,7 @@ const OHNE_KOPIE: KopieStand = {
 /** Die Frage mit der Seite: ihre Angaben als Text und ihr Bild, beides zugleich gelesen. Ohne Bild ist `image` `null`. */
 async function questionWithPage(page: AskPage, question: string): Promise<SentTurn> {
   const [text, image] = await Promise.all([page.describe(), pageImage(page.svg())]);
-  return { question, page: { text, image } };
+  return { question, page: { text, image, hadImage: image !== null } };
 }
 
 /** Wartet auf `promise`, bis das Signal abbricht. Dann gibt es sofort `null`, was danach noch kommt, zählt nicht. */
@@ -187,6 +185,36 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
     return watchHand(el, () => gateNow.current);
   }, []);
 
+  // Die Oberkante liegt unter der letzten Zeile der Werkzeugleiste. Unter 744 Punkten Breite bricht sie um und ist höher als eine
+  // Zeile. Gemessen wird beim Öffnen, bei jeder Größenänderung der Leiste oder des Fensters und nach jedem Zeichnen (die Leiste
+  // gehört der Seite und wird beim Blättern neu gebaut).
+  const barWatch = useRef<{ bar: Element; observer: ResizeObserver } | null>(null);
+  const placeBelowBar = () => {
+    const el = root.current;
+    const bar = el?.parentElement?.querySelector('.leiste');
+    if (!el) return;
+    if (!bar) {
+      el.style.removeProperty('--frag-oben');
+      return;
+    }
+    const gap = 8;
+    el.style.setProperty('--frag-oben', `${Math.ceil(bar.getBoundingClientRect().bottom - el.parentElement!.getBoundingClientRect().top + gap)}px`);
+    if (typeof ResizeObserver === 'undefined' || barWatch.current?.bar === bar) return;
+    barWatch.current?.observer.disconnect();
+    const observer = new ResizeObserver(placeBelowBar);
+    observer.observe(bar);
+    barWatch.current = { bar, observer };
+  };
+  useLayoutEffect(() => {
+    window.addEventListener('resize', placeBelowBar);
+    return () => {
+      window.removeEventListener('resize', placeBelowBar);
+      barWatch.current?.observer.disconnect();
+      barWatch.current = null;
+    };
+  }, []);
+  useLayoutEffect(placeBelowBar);
+
   // Den Fokus ins Feld, und er bleibt dort, auch wenn der Browser nach dem Tipp noch die Maustaste auf dem Knopf meldet.
   const keeping = useRef<(() => void) | null>(null);
   const focusField = () => {
@@ -203,6 +231,7 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
       open: () => {
         const el = root.current;
         if (el) el.hidden = false;
+        placeBelowBar();
         focusField();
         setOpen(true);
         void gehirn.auffrischen();
@@ -265,7 +294,8 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
     setFailure(null);
     setLesen(null);
     field.current?.blur(); // am iPad geht die Tastatur zu
-    setTurns((all) => [turn, ...all]);
+    // Nur die neueste Runde hält ihr Bild: Bei den älteren geht es aus dem Speicher, `hadImage` bleibt für den Satz an Claude.
+    setTurns((all) => [turn, ...all.map((t) => (t.sent.page?.image ? { ...t, sent: { ...t.sent, page: { ...t.sent.page, image: null } } } : t))]);
 
     /** Ändert diese Runde, solange ihr Gespräch noch läuft. */
     const change = (next: (now: Turn) => Partial<Turn>) => {
@@ -357,12 +387,17 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
     }
   };
 
-  /** „Neue Frage“: Das Gespräch beginnt von vorn. Was im Feld steht, bleibt, und der Fokus geht hinein. */
-  const startOver = () => {
-    endTalk();
+  /** Leert Verlauf, Fehlerzeile und Ansicht zum Lesen. */
+  const clearView = () => {
     setTurns([]);
     setFailure(null);
     setLesen(null);
+  };
+
+  /** „Neue Frage“: Das Gespräch beginnt von vorn. Was im Feld steht, bleibt, und der Fokus geht hinein. */
+  const startOver = () => {
+    endTalk();
+    clearView();
     focusField();
   };
 
@@ -373,9 +408,7 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
     setOpen(false);
     setQuestion('');
     setWithPage(true);
-    setTurns([]);
-    setFailure(null);
-    setLesen(null);
+    clearView();
   };
 
   /** Die Quellen einer Runde: nur Notizen, die es in der Kopie gibt und die in dieser Frage vorkamen (oder die Tagesnotiz der Seite, die mitging). */
@@ -424,7 +457,7 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
           type="button"
           role="switch"
           class="frag-seite"
-          aria-checked={withPage}
+          aria-checked={page !== null && withPage}
           aria-label={`Seite mitschicken: ${pageName}`}
           disabled={!page}
           {...press({

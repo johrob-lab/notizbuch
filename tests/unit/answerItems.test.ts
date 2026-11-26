@@ -76,3 +76,8 @@ test('die Klammern der Quellen bleiben in der Notiz unverändert', () => {
 test('eine fertige Antwort, die auf Quel endet, behält die Zeile', () => {
   expect(texts(answerItems('F', 'Antwort.\nQuel', '14:05'))).toEqual(['Claude, 14:05: F', 'Antwort.', 'Quel']);
 });
+
+test('Linien mit Leerzeichen fallen weg, verschachtelte Zeichen gehen alle, Nummern bleiben maskiert', () => {
+  const answer = ['* * *', '- - -', '- - Unterpunkt', '- 1. Schritt', '# 2. Teil', '> 3. Zitat'].join('\n');
+  expect(texts(answerItems('F', answer, '14:05')).slice(1)).toEqual(['Unterpunkt', '1\\. Schritt', '2\\. Teil', '3\\. Zitat']);
+});

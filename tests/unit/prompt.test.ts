@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { REGELN, buildMessages, systemBlocks } from '../../src/ki/prompt';
+import { EARLIER_IMAGE, REGELN, buildMessages, systemBlocks } from '../../src/ki/prompt';
 
 const SAETZE = [
   'Du hast drei Werkzeuge für eine Kopie des Vaults, das zweite Gehirn von dem, der fragt: suchen, lesen und auflisten.',
@@ -57,7 +57,7 @@ test('a question without page is just the question', () => {
 
 test('the picture comes first, the page text before the question', () => {
   expect(
-    buildMessages([{ question: 'Was steht an?', page: { text: 'Offene Seite: Tagesseite Do 29.10.2026', image: 'AAAA' } }]),
+    buildMessages([{ question: 'Was steht an?', page: { text: 'Offene Seite: Tagesseite Do 29.10.2026', image: 'AAAA', hadImage: true } }]),
   ).toEqual([
     {
       role: 'user',
@@ -71,8 +71,8 @@ test('the picture comes first, the page text before the question', () => {
 
 test('only the newest question carries the picture', () => {
   const messages = buildMessages([
-    { question: 'Eins', page: { text: 'Offene Seite: A', image: 'AAAA' }, answer: 'Antwort 1' },
-    { question: 'Zwei', page: { text: 'Offene Seite: B', image: 'BBBB' } },
+    { question: 'Eins', page: { text: 'Offene Seite: A', image: null, hadImage: true }, answer: 'Antwort 1' },
+    { question: 'Zwei', page: { text: 'Offene Seite: B', image: 'BBBB', hadImage: true } },
   ]);
   expect(messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
   const blocks = messages.flatMap((m) => (typeof m.content === 'string' ? [] : m.content));
@@ -83,4 +83,19 @@ test('only the newest question carries the picture', () => {
     { type: 'text', text: 'Offene Seite: A\n\n(Zu dieser Frage ging ein Bild der Seite mit.)\n\nFrage: Eins' },
   ]);
   expect(messages[1]).toEqual({ role: 'assistant', content: 'Antwort 1' });
+});
+
+test('eine frühere Runde nennt ihr Bild, auch wenn es nicht mehr im Speicher liegt', () => {
+  const messages = buildMessages([
+    { question: 'Eins', page: { text: 'Offene Seite: A', image: null, hadImage: true }, answer: 'Antwort 1' },
+    { question: 'Zwei', page: { text: 'Offene Seite: B', image: null, hadImage: false }, answer: 'Antwort 2' },
+    { question: 'Drei', page: { text: 'Offene Seite: C', image: 'CCCC', hadImage: true } },
+  ]);
+  expect(messages[0].content).toEqual([{ type: 'text', text: `Offene Seite: A\n\n${EARLIER_IMAGE}\n\nFrage: Eins` }]);
+  expect(messages[2].content).toEqual([{ type: 'text', text: 'Offene Seite: B\n\nFrage: Zwei' }]);
+  const last = messages[4].content;
+  expect(Array.isArray(last) && last[0].type).toBe('image');
+  // Die neueste Runde ohne Bild (Bild ließ sich nicht erstellen) bekommt keinen Satz dazu.
+  const none = buildMessages([{ question: 'Vier', page: { text: 'Offene Seite: D', image: null, hadImage: false } }]);
+  expect(none[0].content).toEqual([{ type: 'text', text: 'Offene Seite: D\n\nFrage: Vier' }]);
 });

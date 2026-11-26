@@ -40,6 +40,8 @@ export function useRoundActions(engine: SyncEngine) {
   // Der Stand auch außerhalb des Zeichnens: Zwei schnelle Tipps sehen beide den Stand des ersten.
   const takeNow = useRef(taking);
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  // Der Zeitgeber von „Kopiert“ je Runde: Ein zweiter Tipp löscht den alten und startet die 2 Sekunden neu.
+  const copyTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const gone = useRef(false);
   useEffect(() => {
     gone.current = false;
@@ -47,6 +49,7 @@ export function useRoundActions(engine: SyncEngine) {
       gone.current = true;
       for (const timer of timers.current) clearTimeout(timer);
       timers.current.clear();
+      copyTimers.current.clear();
     };
   }, []);
 
@@ -76,11 +79,18 @@ export function useRoundActions(engine: SyncEngine) {
     }
     if (gone.current) return;
     setCopying((all) => ({ ...all, [turn.id]: result }));
+    const old = copyTimers.current.get(turn.id);
+    if (old !== undefined) {
+      clearTimeout(old);
+      timers.current.delete(old);
+    }
     const timer = setTimeout(() => {
       timers.current.delete(timer);
+      copyTimers.current.delete(turn.id);
       if (!gone.current) setCopying((all) => ({ ...all, [turn.id]: 'nein' }));
     }, COPY_MS);
     timers.current.add(timer);
+    copyTimers.current.set(turn.id, timer);
   };
 
   return { taking, copying, take, copy };

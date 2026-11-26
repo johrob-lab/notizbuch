@@ -45,8 +45,11 @@ export function systemBlocks(now: Date, stand: KopieStand | null): SystemBlock[]
   ];
 }
 
-/** Eine Runde des Gesprächs: die Frage, die Seite dazu (Text und Bild als Base64 ohne Präfix) und, wenn es sie gibt, die Antwort. */
-export type SentTurn = { question: string; page: { text: string; image: string | null } | null; answer?: string };
+/**
+ * Eine Runde des Gesprächs: die Frage, die Seite dazu (Text und Bild als Base64 ohne Präfix) und, wenn es sie gibt, die Antwort.
+ * `hadImage` heißt: Zu dieser Frage ging ein Bild mit, auch wenn das Fenster es später aus dem Speicher nimmt (`image` ist dann `null`).
+ */
+export type SentTurn = { question: string; page: { text: string; image: string | null; hadImage: boolean } | null; answer?: string };
 
 /** Der Satz, der in früheren Runden anstelle des Bildes steht: Das Bild geht nur mit der neuesten Frage mit. */
 export const EARLIER_IMAGE = '(Zu dieser Frage ging ein Bild der Seite mit.)';
@@ -58,7 +61,7 @@ export function buildMessages(turns: SentTurn[]): ApiMessage[] {
     const newest = index === turns.length - 1;
     const parts: string[] = [];
     if (turn.page) parts.push(turn.page.text);
-    if (turn.page?.image && !newest) parts.push(EARLIER_IMAGE);
+    if (turn.page?.hadImage && !newest) parts.push(EARLIER_IMAGE);
     parts.push(`Frage: ${turn.question}`);
     const content: (TextBlock | ImageBlock)[] = [];
     if (newest && turn.page?.image) {

@@ -164,6 +164,62 @@ test('tapping Frag Claude opens the window and asks nothing', async ({ page }) =
   expect(claude.requests).toEqual([]);
 });
 
+test('below 744 points the window starts under the last row of the toolbar', async ({ page }) => {
+  await mockClaude(page);
+  await page.setViewportSize({ width: 700, height: 1000 });
+  await openSeeded(page, DAY, WITH_KEY);
+  await touch(page).tapOn(KNOPF);
+  await expect(askWindow(page)).toBeVisible();
+  const bar = await box(page, '.leiste');
+  // Die Werkzeuge brechen hier um: Die Leiste ist höher als eine Zeile.
+  expect(bar.height).toBeGreaterThan(61);
+  const shown = await box(page, FENSTER);
+  expect(shown.y).toBeGreaterThanOrEqual(bar.y + bar.height);
+  // Wird das Fenster breiter, ist die Leiste wieder eine Zeile, und das Fenster rückt mit.
+  await page.setViewportSize({ width: 1200, height: 1000 });
+  await expect.poll(async () => (await box(page, '.leiste')).height).toBe(61);
+  const wide = await box(page, FENSTER);
+  expect(wide.y).toBeGreaterThanOrEqual(61);
+  expect(wide.y).toBeLessThan(shown.y);
+});
+
+/** Wie viele Pixel eines PNG (Base64 ohne Präfix) nicht weiß sind, gezählt im Browser über ein Canvas. */
+function nonWhite(page: Page, png: string): Promise<number> {
+  return page.evaluate(async (data) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${data}`;
+    await img.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, 0, 0);
+    const { data: px } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let count = 0;
+    for (let i = 0; i < px.length; i += 4) if (px[i] < 250 || px[i + 1] < 250 || px[i + 2] < 250) count++;
+    return count;
+  }, png);
+}
+
+test('the picture of a page with a stroke has pixels that are not white', async ({ page }) => {
+  const claude = await mockClaude(page);
+  await openSeeded(page, DAY, WITH_KEY);
+  await openAsk(page, 'Do 29.10.2026');
+  await askWithEnter(page, 'Erste Frage');
+  await expect(answers(page)).toHaveText(['Hallo.']);
+  await pen(page).stroke(LINE);
+  expect(await strokeCount(page)).toBe(1);
+  await askWithEnter(page, 'Zweite Frage');
+  await expect(answers(page)).toHaveText(['Hallo.', 'Hallo.']);
+
+  const images = claude.requests.map((request) => lastBlocks(request.body)[0]).map((block) => block.source!.data);
+  expect(images).toHaveLength(2);
+  const [before, after] = [await nonWhite(page, images[0]), await nonWhite(page, images[1])];
+  expect(before).toBeGreaterThan(0);
+  // Der Strich ist dazugekommen.
+  expect(after).toBeGreaterThan(before);
+});
+
 test('the window stays open across pages and names the open page', async ({ page }) => {
   await mockClaude(page);
   await openSeeded(page, DAY, WITH_KEY);

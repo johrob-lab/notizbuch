@@ -857,6 +857,40 @@ test('copy takes the answer as written', async () => {
   expect(button(host, 'Kopieren')).toBeDefined();
 });
 
+test('a second tap on Kopieren restarts the two seconds', async () => {
+  const writeText = vi.fn(async (_text: string) => undefined);
+  vi.stubGlobal('navigator', { clipboard: { writeText } });
+  const { host } = await answered({ engine: fakeEngine, answer: 'Antwort' });
+  // Nur die Uhr der Anzeige ist falsch, die Datenbank im Speicher arbeitet mit setImmediate weiter.
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  await press(host, 'Kopieren');
+  await flush();
+  expect(button(host, 'Kopiert')).toBeDefined();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1500);
+  });
+  await press(host, 'Kopiert');
+  await flush();
+  expect(writeText).toHaveBeenCalledTimes(2);
+  // Der erste Zeitgeber wäre jetzt (2500) längst abgelaufen.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  expect(button(host, 'Kopiert')).toBeDefined();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  expect(button(host, 'Kopieren')).toBeDefined();
+});
+
+test('without an open page the switch is off', async () => {
+  const { host, set } = mount({ page: null });
+  expect(toggle(host).getAttribute('aria-checked')).toBe('false');
+  expect(toggle(host).disabled).toBe(true);
+  await set({ page: fakePage() });
+  expect(toggle(host).getAttribute('aria-checked')).toBe('true');
+});
+
 test('a finished answer ending in Quel keeps that line in display, copy and take-over', async () => {
   const writeText = vi.fn(async (_text: string) => undefined);
   vi.stubGlobal('navigator', { clipboard: { writeText } });
