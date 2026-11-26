@@ -1,4 +1,5 @@
 import { formatDayLong, isValidDay, type Day } from '../lib/dates';
+import { dailyNotePath } from '../lib/filenames';
 
 // Die Zeile „Quellen:“ am Ende einer Antwort von Claude (`Quellen: <pfad>[#Abschnitt] | <pfad>`): Sie steht nie im Text der Antwort,
 // ihre Pfade werden Knöpfe unter der Antwort und beim Übernehmen die Wikilinks des letzten Punkts. Eine Quelle zählt nur, wenn es
@@ -30,16 +31,25 @@ function letzteZeile(zeilen: string[]): number {
 }
 
 /**
- * Der Text ohne seine letzte Zeile, wenn sie mit `Quellen:` beginnt. Auch während des Stroms: Eine letzte Zeile, die erst ein
- * Anfang davon ist (`Q`, `Quel` …), bleibt verborgen, bis sie sich als etwas anderes zeigt.
+ * Der Text ohne seine letzte Zeile, wenn sie mit `Quellen:` beginnt. Nur mit `laeuft` (die Antwort wird noch geschrieben): Eine letzte
+ * Zeile, die erst ein Anfang davon ist (`Q`, `Quel` …), bleibt verborgen, bis sie sich als etwas anderes zeigt. Eine fertige Antwort
+ * verliert nur eine Zeile, die mit `Quellen:` beginnt.
  */
-export function ohneQuellenZeile(text: string): string {
+export function ohneQuellenZeile(text: string, laeuft = false): string {
   const zeilen = text.split('\n');
   const i = letzteZeile(zeilen);
   if (i < 0) return text;
   const zeile = zeilen[i].trim();
-  if (!zeile.startsWith(KOPF) && !KOPF.startsWith(zeile)) return text;
+  if (!zeile.startsWith(KOPF) && !(laeuft && KOPF.startsWith(zeile))) return text;
   return zeilen.slice(0, i).join('\n').trimEnd();
+}
+
+/**
+ * Die Pfade, die in dieser Frage vorkamen (`pfade` der Runde), und die Tagesnotiz des Tages der Seite, aber nur, wenn eine Tagesseite
+ * mitging (`seitenTag`, sonst `null`: Woche, Monat, keine Seite oder Schalter aus).
+ */
+export function erlaubtePfade(pfade: readonly string[], seitenTag: Day | null): string[] {
+  return seitenTag === null ? [...pfade] : [...pfade, dailyNotePath(seitenTag)];
 }
 
 /** Die Quellen aus der letzten Zeile `Quellen:`: nur Pfade, die `finde` kennt und die in `erlaubt` stehen, ohne Doppelte. */

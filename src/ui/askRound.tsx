@@ -29,6 +29,8 @@ export type Turn = {
   at: Date;
   label: string | null;
   noteDay: Day;
+  /** Der Tag der Seite, die mit der Frage ging, `null` ohne Tagesseite (Woche, Monat, keine Seite, Schalter aus). */
+  seitenTag: Day | null;
   sent: SentTurn;
   answer: string;
   state: 'laeuft' | 'fertig' | 'gestoppt' | 'abgeschnitten' | 'fehler';
@@ -99,11 +101,11 @@ export function readOnlyNodes(md: string): ComponentChildren {
 }
 
 /** Die Antwort ohne die Zeile `Quellen:`, wie eine Notiz zum Lesen. */
-const answerNodes = (answer: string): ComponentChildren => readOnlyNodes(visibleMarkdown(ohneQuellenZeile(answer)));
+const answerNodes = (answer: string, laeuft: boolean): ComponentChildren => readOnlyNodes(visibleMarkdown(ohneQuellenZeile(answer, laeuft)));
 
 /** Eine Runde. Die Antwort wird nur neu zerlegt, wenn ihr Text sich ändert: Während eine Antwort läuft, bleiben die älteren, wie sie sind. */
 export function Round({ turn, actions }: { turn: Turn; actions: RoundActions }) {
-  const answer = useMemo(() => answerNodes(turn.answer), [turn.answer]);
+  const answer = useMemo(() => answerNodes(turn.answer, turn.state === 'laeuft'), [turn.answer, turn.state]);
   const waiting = turn.state === 'laeuft' && turn.answer === '';
   // Knöpfe gibt es nur für eine Runde mit Text, nicht, solange sie noch läuft.
   const hasText = turn.state !== 'laeuft' && turn.answer.trim() !== '';

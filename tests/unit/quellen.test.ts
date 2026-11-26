@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { findePfad } from '../../src/gehirn/werkzeuge';
-import { ohneQuellenZeile, quellenAus, quellenZeile } from '../../src/gehirn/quellen';
+import { erlaubtePfade, ohneQuellenZeile, quellenAus, quellenZeile } from '../../src/gehirn/quellen';
 
 // Die Zeile „Quellen:“ am Ende der Antwort: Sie bleibt unsichtbar, ihre Pfade werden zu Knöpfen, aber nur, wenn es die Notiz gibt
 // und sie in dieser Frage vorkam.
@@ -53,9 +53,9 @@ test('ohne Zeile Quellen keine Quellen', () => {
 test('die Zeile Quellen ist nie zu sehen, auch nicht beim Schreiben', () => {
   expect(ohneQuellenZeile('Text\nQuellen: a | b')).toBe('Text');
   expect(ohneQuellenZeile('Text\n\nQuellen: a\n')).toBe('Text');
-  expect(ohneQuellenZeile('Text\nQuel')).toBe('Text');
-  expect(ohneQuellenZeile('Text\nQ')).toBe('Text');
-  expect(ohneQuellenZeile('Text\nQuer')).toBe('Text\nQuer');
+  expect(ohneQuellenZeile('Text\nQuel', true)).toBe('Text');
+  expect(ohneQuellenZeile('Text\nQ', true)).toBe('Text');
+  expect(ohneQuellenZeile('Text\nQuer', true)).toBe('Text\nQuer');
   expect(ohneQuellenZeile('Quellen: a')).toBe('');
   expect(ohneQuellenZeile('Text')).toBe('Text');
   expect(ohneQuellenZeile('Quellen: a\nund weiter')).toBe('Quellen: a\nund weiter');
@@ -67,4 +67,20 @@ test('die Zeile fürs Übernehmen: Namen ohne .md, doppelte Namen mit Pfad', () 
   const doppelt = [...PFADE, '06 Archiv/Beispiel Projekt.md'];
   const q = quellenAus('A\nQuellen: 02 Projekte/Beispiel Projekt.md', (p) => findePfad(dateien(doppelt), p), doppelt);
   expect(quellenZeile(q, doppelt)).toBe('Quellen: [[02 Projekte/Beispiel Projekt]]');
+});
+
+test('eine fertige Antwort behält eine letzte Zeile, die nur wie ein Anfang aussieht', () => {
+  for (const ende of ['Q', 'Qu', 'Quel', 'Quellen']) {
+    expect(ohneQuellenZeile(`Text\n${ende}`)).toBe(`Text\n${ende}`);
+    expect(ohneQuellenZeile(`Text\n${ende}`, true)).toBe('Text');
+  }
+});
+
+test('die Tagesnotiz der Seite ist nur erlaubt, wenn eine Tagesseite mitging', () => {
+  const pfade = ['02 Projekte/Beispiel Projekt.md'];
+  expect(erlaubtePfade(pfade, '2026-11-25')).toEqual([...pfade, '05 Daily Notes/2026-11-25.md']);
+  // Woche, Monat, keine Seite, Schalter aus: kein Tag der Seite, auch die Tagesnotiz von heute ist nicht erlaubt.
+  expect(erlaubtePfade(pfade, null)).toEqual(pfade);
+  const q = quellenAus('A\nQuellen: 05 Daily Notes/2026-11-25.md | 05 Daily Notes/2026-11-26.md', (p) => (PFADE.includes(p) ? p : null), erlaubtePfade(pfade, '2026-11-25'));
+  expect(q.map((x) => x.pfad)).toEqual(['05 Daily Notes/2026-11-25.md']);
 });

@@ -2,7 +2,7 @@ import type { JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { csvZeilen } from '../gehirn/daten';
 import type { KopieStand } from '../gehirn/kopie';
-import { quellenAus, quellenZeile, type Quelle } from '../gehirn/quellen';
+import { erlaubtePfade, quellenAus, quellenZeile, type Quelle } from '../gehirn/quellen';
 import { findePfad, fuehreAus, WERKZEUGE } from '../gehirn/werkzeuge';
 import { GestureFilter } from '../ink/gestures';
 import { FAILURE_TEXT, KiError } from '../ki/claude';
@@ -11,7 +11,6 @@ import { frage } from '../ki/gespraech';
 import { pageImage } from '../ki/pageImage';
 import { buildMessages, systemBlocks, type SentTurn } from '../ki/prompt';
 import { todayVienna } from '../lib/dates';
-import { dailyNotePath } from '../lib/filenames';
 import type { KiModel } from '../lib/settings';
 import type { SyncEngine } from '../sync/engine';
 import type { CopyClient } from '../sync/github';
@@ -250,6 +249,7 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
       at,
       label: sending?.label ?? null,
       noteDay: page?.day ?? todayVienna(at),
+      seitenTag: sending?.day ?? null,
       sent: { question: text, page: null },
       answer: '',
       state: 'laeuft',
@@ -382,7 +382,7 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
   const quellenVon = (turn: Turn): Quelle[] => {
     const dateien = gehirn.kopie?.dateien();
     if (!dateien || turn.state === 'laeuft' || turn.state === 'fehler' || !turn.answer.includes('Quellen:')) return [];
-    const erlaubt = turn.label !== null ? [...turn.pfade, dailyNotePath(turn.noteDay)] : turn.pfade;
+    const erlaubt = erlaubtePfade(turn.pfade, turn.seitenTag);
     return quellenAus(turn.answer, (pfad) => findePfad(dateien, pfad), erlaubt);
   };
   /** Eine Tagesnotiz öffnet den Tag in der App, das Fenster bleibt offen. Jede andere Notiz öffnet die Ansicht zum Lesen. */

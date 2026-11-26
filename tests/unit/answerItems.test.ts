@@ -72,3 +72,7 @@ test('die Klammern der Quellen bleiben in der Notiz unverändert', () => {
   const note = addItemsToNote(newDailyNote('2026-11-26'), '2026-11-26', items)!;
   expect(note).toContain(`\n- ${zeile}`);
 });
+
+test('eine fertige Antwort, die auf Quel endet, behält die Zeile', () => {
+  expect(texts(answerItems('F', 'Antwort.\nQuel', '14:05'))).toEqual(['Claude, 14:05: F', 'Antwort.', 'Quel']);
+});

@@ -857,6 +857,32 @@ test('copy takes the answer as written', async () => {
   expect(button(host, 'Kopieren')).toBeDefined();
 });
 
+test('a finished answer ending in Quel keeps that line in display, copy and take-over', async () => {
+  const writeText = vi.fn(async (_text: string) => undefined);
+  vi.stubGlobal('navigator', { clipboard: { writeText } });
+  const notes = noteEngine({ text: null, unknown: false });
+  const { host } = await answered({ engine: notes.as, answer: 'Antwort.\nQuel' });
+  expect(host.querySelector('.frag-antwort')!.textContent).toContain('Quel');
+  await press(host, 'Kopieren');
+  await until(() => writeText.mock.calls.length === 1, 'Kopiert');
+  expect(writeText).toHaveBeenCalledWith('Antwort.\nQuel');
+  await press(host, TAKE);
+  await until(() => notes.engine.write.mock.calls.length === 1, 'Schreiben');
+  expect(notes.engine.write.mock.calls[0][1]).toContain('- Quel');
+});
+
+test('while writing, a last line that starts Quellen: stays hidden', async () => {
+  const later = gate();
+  vi.stubGlobal('fetch', streamOf([messageStart(5000, 1) + textDelta('Antwort.\nQuel'), messageDelta('end_turn', 100) + messageStop()], { release: later.promise }));
+  const { host } = await opened();
+  await ask(host, 'Was steht an?');
+  await until(() => (host.querySelector('.frag-antwort')?.textContent ?? '').includes('Antwort.'), 'Text');
+  expect(host.querySelector('.frag-antwort')!.textContent).not.toContain('Quel');
+  later.open();
+  await until(() => costs(host).length === 1, 'Antwort');
+  expect(host.querySelector('.frag-antwort')!.textContent).toContain('Quel');
+});
+
 test('a failed copy says so', async () => {
   vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(async () => Promise.reject(new Error('nein'))) } });
   const { host } = await answered({ engine: fakeEngine, answer: 'Ok' });
