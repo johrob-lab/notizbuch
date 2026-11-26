@@ -6,7 +6,7 @@ import { StrokeBuilder, toHundredths } from '../../src/ink/stroke';
 import { INK } from '../../src/ink/types';
 import { DEFAULT_FUELLER, MIN_DIST_PX, stabilSigmaPx, type PenKind } from '../../src/ink/pens';
 import { sperrenLayout, tabelleLayout } from '../../src/pages/layouts';
-import { FORMAT_VERSION, PageTooNewError, mergePages, parsePage, serializePage, storedForm } from '../../src/ink/svg';
+import { FORMAT_VERSION, PageTooNewError, belegteFelder, mergePages, parsePage, serializePage, storedForm } from '../../src/ink/svg';
 import type { FieldBox, InkColor, Page, Stroke } from '../../src/ink/types';
 import { medianStep, UPRIGHT } from './repairHelpers';
 
@@ -288,6 +288,20 @@ test('a stroke belongs to the first field that contains the centre of its box, e
     { feld: 'aufgaben', datum: DAY, ids: ['b', 'f'] },
     { feld: 'frei', datum: DAY, ids: ['c'] },
   ]);
+});
+
+test('belegteFelder names the fields with strokes by the same rule as the file', () => {
+  const fields: FieldBox[] = [
+    { id: 'A', rect: [0, 0, 100, 100], datum: DAY },
+    { id: 'B', rect: [100, 0, 100, 100], datum: DAY },
+  ];
+  const ohnePunkte: Stroke = { ...strokeAt(50, 50, 'blau', 'leer'), pts: [] };
+  expect(belegteFelder([strokeAt(50, 50, 'blau', 'a'), strokeAt(500, 500, 'blau', 'aussen'), ohnePunkte], fields)).toEqual(new Set(['A']));
+  // Auf der Grenze gewinnt wie in der Datei das erste Feld: Was dort grau stünde, läge sonst unter der Schrift.
+  const grenze = [strokeAt(100, 50, 'blau', 'grenze')];
+  const inDatei = groupsOf(serializePage(tagPage(grenze), fields, '')).map((g) => g.feld);
+  expect(inDatei).toEqual(['A']);
+  expect(belegteFelder(grenze, fields)).toEqual(new Set(inDatei));
 });
 
 test('groups without strokes are left out and the groups follow the order of the fields', () => {

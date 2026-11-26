@@ -123,6 +123,12 @@ type Props = PageProps & {
    * Hintergrund ihrer Vorschau.
    */
   neighbors?: Neighbors;
+  /**
+   * Die Seite mit den Strichen, die die Fläche gerade zeigt: nach jeder Änderung auf der Fläche und jedes Mal, wenn die Fläche
+   * eine Seite bekommt (Seite gelesen, fremde Änderung, Übergabe beim Weiterscrollen). Die Sperrenseite sieht daran, welche
+   * Plätze Tinte haben. Darf bei jedem Zeichnen neu sein: Die Fläche entsteht deswegen nicht neu.
+   */
+  onStrokes?(page: Page): void;
 };
 
 /**
@@ -182,6 +188,8 @@ export function PageView(p: Props) {
   const sessionRef = useRef<PageSession | null>(null);
   const kopfRef = useRef(kopf);
   kopfRef.current = kopf;
+  const strokesRef = useRef(p.onStrokes);
+  strokesRef.current = p.onStrokes;
   // Ein Tor gegen Handballen für Fläche und Schnellwechsel: Beide liegen dort, wo beim Schreiben die Hand ruht.
   const [palm] = useState(() => new GestureFilter());
   // Heute, solange die Seite offen ist: Die Markierung und `aria-current` sollen sich nicht mitten im Schreiben ändern.
@@ -262,6 +270,7 @@ export function PageView(p: Props) {
         setHistory({ canUndo: view.canUndo, canRedo: view.canRedo });
         setMeterText(meterLabel(view.meter.summary()));
         session.changed(page);
+        strokesRef.current?.(page);
       },
       // Ein Finger oder die Maus auf einer Tageszahl öffnet den Tag. Der Stift tippt nie, er schreibt.
       onTap: ({ x, y }) => {
@@ -293,12 +302,18 @@ export function PageView(p: Props) {
       },
       initialView: handoff?.view,
     });
+    // Zeigt eine Seite auf der Fläche. Die Fläche meldet das nicht (`onChange` gilt nur für Änderungen auf ihr), darum meldet
+    // diese Seite die Striche selbst (`onStrokes`).
+    const showPage = (page: Page, shownBackground: string) => {
+      view.setPage(page, layout.fields, shownBackground);
+      strokesRef.current?.(view.getPage());
+    };
     const first = emptyPage();
     if (handoff) {
       // Bis ihre Datei gelesen ist, zeigt die Seite, was die Vorschau von ihr zeigte. Für die Sitzung ist das keine Änderung (die
       // Fläche meldet nichts), geschrieben wird deswegen nichts. Danach zeigt die Sitzung die Datei, wenn sie anders ist; im
       // Entwurf kommt dazu, was auf der Fläche inzwischen dazukam.
-      view.setPage({ ...first, strokes: handoff.page.strokes }, layout.fields, handoff.page.background);
+      showPage({ ...first, strokes: handoff.page.strokes }, handoff.page.background);
       const from = handoff.from;
       const spec = neighborsRef.current?.[from.side];
       if (spec) {
@@ -309,7 +324,7 @@ export function PageView(p: Props) {
         withFrom[from.side] = { spec, path: normalizePath(spec.path), page: from.page, read: from.read };
         shownNeighbors.current = withFrom;
       }
-    } else view.setPage(first, layout.fields, shownFor(first.meta));
+    } else showPage(first, shownFor(first.meta));
     // Entsteht die Fläche für dieselbe Seite neu (andere Einstellungen), zeigt sie gleich die Nachbarn, die schon da waren. Nach
     // einer Übergabe ist das die Seite, von der man kam.
     const known = shownNeighbors.current;
@@ -350,7 +365,7 @@ export function PageView(p: Props) {
       headerWritable: head !== undefined && !locked,
       surface: {
         getPage: () => view.getPage(),
-        setPage: (page) => view.setPage(page, layout.fields, shownFor(page.meta)),
+        setPage: (page) => showPage(page, shownFor(page.meta)),
         setReadOnly: (on) => view.setReadOnly(on),
       },
       retryCues,

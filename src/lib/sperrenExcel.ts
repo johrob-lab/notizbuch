@@ -112,6 +112,19 @@ export function leseExcelStand(text: string, erwartet: { fachlinie: Fachlinie; j
 }
 
 /**
+ * Der Stand im Kopf der Sperrenseite: leer, solange die Datei lädt (`undefined`), ohne Datei (`null`) „Noch kein Excel-Stand für
+ * IB 2027“, sonst das Datum des Stands als `TT.MM.JJJJ, HH:MM`. Kaputt oder ohne Sperren sagt er das.
+ */
+export function excelStandText(lesung: ExcelLesung | null | undefined, f: Fachlinie, jahr: number): string {
+  if (lesung === undefined) return '';
+  if (lesung === null) return `Noch kein Excel-Stand für ${f} ${jahr}`;
+  if (!lesung.ok) return `Der Excel-Stand für ${f} ${jahr} lässt sich nicht lesen.`;
+  const { stand, zeilen } = lesung.stand;
+  if (zeilen.length === 0 || stand === null) return `Excel-Stand für ${f} ${jahr}: keine Sperren`;
+  return `Excel-Stand vom ${stand.slice(8, 10)}.${stand.slice(5, 7)}.${stand.slice(0, 4)}, ${stand.slice(11, 16)}`;
+}
+
+/**
  * Die Einträge der Liste aus dem Notizbuch, die gültig sind, als `JJJJ-MM-TT|<vergleichsform(Abschnitt)>`.
  * Die Spalten werden an ihren Überschriften gefunden. Wirft nie.
  */

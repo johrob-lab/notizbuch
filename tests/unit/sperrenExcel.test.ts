@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   ausNotizbuch,
   EXCEL_KOPF,
+  excelStandText,
   grauerText,
   graueSperren,
   gueltigeEintraege,
@@ -276,5 +277,29 @@ describe('graueSperren', () => {
   test('Zeile ohne Text', () => {
     const r = graueSperren([z({ anzeigetext: '', abschnitt: '' })], { tage, belegt: new Set([f(1), f(2), f(3)]), gueltig: leer });
     expect(r).toEqual({ plaetze: [], mehr: [] });
+  });
+});
+
+describe('excelStandText', () => {
+  test('solange die Datei lädt, steht nichts da', () => {
+    expect(excelStandText(undefined, 'IB', 2027)).toBe('');
+  });
+
+  test('ohne Datei', () => {
+    expect(excelStandText(null, 'IB', 2027)).toBe('Noch kein Excel-Stand für IB 2027');
+    expect(excelStandText(null, 'Lehne', 2028)).toBe('Noch kein Excel-Stand für Lehne 2028');
+  });
+
+  test('kaputt', () => {
+    expect(excelStandText({ ok: false, fehler: KEIN_EXCEL_STAND }, 'IB', 2027)).toBe('Der Excel-Stand für IB 2027 lässt sich nicht lesen.');
+  });
+
+  test('mit Stand: Datum und Uhrzeit', () => {
+    const lesung = leseExcelStand(excelCsv([{ datum: '2027-03-01', abschnitt: 'Muster Abschnitt 1' }]), ERWARTET);
+    expect(excelStandText(lesung, 'IB', 2027)).toBe('Excel-Stand vom 26.11.2026, 09:40');
+  });
+
+  test('ohne Zeilen', () => {
+    expect(excelStandText(leseExcelStand(excelCsv([]), ERWARTET), 'IB', 2027)).toBe('Excel-Stand für IB 2027: keine Sperren');
   });
 });

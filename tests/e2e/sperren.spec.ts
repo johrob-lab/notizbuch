@@ -1,5 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test as base, type Locator, type Page } from '@playwright/test';
+import { serializePage } from '../../src/ink/svg';
+import type { Stroke } from '../../src/ink/types';
+import { EXCEL_KOPF } from '../../src/lib/sperrenExcel';
+import { sperrenLayout } from '../../src/pages/layouts';
 import { changeStoredSettings, localFiles, openSeeded, queued, savedSettings, shareRepos } from './helpers/app';
 import { mouse, pen } from './helpers/pointer';
 
@@ -292,4 +296,189 @@ test('download offline says so', async ({ page }) => {
   repo.offline = true;
   await page.getByRole('button', { name: DOWNLOAD, exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: NO_NETWORK })).toBeVisible();
+});
+
+// ---------- Excel-Stand ----------
+
+test.describe('Excel-Stand', () => {
+  const MAERZ = '#/sperren/IB-2027-03';
+  const MAERZ_FILE = '07 Anhänge/Notizbuch/2027/2027-03 Sperren IB.svg';
+  const EXCEL_2027 = '07 Anhänge/Notizbuch/2027/Sperren IB 2027 Excel.csv';
+  const EXCEL_2028 = '07 Anhänge/Notizbuch/2028/Sperren IB 2028 Excel.csv';
+  const LISTE_2027 = '07 Anhänge/Notizbuch/2027/Sperren IB 2027.csv';
+  /** Ein Strich mitten in Platz 1 des 1. März: x 116 bis 272, y 184 bis 228. */
+  const PLATZ_1_AM_1: [number, number][] = [
+    [150, 206],
+    [220, 210],
+  ];
+  /** Ein Strich mitten in Platz 2 des 3. März: x 272 bis 428, y 272 bis 316. */
+  const PLATZ_2_AM_3: [number, number][] = [
+    [310, 294],
+    [380, 298],
+  ];
+  const ERSTE = 'Muster Abschnitt 1 / Gl. 2 08:00-14:00';
+
+  type Feld = 'fachlinie' | 'datum' | 'abschnitt' | 'gleis' | 'von' | 'bis' | 'platz' | 'anzeigetext' | 'zeitraum' | 'hinweis' | 'stand';
+  const SPALTE: Record<Feld, string> = {
+    fachlinie: 'Fachlinie',
+    datum: 'Datum',
+    abschnitt: 'Abschnitt',
+    gleis: 'Gleis',
+    von: 'von',
+    bis: 'bis',
+    platz: 'Platz',
+    anzeigetext: 'Anzeigetext',
+    zeitraum: 'Zeitraum',
+    hinweis: 'Hinweis Übernahme',
+    stand: 'Stand',
+  };
+
+  /** Ein Excel-Stand wie vom Makro: BOM, Kopf, je Zeile 36 Werte, CRLF. Die Werte hier brauchen keine Anführungszeichen. */
+  function excelCsv(zeilen: Partial<Record<Feld, string>>[]): string {
+    const zeile = (z: Partial<Record<Feld, string>>) => {
+      const werte = new Map(Object.entries({ fachlinie: 'IB', stand: '2026-11-26 09:40', ...z }).map(([f, v]) => [SPALTE[f as Feld], v]));
+      return EXCEL_KOPF.split(';')
+        .map((k) => werte.get(k) ?? '')
+        .join(';');
+    };
+    return '\uFEFF' + [EXCEL_KOPF, ...zeilen.map(zeile)].join('\r\n') + '\r\n';
+  }
+
+  const ZEILEN_2027 = [
+    // 1. März: Platz 1 steht grau da, die Zeile aus dem Notizbuch (Kennung im Hinweis) nicht.
+    { datum: '2027-03-01', abschnitt: 'Muster Abschnitt 1', gleis: '2', von: '08:00', bis: '14:00', platz: '1', anzeigetext: 'Muster Abschnitt 1 / Gl. 2' },
+    { datum: '2027-03-01', abschnitt: 'Muster Abschnitt 2', platz: '2', anzeigetext: 'Muster Abschnitt 2 / Gl. 1', hinweis: 'NB IB-2027-03-01-2 2026-11-25 19:05' },
+    // 2. März: eine Zeile mit Zeitraum, die das Notizbuch an diesem Tag schon gültig hat (Liste der Abendroutine).
+    { datum: '2027-03-02', abschnitt: 'Beispielstrecke Nord', von: '22:30', zeitraum: '02.03.2027 bis 04.03.2027' },
+    // 3. März: drei Sperren für drei Plätze. Die Liste hat die erste nur als unsicher, das ändert nichts.
+    { datum: '2027-03-03', abschnitt: 'Muster Abschnitt 3', platz: '1' },
+    { datum: '2027-03-03', abschnitt: 'Muster Abschnitt 4', platz: '2' },
+    { datum: '2027-03-03', abschnitt: 'Muster Abschnitt 5', platz: '3' },
+    // Andere Seiten desselben Jahres.
+    { datum: '2027-01-05', abschnitt: 'Muster Abschnitt 6', platz: '1' },
+    { datum: '2027-11-02', abschnitt: 'Muster Abschnitt 7', platz: '1' },
+  ];
+  const LISTE = [
+    'ID;Fachlinie;Datum;Abschnitt;Abschnitt gelesen;Gleis;von;bis;Betra-Nr.;Sperre;Status;Hinweis;Stand',
+    'IB-2027-03-02-1;IB;2027-03-02;Beispielstrecke Nord;Beispielstrecke Nord;;22:30;;;;gültig;;2026-11-25 19:05',
+    'IB-2027-03-03-1;IB;2027-03-03;Muster Abschnitt 3;Muster Abschnitt 3;;;;;;unsicher;;2026-11-25 19:05',
+  ];
+  const files = { [EXCEL_2027]: excelCsv(ZEILEN_2027), [LISTE_2027]: '\uFEFF' + LISTE.join('\r\n') + '\r\n' };
+
+  const grau = (page: Page, feld: string) => page.locator(`.graue-sperren .grau[data-feld="${feld}"]`);
+  const mehr = (page: Page, feld: string) => page.locator(`.graue-sperren .grau-mehr[data-feld="${feld}"]`);
+  const stand = (page: Page) => page.locator('.kopf .excelstand');
+
+  /** Wo ein Element liegt, in Seiteneinheiten: Die App rechnet Seite und Bildschirm, hier geht es zurück. */
+  async function pageBox(page: Page, locator: Locator): Promise<[number, number, number, number]> {
+    const box = (await locator.boundingBox())!;
+    const view = await page.evaluate(() => ({ o: window.__notizbuch.toClient(0, 0), e: window.__notizbuch.toClient(1000, 1000) }));
+    const sx = (view.e.x - view.o.x) / 1000;
+    const sy = (view.e.y - view.o.y) / 1000;
+    return [(box.x - view.o.x) / sx, (box.y - view.o.y) / sy, box.width / sx, box.height / sy].map((n) => Math.round(n)) as [number, number, number, number];
+  }
+
+  /** Die Seite mit einem Strich in Platz 1 des 1. März, wie ein anderes Gerät sie gespeichert hat. */
+  function seiteMitStrich(): string {
+    const layout = sperrenLayout('IB-2027-03');
+    const strich: Stroke = {
+      id: 'muster-strich',
+      tool: 'kugel',
+      color: 'blau',
+      widthMm: 0.5,
+      t: 1_795_000_000_000,
+      w: 2,
+      pts: PLATZ_1_AM_1.map(([x, y]) => ({ x, y, w: 2 })),
+    };
+    return serializePage({ kind: 'sperren', key: 'IB-2027-03', meta: {}, strokes: [strich] }, layout.fields, layout.background());
+  }
+
+  test('the agreed closures stand grey in their places, without those from the notebook or valid in it', async ({ page }) => {
+    await openSeeded(page, MAERZ, { files });
+    await expect(grau(page, 'sperre-2027-03-01-1')).toHaveText(ERSTE);
+    await expect(stand(page)).toHaveText('Excel-Stand vom 26.11.2026, 09:40');
+    // Die Zeile aus dem Notizbuch steht dort schon als Schrift, sie kommt nicht noch einmal grau.
+    await expect(page.locator('.graue-sperren .grau', { hasText: 'Muster Abschnitt 2' })).toHaveCount(0);
+    // Was die Liste der Abendroutine am 2. März gültig hat, auch nicht. Bis die Liste gelesen ist, stünde es grau da.
+    await expect(page.locator('.graue-sperren [data-feld^="sperre-2027-03-02-"]')).toHaveCount(0);
+    await expect(grau(page, 'sperre-2027-03-03-1')).toHaveText('Muster Abschnitt 3');
+    // Das Grau liegt genau im Platz und nimmt keine Berührung an: Wer dort tippt oder schreibt, trifft die Schreibfläche.
+    expect(await pageBox(page, grau(page, 'sperre-2027-03-01-1'))).toEqual([116, 184, 156, 44]);
+    const box = (await grau(page, 'sperre-2027-03-01-1').boundingBox())!;
+    const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest('[data-testid="surface"]') != null, [box.x + box.width / 2, box.y + box.height / 2]);
+    expect(hit).toBe(true);
+  });
+
+  test('a pen stroke in place 1 lands on the page, and the grey moves on to place 2', async ({ page }) => {
+    await openSeeded(page, MAERZ, { files });
+    await expect(grau(page, 'sperre-2027-03-01-1')).toHaveText(ERSTE);
+    await pen(page).stroke(PLATZ_1_AM_1);
+    await expect.poll(() => strokeCount(page)).toBe(1);
+    await expect.poll(async () => (await queued(page))[MAERZ_FILE] ?? '').toMatch(/data-feld="sperre-2027-03-01-1"[^]*<path/);
+    await expect(grau(page, 'sperre-2027-03-01-2')).toHaveText(ERSTE);
+    await expect(grau(page, 'sperre-2027-03-01-1')).toHaveCount(0);
+    // Die Datei der Seite bekommt nichts vom Grau.
+    const saved = (await queued(page))[MAERZ_FILE];
+    for (const text of ['Muster Abschnitt', 'Beispielstrecke', 'Gl. 2', '08:00', 'graue-sperren']) expect(saved).not.toContain(text);
+  });
+
+  test('a stroke read from the file pushes the grey on as well', async ({ page }) => {
+    await openSeeded(page, MAERZ, { files: { ...files, [MAERZ_FILE]: seiteMitStrich() } });
+    await expect.poll(() => strokeCount(page)).toBe(1);
+    await expect(grau(page, 'sperre-2027-03-01-2')).toHaveText(ERSTE);
+    await expect(grau(page, 'sperre-2027-03-01-1')).toHaveCount(0);
+  });
+
+  test('three closures with ink in place 2: grey in places 1 and 3 and +1 at place 3', async ({ page }) => {
+    await openSeeded(page, MAERZ, { files });
+    await expect(grau(page, 'sperre-2027-03-03-3')).toHaveText('Muster Abschnitt 5');
+    await pen(page).stroke(PLATZ_2_AM_3);
+    await expect(grau(page, 'sperre-2027-03-03-3')).toHaveText('Muster Abschnitt 4');
+    await expect(grau(page, 'sperre-2027-03-03-1')).toHaveText('Muster Abschnitt 3');
+    await expect(grau(page, 'sperre-2027-03-03-2')).toHaveCount(0);
+    await expect(mehr(page, 'sperre-2027-03-03-3')).toHaveText('+1');
+    // Oben rechts im Platz 3 (x 428 bis 584), weit weg von der Schrift in Platz 2.
+    expect(await pageBox(page, mehr(page, 'sperre-2027-03-03-3'))).toEqual([554, 274, 26, 14]);
+  });
+
+  test('without a file the head says so and nothing is grey', async ({ page }) => {
+    await openSeeded(page, MAERZ);
+    await expect(stand(page)).toHaveText('Noch kein Excel-Stand für IB 2027');
+    await expect(page.locator('.graue-sperren')).toHaveCount(0);
+  });
+
+  test('a broken file says so, nothing is grey, and a stroke is still saved', async ({ page }) => {
+    const kaputt = excelCsv(ZEILEN_2027).replace('Fachlinie;Datum;', 'Fachlinie;Tag;');
+    await openSeeded(page, MAERZ, { files: { ...files, [EXCEL_2027]: kaputt } });
+    await expect(stand(page)).toHaveText('Der Excel-Stand für IB 2027 lässt sich nicht lesen.');
+    await expect(page.locator('.graue-sperren')).toHaveCount(0);
+    await pen(page).stroke(PLATZ_1_AM_1);
+    await expect.poll(async () => (await queued(page))[MAERZ_FILE] ?? '').toMatch(/data-feld="sperre-2027-03-01-1"[^]*<path/);
+  });
+
+  test('Lehne, May and the next year show only their own closures', async ({ page }) => {
+    const datei2028 = excelCsv([{ datum: '2028-01-05', abschnitt: 'Beispielstrecke Süd', platz: '1', stand: '2026-11-27 07:15' }]);
+    await openSeeded(page, '#/sperren/Lehne-2027-03', { files: { ...files, [EXCEL_2028]: datei2028 } });
+    await expect(stand(page)).toHaveText('Noch kein Excel-Stand für Lehne 2027');
+    await expect(page.locator('.graue-sperren')).toHaveCount(0);
+
+    await page.evaluate(() => (window.location.hash = '#/sperren/IB-2027-05'));
+    await expect(stand(page)).toHaveText('Excel-Stand vom 26.11.2026, 09:40');
+    await expect(page.locator('.graue-sperren')).toHaveCount(0);
+
+    await page.evaluate(() => (window.location.hash = '#/sperren/IB-2027-11'));
+    await expect(grau(page, 'sperre-2027-11-02-1')).toHaveText('Muster Abschnitt 7');
+    await page.getByRole('link', { name: 'Nächste zwei Monate' }).click();
+    await expect.poll(() => hash(page)).toBe('#/sperren/IB-2028-01');
+    await expect(stand(page)).toHaveText('Excel-Stand vom 27.11.2026, 07:15');
+    await expect(page.locator('.graue-sperren .grau')).toHaveText(['Beispielstrecke Süd']);
+    await expect(grau(page, 'sperre-2028-01-05-1')).toHaveText('Beispielstrecke Süd');
+  });
+
+  test('the Firmen-PC shows the grey the same way', async ({ page }) => {
+    await openSeeded(page, MAERZ, { device: 'Firmen-PC', files });
+    await expect(grau(page, 'sperre-2027-03-01-1')).toHaveText(ERSTE);
+    await expect(grau(page, 'sperre-2027-03-03-2')).toHaveText('Muster Abschnitt 4');
+    await expect(stand(page)).toHaveText('Excel-Stand vom 26.11.2026, 09:40');
+  });
 });

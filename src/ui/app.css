@@ -152,6 +152,14 @@ body {
   white-space: nowrap;
 }
 
+/* Der Stand aus Excel im Kopf der Sperrenseite, eine eigene Zeile unter den Knöpfen. */
+.excelstand {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 14px;
+  color: #5f6862;
+}
+
 .kopfhinweis {
   flex-basis: 100%;
   margin: 0;
@@ -2666,4 +2674,34 @@ body {
   font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-size: 18px;
   background: #fffefa;
+}
+
+/*
+ * Die abgestimmten Sperren aus dem Excel-Stand auf der Sperrenseite (GraueSperren.tsx): grau in den freien Plätzen, eine Zeile
+ * je Platz, zu Langes endet mit „…“. Die Ebene liegt wie die Karten in Seiteneinheiten über der Fläche, ist aber keine Karte:
+ * Sie fängt weder Stift noch Finger noch Maus ab, geschrieben und getippt wird überall wie sonst. „+1“ steht oben rechts im
+ * Platz 3, wenn eine Sperre keinen freien Platz mehr fand.
+ */
+.graue-sperren {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.graue-sperren .grau {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 0 6px;
+  font: 14px/44px 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  color: #8a938c;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.graue-sperren .grau-mehr {
+  position: absolute;
+  font: 600 11px/14px 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  color: #6f7a72;
+  text-align: right;
 }
