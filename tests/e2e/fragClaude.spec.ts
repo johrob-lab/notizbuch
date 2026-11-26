@@ -326,7 +326,7 @@ test('a question about the day page goes out with picture, note and meetings', a
     'anthropic-version': '2026-10-21',
     'anthropic-dangerous-direct-browser-access': 'true',
   });
-  expect(request.body).toMatchObject({ model: 'claude-sonnet-5-5', max_tokens: 2048, stream: true, thinking: { type: 'between_tools' } });
+  expect(request.body).toMatchObject({ model: 'claude-sonnet-5-5', max_tokens: 4096, stream: true, thinking: { type: 'between_tools' } });
   expect(request.body.system).toContain('Keine Gedankenstriche');
   expect(request.body.messages).toHaveLength(1);
   const [image, ...rest] = lastBlocks(request.body);
@@ -361,11 +361,14 @@ test('errors keep the question', async ({ page }) => {
   await expect(field(page)).toHaveValue('Was steht an?');
   await expect(answers(page)).toHaveCount(0);
 
+  // Ohne Netz meldet auch der Browser offline.
   claude.next = 'offline';
+  await page.context().setOffline(true);
   await fragen(page).click();
   await expect(errorLine(page)).toHaveText('Ohne Netz kann Claude nicht antworten.');
   await expect(field(page)).toHaveValue('Was steht an?');
   await expect(answers(page)).toHaveCount(0);
+  await page.context().setOffline(false);
 
   claude.next = { text: 'Jetzt.' };
   await fragen(page).click();

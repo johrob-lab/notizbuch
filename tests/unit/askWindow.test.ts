@@ -78,6 +78,8 @@ afterEach(() => {
     host.remove();
   }
   vi.unstubAllGlobals();
+  // Ein Test kann den Browser offline stellen.
+  delete (navigator as { onLine?: boolean }).onLine;
 });
 
 const win = (host: HTMLElement) => host.querySelector<HTMLElement>('.frag-fenster')!;
@@ -434,7 +436,9 @@ test('a cut answer says so, an answer without numbers has no cost line', async (
 
 test('every failure has its sentence and the question comes back', async () => {
   const errorBody = (type: string, message: string) => JSON.stringify({ type: 'error', error: { type, message } });
+  // Ohne Netz sagt das auch der Browser, und fetch lehnt mit TypeError ab.
   const offline = (async () => {
+    Object.defineProperty(navigator, 'onLine', { value: false, configurable: true });
     throw new TypeError('Failed to fetch');
   }) as typeof fetch;
   const failures: [typeof fetch, string][] = [
