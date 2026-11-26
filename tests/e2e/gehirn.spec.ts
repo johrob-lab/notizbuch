@@ -202,7 +202,7 @@ test('Fragen beim ersten Laden ohne Netz', async ({ page }) => {
 });
 
 // Quellen unter der Antwort: Die Zeile „Quellen:“ ist nie zu sehen, jede Quelle ist ein Knopf, aber nur, wenn es die Notiz gibt
-// und sie in dieser Frage vorkam (Review Focus 3).
+// und sie im Gespräch bis zu dieser Frage vorkam (Review Focus 3, bei Nachfragen auch in früheren Runden).
 
 const TAGESNOTIZ_25 = '05 Daily Notes/2026-11-25.md';
 const KRANICH = '02 Projekte/Projekt Kranich.md';

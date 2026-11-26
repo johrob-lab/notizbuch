@@ -112,10 +112,13 @@ function ergebnis(
   isError: boolean,
   pfade: string[] = [],
 ): WerkzeugErgebnis {
-  // `inhalt` beginnt schon mit der Kopfzeile oder bekommt sie hier.
+  // `inhalt` beginnt schon mit der Kopfzeile oder bekommt sie hier. Fehlen keine Notizen, wird die Kopie gerade aufgefrischt.
   let text = inhalt.startsWith(KOPF) ? inhalt : `${KOPF}\n${inhalt}`;
   if (!stand.vollstaendig)
-    text += `\nHinweis: Die Kopie ist noch nicht vollständig (${stand.geladen} von ${stand.gesamt} Notizen).`;
+    text +=
+      stand.geladen < stand.gesamt
+        ? `\nHinweis: Die Kopie ist noch nicht vollständig (${stand.geladen} von ${stand.gesamt} Notizen).`
+        : '\nHinweis: Die Kopie wird gerade aufgefrischt, ganz neue Notizen fehlen vielleicht noch.';
   return { text, isError, zeile, pfade };
 }
 

@@ -207,6 +207,21 @@ test('zwei Werkzeuge in einer Antwort: beide Ergebnisse in einer Nutzer-Nachrich
   expect(a.schritte).toBe(2);
 });
 
+test('ein leerer Textblock geht nicht zurück, Denkblock und Aufruf gehen unverändert zurück', async () => {
+  // Denken, leerer Text, Aufruf; im zweiten Schritt Denken, Text nur aus Leerraum, Aufruf.
+  const f = stepsOf([werkzeugSchritt([suche(1)], { text: '' }), werkzeugSchritt([suche(2)], { text: ' \n' }), antwortSchritt('Gefunden.')]);
+  const { o, schritte } = aufbau(f);
+  await frage(o);
+
+  const denken = { type: 'thinking', thinking: 'Ich suche zuerst.', signature: 'sig-test' };
+  expect(bodyOf(f, 1).messages[1]).toEqual({ role: 'assistant', content: [denken, { type: 'tool_use', id: 'toolu_1', name: 'suchen', input: { text: 'TFZF 1' } }] });
+  const dritte = bodyOf(f, 2).messages;
+  expect(dritte[1]).toEqual(bodyOf(f, 1).messages[1]);
+  expect(dritte[3]).toEqual({ role: 'assistant', content: [denken, { type: 'tool_use', id: 'toolu_2', name: 'suchen', input: { text: 'TFZF 2' } }] });
+  // Leerer Text wird auch keine graue Zeile.
+  expect(schritte).toEqual([{ zeile: 'Schritt 1: suchen' }, { neu: true }, { zeile: 'Schritt 2: suchen' }, { neu: true }]);
+});
+
 test('Grenze 8: Ruft Claude immer ein Werkzeug, laufen genau 8, dann antwortet es ohne Werkzeuge', async () => {
   // Auch auf die letzte Anfrage kommt noch ein Aufruf: Danach geht trotzdem nichts mehr hinaus.
   const antworten = Array.from({ length: 10 }, (_, i) => werkzeugSchritt([suche(i + 1)], i === 8 ? { text: 'Die Suche wurde abgebrochen.' } : {}));

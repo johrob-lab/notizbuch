@@ -31,12 +31,15 @@ test('the first block is the same at any time of day', () => {
   expect(a).toEqual(b);
 });
 
-test('the second block names the three copy states', () => {
+test('the second block names the copy states', () => {
   const at = new Date('2026-11-18T14:05:00Z');
   expect(systemBlocks(at, { geladen: 40, gesamt: 130, vollstaendig: false, ohneNetz: false })[1].text).toContain(
     'Die Kopie des Vaults lädt noch: 40 von 130 Notizen.',
   );
   expect(systemBlocks(at, null)[1].text).toContain('Es gibt gerade keine Kopie des Vaults.');
+  // Nichts fehlt, aber der Kopf hat sich geändert: Die Kopie wird aufgefrischt, sie lädt nicht „130 von 130“.
+  const auffrischen = systemBlocks(at, { geladen: 130, gesamt: 130, vollstaendig: false, ohneNetz: false })[1].text;
+  expect(auffrischen).toBe('Heute ist Mi 18.11.2026, 15:05 Uhr (Wien).\nDie Kopie des Vaults wird gerade aufgefrischt (130 Notizen).');
 });
 
 test('the rules hold every sentence word for word and the Paket 11 rules', () => {

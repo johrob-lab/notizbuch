@@ -555,6 +555,7 @@ export function App() {
               <AskWindow
                 engine={boot.engine}
                 client={boot.client}
+                repo={boot.settings.repo}
                 kiKey={askKey}
                 model={kiModelOf(boot.settings)}
                 page={askPage}

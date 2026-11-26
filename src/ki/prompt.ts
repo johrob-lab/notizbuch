@@ -31,14 +31,17 @@ export const REGELN = [
 
 /**
  * Das `system` für Claude in zwei Blöcken: zuerst die festen Regeln (mit Zwischenspeicher), dann Datum, Uhrzeit (aus Wien,
- * damit „heute“ und „morgen“ stimmen) und der Stand der Kopie des Vaults.
+ * damit „heute“ und „morgen“ stimmen) und der Stand der Kopie des Vaults. Fehlen keine Notizen, ist die Kopie aber nicht auf dem
+ * neuesten Stand, wird sie gerade aufgefrischt (der Kopf hat sich geändert, Baum oder geänderte Notizen kommen noch).
  */
 export function systemBlocks(now: Date, stand: KopieStand | null): SystemBlock[] {
   const kopie = !stand
     ? 'Es gibt gerade keine Kopie des Vaults.'
     : stand.vollstaendig
       ? `Die Kopie des Vaults ist vollständig (${stand.gesamt} Notizen).`
-      : `Die Kopie des Vaults lädt noch: ${stand.geladen} von ${stand.gesamt} Notizen.`;
+      : stand.geladen < stand.gesamt
+        ? `Die Kopie des Vaults lädt noch: ${stand.geladen} von ${stand.gesamt} Notizen.`
+        : `Die Kopie des Vaults wird gerade aufgefrischt (${stand.geladen} Notizen).`;
   return [
     { type: 'text', text: REGELN, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: `Heute ist ${formatDayLong(todayVienna(now))}, ${timeVienna(now)} Uhr (Wien).\n${kopie}` },

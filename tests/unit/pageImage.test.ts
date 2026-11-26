@@ -38,8 +38,11 @@ describe('Bild der Seite', () => {
     const SVG = '<svg xmlns="http://www.w3.org/2000/svg"/>';
     const PNG = 'data:image/png;base64,QUJD';
 
-    /** Ein Bild, das sich so verhält, wie der Test es sagt: `laedt`, `fehler` oder `nie`. Mit `decode` gibt es auch die Methode. */
-    function stubImage(mode: 'laedt' | 'fehler' | 'nie', decode?: () => Promise<void>) {
+    /**
+     * Ein Bild, das sich so verhält, wie der Test es sagt: `laedt`, `fehler` oder `nie`. Mit `decode` gibt es auch die Methode, `wie`
+     * setzt `complete` und `naturalWidth`.
+     */
+    function stubImage(mode: 'laedt' | 'fehler' | 'nie', decode?: () => Promise<void>, wie: { complete?: boolean; naturalWidth?: number } = {}) {
       const made: { src: string; onload: (() => void) | null; onerror: (() => void) | null }[] = [];
       class FakeImage {
         onload: (() => void) | null = null;
@@ -48,6 +51,7 @@ describe('Bild der Seite', () => {
         constructor() {
           made.push(this);
           if (decode) (this as unknown as { decode: () => Promise<void> }).decode = decode;
+          Object.assign(this, wie);
         }
         get src() {
           return this.source;
@@ -110,6 +114,22 @@ describe('Bild der Seite', () => {
 
       stubImage('nie', () => Promise.reject(new Error('kaputt')));
       await expect(pageImage(SVG, 1000)).resolves.toBeNull();
+    });
+
+    it('a rejected decode still draws the page when the picture has loaded with a width', async () => {
+      // So macht es Safari manchmal bei SVG: decode lehnt ab, das Bild ist aber da.
+      const ctx = drawing();
+      const ablehnen = () => Promise.reject(new DOMException('Das Bild ließ sich nicht dekodieren.', 'EncodingError'));
+      stubImage('nie', ablehnen, { complete: true, naturalWidth: 1658 });
+      stubCanvas(ctx);
+      await expect(pageImage(SVG, 1000)).resolves.toBe('QUJD');
+      expect(ctx.drawImage).toHaveBeenCalledTimes(1);
+      // Ohne Breite (kaputtes Bild) oder noch nicht fertig: kein Bild.
+      stubImage('nie', ablehnen, { complete: true, naturalWidth: 0 });
+      await expect(pageImage(SVG, 1000)).resolves.toBeNull();
+      stubImage('nie', ablehnen, { complete: false, naturalWidth: 1658 });
+      await expect(pageImage(SVG, 1000)).resolves.toBeNull();
+      expect(ctx.drawImage).toHaveBeenCalledTimes(1);
     });
 
     it('without decode the page is drawn after onload', async () => {

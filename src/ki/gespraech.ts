@@ -158,8 +158,11 @@ export async function frage(o: {
       ergebnisse.push({ type: 'tool_result', tool_use_id: aufruf.id, content: ergebnis.text, ...(ergebnis.isError ? { is_error: true } : {}) });
     }
     ohneWerkzeuge = schritte >= max;
-    // Die Antwort geht unverändert zurück, alle Blöcke in ihrer Reihenfolge. Die Ergebnisse stehen vor jedem Text.
+    // Die Antwort geht unverändert zurück, alle Blöcke in ihrer Reihenfolge, nur ein leerer Textblock (auch nur Leerraum) nicht: An
+    // ihm kann die Schnittstelle die nächste Anfrage mit 400 ablehnen. Denkblöcke bleiben, wie sie sind. Die Ergebnisse stehen vor
+    // jedem Text.
+    const zurueck = reply.content.filter((b) => b.type !== 'text' || b.text.trim() !== '');
     const inhalt: Block[] = ohneWerkzeuge ? [...ergebnisse, { type: 'text', text: grenzText(max) }] : ergebnisse;
-    verlauf.push({ role: 'assistant', content: reply.content }, { role: 'user', content: inhalt });
+    verlauf.push({ role: 'assistant', content: zurueck }, { role: 'user', content: inhalt });
   }
 }

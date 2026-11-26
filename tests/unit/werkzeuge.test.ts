@@ -178,6 +178,14 @@ describe('Eingaben und Hinweise', () => {
     }
     expect(run('suchen', { text: 'TFZF' }).text).not.toContain('Hinweis:');
   });
+  it('Kopie wird aufgefrischt: eigener Hinweis statt „130 von 130“', () => {
+    const stand = { geladen: 130, gesamt: 130, vollstaendig: false, ohneNetz: false };
+    const hinweis = 'Hinweis: Die Kopie wird gerade aufgefrischt, ganz neue Notizen fehlen vielleicht noch.';
+    for (const r of [run('suchen', { text: 'TFZF' }, DATEIEN, stand), run('lesen', { pfad: 'Nix' }, DATEIEN, stand)]) {
+      expect(r.text.split('\n').at(-1)).toBe(hinweis);
+      expect(r.text).not.toContain('130 von 130');
+    }
+  });
   it('WERKZEUGE', () => {
     expect(WERKZEUGE.map((w) => w.name)).toEqual(['suchen', 'lesen', 'auflisten']);
     for (const w of WERKZEUGE) expect(w.input_schema.type).toBe('object');

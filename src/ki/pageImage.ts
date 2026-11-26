@@ -36,13 +36,17 @@ export function sizedSvg(svg: string, size: { w: number; h: number }): string {
   return svg.slice(0, match.index) + tag + svg.slice(match.index + match[0].length);
 }
 
-/** Wartet, bis das Bild fertig dekodiert ist (`decode`, sonst `onload`), `false` bei Fehler. `src` setzt erst, wer danach aufruft. */
+/**
+ * Wartet, bis das Bild fertig dekodiert ist (`decode`, sonst `onload`), `false` bei Fehler. Lehnt `decode` ab (Safari tut das bei
+ * SVG manchmal, obwohl das Bild geladen ist), zählt, was das Bild selbst sagt: fertig und mit Breite. `src` setzt erst, wer danach
+ * aufruft.
+ */
 function loaded(img: HTMLImageElement, src: string): Promise<boolean> {
   if (typeof img.decode === 'function') {
     img.src = src;
     return img.decode().then(
       () => true,
-      () => false,
+      () => img.complete && img.naturalWidth > 0,
     );
   }
   return new Promise((resolve) => {

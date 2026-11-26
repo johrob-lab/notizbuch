@@ -40,6 +40,8 @@ type Props = {
   engine: SyncEngine;
   /** Der Zugang zu GitHub, über den die Kopie des Vaults auffrischt. */
   client: CopyClient;
+  /** Das Repo der Einstellungen (`owner/name`). Die Kopie gehört zu genau diesem, eine Kopie eines anderen wird geleert. */
+  repo: string;
   kiKey: string;
   model: KiModel;
   /** Die offene Seite, sobald sie gelesen ist und sich angemeldet hat. Sonst `null`. */
@@ -152,7 +154,7 @@ function brainLine(stand: KopieStand | null, laeuft: boolean): string {
  * Verlauf mit der neuesten Runde oben. Alle Knöpfe und der Schalter laufen über `useActivation` mit dem Tor der offenen Seite, ohne
  * Seite mit einem eigenen.
  */
-export function AskWindow({ engine, client, kiKey, model, page, away, control }: Props) {
+export function AskWindow({ engine, client, repo, kiKey, model, page, away, control }: Props) {
   const root = useRef<HTMLElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const [open, setOpen] = useState(false);
@@ -163,7 +165,7 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
   const [failure, setFailure] = useState<Fehler | null>(null);
   /** Die Quelle, die das Fenster statt des Verlaufs zeigt, `null` ohne. */
   const [lesen, setLesen] = useState<Quelle | null>(null);
-  const gehirn = useKopie(client);
+  const gehirn = useKopie(client, repo);
   // Die Runden, wie sie zuletzt gezeichnet wurden: Eine Nachfrage schickt die früheren mit.
   const turnsNow = useRef(turns);
   turnsNow.current = turns;
@@ -411,11 +413,14 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
     clearView();
   };
 
-  /** Die Quellen einer Runde: nur Notizen, die es in der Kopie gibt und die in dieser Frage vorkamen (oder die Tagesnotiz der Seite, die mitging). */
-  const quellenVon = (turn: Turn): Quelle[] => {
+  /**
+   * Die Quellen einer Runde: nur Notizen, die es in der Kopie gibt und die im Gespräch bis zu dieser Runde vorkamen (`bisher` sind
+   * diese Runde und die früheren, eine Nachfrage darf sich auf frühere Antworten stützen), dazu die Tagesnotiz der Seite, die mitging.
+   */
+  const quellenVon = (turn: Turn, bisher: readonly Turn[]): Quelle[] => {
     const dateien = gehirn.kopie?.dateien();
     if (!dateien || turn.state === 'laeuft' || turn.state === 'fehler' || !turn.answer.includes('Quellen:')) return [];
-    const erlaubt = erlaubtePfade(turn.pfade, turn.seitenTag);
+    const erlaubt = erlaubtePfade(bisher.flatMap((t) => t.pfade), turn.seitenTag);
     return quellenAus(turn.answer, (pfad) => findePfad(dateien, pfad), erlaubt);
   };
   /** Eine Tagesnotiz öffnet den Tag in der App, das Fenster bleibt offen. Jede andere Notiz öffnet die Ansicht zum Lesen. */
@@ -498,8 +503,9 @@ export function AskWindow({ engine, client, kiKey, model, page, away, control }:
         <Lesen quelle={lesen} text={gehirn.kopie?.text(lesen.pfad) ?? null} press={press} onZurueck={() => setLesen(null)} />
       )}
       <ol class="frag-verlauf" hidden={lesen !== null}>
-        {turns.map((turn) => {
-          const quellen = quellenVon(turn);
+        {turns.map((turn, i) => {
+          // Die neueste Runde steht oben: Ab ihr abwärts kommen nur sie selbst und die früheren.
+          const quellen = quellenVon(turn, turns.slice(i));
           return (
             <Round
               key={turn.id}

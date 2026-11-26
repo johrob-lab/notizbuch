@@ -56,6 +56,11 @@ describe('datenImText', () => {
     expect(tag('KW 15 2027')).toEqual([{ von: '2027-04-12', bis: '2027-04-18' }]);
     expect(tag('KW 1')).toEqual([{ von: '2027-01-04', bis: '2027-01-10' }]);
   });
+  it('nimmt kein Jahr zur Kalenderwoche, mit dem ein ISO-Datum beginnt', () => {
+    expect(tag('KW 40 2027-03-01')).toEqual([{ von: '2026-09-28', bis: '2026-10-04' }, ...eins('2027-03-01')]);
+    expect(tag('KW 40/2027-03-01')).toEqual([{ von: '2026-09-28', bis: '2026-10-04' }, ...eins('2027-03-01')]);
+    expect(tag('KW 15 2027.')).toEqual([{ von: '2027-04-12', bis: '2027-04-18' }]);
+  });
   it('lässt Ungültiges weg', () => {
     expect(tag('31.02.2027')).toEqual([]);
     expect(tag('1.2.3')).toEqual([]);

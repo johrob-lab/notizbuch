@@ -3,21 +3,30 @@ import { IDBFactory } from 'fake-indexeddb';
 import { openDB } from 'idb';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { Kopie, kopieImSpeicher, setzeKopieImSpeicher, type KopieStand } from '../../src/gehirn/kopie';
-import { OfflineError, type CopyClient, type CopyEntry } from '../../src/sync/github';
+import { base64ToUtf8 } from '../../src/sync/base64';
+import { CALL_TIMEOUT_MS, OfflineError, type CopyClient, type CopyEntry } from '../../src/sync/github';
 
-// Alles hier ist erfunden. Die Datenbank liegt im Speicher (fake-indexeddb), pro Test eine frische.
+// Alles hier ist erfunden, auch die Repos. Die Datenbank liegt im Speicher (fake-indexeddb), pro Test eine frische.
+
+const REPO = 'beispiel/vault';
 
 let kopie: Kopie;
 
 beforeEach(async () => {
   (globalThis as { indexedDB: IDBFactory }).indexedDB = new IDBFactory();
-  kopie = await Kopie.open();
+  kopie = await Kopie.open(REPO);
 });
-afterEach(() => kopie.close());
+afterEach(() => {
+  vi.useRealTimers();
+  kopie.close();
+});
 
 const eintrag = (path: string, sha: string): CopyEntry => ({ path, sha, size: 10 });
 
-/** Ein falscher Client: Baum und Kopf sind einstellbar, die Aufrufe werden gezählt. */
+/**
+ * Ein falscher Client: Baum und Kopf sind einstellbar, die Aufrufe werden gezählt. Ein Blob mit einer sha aus `kaputt` ist kein UTF-8:
+ * `copyText` wirft dann, was das Dekodieren des echten Clients wirft.
+ */
 function fakeClient(opts: { head?: string; entries?: CopyEntry[]; truncated?: boolean } = {}) {
   const state = {
     head: opts.head ?? 'h1',
@@ -30,6 +39,7 @@ function fakeClient(opts: { head?: string; entries?: CopyEntry[]; truncated?: bo
     maxRunning: 0,
     failAt: 0, // beim wievielten copyText ein OfflineError kommt (0 = nie)
     delay: 0,
+    kaputt: [] as string[],
   };
   const client: CopyClient = {
     async headSha() {
@@ -47,6 +57,7 @@ function fakeClient(opts: { head?: string; entries?: CopyEntry[]; truncated?: bo
       try {
         await new Promise((r) => setTimeout(r, state.delay));
         if (state.failAt && nummer >= state.failAt) throw new OfflineError('kein Netz');
+        if (state.kaputt.includes(entry.sha)) return base64ToUtf8('/w=='); // das Byte 0xFF, wie aus Excel unter Windows
         return `Text von ${entry.path} (${entry.sha})`;
       } finally {
         state.running--;
@@ -106,7 +117,7 @@ test('übersteht einen Neustart', async () => {
   const { client, state } = fakeClient({ entries: drei() });
   await kopie.auffrischen(client);
   kopie.close();
-  kopie = await Kopie.open();
+  kopie = await Kopie.open(REPO);
   expect(kopie.dateien().map((d) => d.path)).toEqual(['a.md', 'b.md', 'c.md']);
   expect(kopie.stand()).toEqual({ geladen: 3, gesamt: 3, vollstaendig: true, ohneNetz: false });
   expect(state.headCalls).toBe(1);
@@ -123,7 +134,7 @@ test('ohne Netz mitten im Laden', async () => {
   expect(kopie.dateien()).toHaveLength(1);
   // Neustart ohne Netz: die Kopie ist nicht vollständig, der Kopf wurde nicht gesetzt.
   kopie.close();
-  kopie = await Kopie.open();
+  kopie = await Kopie.open(REPO);
   expect(kopie.stand()).toMatchObject({ geladen: 1, gesamt: 3, vollstaendig: false });
   // Später mit Netz: nur die fehlenden.
   state.failAt = 0;
@@ -215,7 +226,7 @@ async function kopieMitVerbindung(): Promise<{ k: Kopie; verbindung: () => IDBDa
     req.addEventListener('success', () => (db = req.result));
     return req;
   });
-  const k = await Kopie.open('notizbuch-gehirn-probe');
+  const k = await Kopie.open(REPO, 'notizbuch-gehirn-probe');
   spy.mockRestore();
   return { k, verbindung: () => db! };
 }
@@ -239,5 +250,112 @@ test('nach close() wird nicht neu geöffnet', async () => {
   expect(stand.ohneNetz).toBe(false);
   const db = await openDB('notizbuch-gehirn-probe', 1);
   expect(await db.get('meta', 'head')).toBeUndefined();
+  db.close();
+});
+
+test('eine Anfrage ohne Antwort endet nach der Zeitgrenze als ohne Netz, das nächste Auffrischen läuft neu', async () => {
+  const { client } = fakeClient({ entries: drei() });
+  // Nur die Uhr der Zeitgrenze ist falsch: Die Datenbank im Speicher arbeitet mit setImmediate weiter.
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  // Nacheinander hängt der Kopf, der Baum und das Holen der Blobs: eine Verbindung, die nie antwortet (das iPad kam aus dem Hintergrund).
+  for (const haengt of ['headSha', 'vaultTree', 'copyText'] as const) {
+    let gefragt!: () => void;
+    const angefragt = new Promise<void>((resolve) => (gefragt = resolve));
+    const haengend: CopyClient = { ...client };
+    haengend[haengt] = () => {
+      gefragt();
+      return new Promise<never>(() => undefined);
+    };
+    const lauf = kopie.auffrischen(haengend);
+    let fertig = false;
+    void lauf.then(() => (fertig = true));
+    await angefragt;
+    await vi.advanceTimersByTimeAsync(CALL_TIMEOUT_MS - 1);
+    expect(fertig).toBe(false);
+    expect(kopie.auffrischen(client)).toBe(lauf); // solange er läuft, bekommt jeder Aufruf denselben Lauf
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await lauf).toMatchObject({ vollstaendig: false, ohneNetz: true });
+  }
+  // Mit Antwort beginnt ein neuer Lauf und kommt ans Ziel: Der hängende von vorhin blockiert nichts mehr.
+  vi.useRealTimers();
+  expect(await kopie.auffrischen(client)).toEqual({ geladen: 3, gesamt: 3, vollstaendig: true, ohneNetz: false });
+});
+
+test('ein anderes Repo leert die Kopie, bevor etwas gelesen oder gesucht wird', async () => {
+  const { client, state } = fakeClient({ entries: drei() });
+  await kopie.auffrischen(client);
+  expect(kopie.stand()).toEqual({ geladen: 3, gesamt: 3, vollstaendig: true, ohneNetz: false });
+  kopie.close();
+  kopie = await Kopie.open('beispiel/anderes-vault');
+  expect(kopie.dateien()).toEqual([]);
+  expect(kopie.text('a.md')).toBeNull();
+  expect(kopie.stand()).toEqual({ geladen: 0, gesamt: 0, vollstaendig: false, ohneNetz: false });
+  expect(await pathsInDb()).toEqual([]);
+  expect(state.headCalls).toBe(1); // geleert wird ohne Anfrage
+  // Das neue Repo lädt wie beim ersten Mal: jede Datei, auch bei gleicher sha.
+  state.textCalls.length = 0;
+  expect(await kopie.auffrischen(client)).toEqual({ geladen: 3, gesamt: 3, vollstaendig: true, ohneNetz: false });
+  expect(state.textCalls.sort()).toEqual(['a.md', 'b.md', 'c.md']);
+  // Dasselbe Repo noch einmal: Nichts wird geleert.
+  kopie.close();
+  kopie = await Kopie.open('beispiel/anderes-vault');
+  expect(kopie.stand()).toEqual({ geladen: 3, gesamt: 3, vollstaendig: true, ohneNetz: false });
+
+  // Eine Kopie ohne Angabe des Repos gilt ebenso als fremd.
+  const alt = await openDB('notizbuch-gehirn-alt', 1, {
+    upgrade(u) {
+      u.createObjectStore('dateien', { keyPath: 'path' });
+      u.createObjectStore('meta');
+    },
+  });
+  await alt.put('dateien', { path: 'a.md', sha: 's1', text: 'aus einem unbekannten Repo' });
+  await alt.put('meta', 'h1', 'head');
+  alt.close();
+  const ohne = await Kopie.open(REPO, 'notizbuch-gehirn-alt');
+  expect(ohne.dateien()).toEqual([]);
+  expect(ohne.stand()).toEqual({ geladen: 0, gesamt: 0, vollstaendig: false, ohneNetz: false });
+  ohne.close();
+});
+
+test('eine Datei, die kein UTF-8 ist, bleibt draußen, und die Kopie wird trotzdem vollständig', async () => {
+  const { client, state } = fakeClient({ entries: drei() });
+  state.kaputt = ['s2'];
+  const stande: KopieStand[] = [];
+  const voll = { geladen: 2, gesamt: 2, vollstaendig: true, ohneNetz: false };
+  expect(await kopie.auffrischen(client, (s) => stande.push(s))).toEqual(voll);
+  expect(stande.at(-1)).toEqual(voll);
+  expect(state.textCalls.sort()).toEqual(['a.md', 'b.md', 'c.md']);
+  expect(kopie.dateien().map((d) => d.path)).toEqual(['a.md', 'c.md']);
+  expect(kopie.text('b.md')).toBeNull();
+  expect(await pathsInDb()).toEqual(['a.md', 'c.md']);
+
+  // Derselbe Kopf: keine Anfrage nach Baum oder Blob, auch nicht für die unlesbare Datei.
+  state.textCalls.length = 0;
+  expect(await kopie.auffrischen(client)).toEqual(voll);
+  expect(state.treeCalls).toBe(1);
+  expect(state.textCalls).toEqual([]);
+
+  // Nach einem Neustart mit neuem Kopf: nur die geänderte Datei, die unlesbare (gleiche sha) nicht noch einmal.
+  kopie.close();
+  kopie = await Kopie.open(REPO);
+  expect(kopie.stand()).toEqual(voll);
+  state.head = 'h2';
+  state.entries = [eintrag('a.md', 's1'), eintrag('b.md', 's2'), eintrag('c.md', 's3neu')];
+  expect(await kopie.auffrischen(client)).toEqual(voll);
+  expect(state.textCalls).toEqual(['c.md']);
+
+  // Mit neuer sha wird sie wieder geholt und kommt dazu. Wird eine lesbare Datei unlesbar, fliegt ihre alte Fassung hinaus.
+  state.textCalls.length = 0;
+  state.head = 'h3';
+  state.kaputt = ['s1neu'];
+  state.entries = [eintrag('a.md', 's1neu'), eintrag('b.md', 's2neu'), eintrag('c.md', 's3neu')];
+  expect(await kopie.auffrischen(client)).toEqual(voll);
+  expect(state.textCalls.sort()).toEqual(['a.md', 'b.md']);
+  expect(kopie.dateien().map((d) => d.path)).toEqual(['b.md', 'c.md']);
+  expect(kopie.text('a.md')).toBeNull();
+  expect(await pathsInDb()).toEqual(['b.md', 'c.md']);
+  // Gemerkt bleibt nur, was der Baum noch nennt.
+  const db = await openDB('notizbuch-gehirn', 1);
+  expect(await db.get('meta', 'unlesbar')).toEqual(['s1neu']);
   db.close();
 });

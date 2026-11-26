@@ -90,6 +90,7 @@ function fakeCopy(o: { notizen?: Record<string, string>; hang?: boolean; copyTex
 type WindowProps = {
   engine: SyncEngine;
   client: CopyClient;
+  repo: string;
   kiKey: string;
   model: KiModel;
   page: AskPage | null;
@@ -107,6 +108,7 @@ function mount(o: { page?: AskPage | null; engine?: SyncEngine; client?: CopyCli
   let props: WindowProps = {
     engine: o.engine ?? fakeEngine,
     client: o.client ?? fakeCopy().client,
+    repo: 'beispiel/vault',
     kiKey: 'sk-ant-test-0000',
     model: 'sonnet',
     page: o.page === undefined ? fakePage() : o.page,
@@ -1159,4 +1161,58 @@ test('wartet höchstens 3 Sekunden auf die Kopie', async () => {
   vi.useRealTimers();
   await until(() => costs(host).length === 1, 'Antwort');
   expect(answers(host)).toEqual(['Hallo']);
+});
+
+test('another repo closes the copy and opens an empty one, the next open loads it like the first time', async () => {
+  const copy = fakeCopy();
+  const { control, set } = await opened({ client: copy.client });
+  await until(() => kopieImSpeicher()?.dateien().length === 2, 'Kopie geladen');
+  const alt = kopieImSpeicher()!;
+  await set({ repo: 'beispiel/anderes-vault' });
+  await until(() => kopieImSpeicher() !== null && kopieImSpeicher() !== alt, 'Kopie des neuen Repos');
+  // Vor jedem Auffrischen: nichts aus dem alten Vault.
+  expect(kopieImSpeicher()!.dateien()).toEqual([]);
+  expect(kopieImSpeicher()!.stand()).toEqual({ geladen: 0, gesamt: 0, vollstaendig: false, ohneNetz: false });
+  expect(copy.calls).toEqual({ head: 1, tree: 1, text: 2 });
+  await act(() => control.current!.open());
+  await until(() => kopieImSpeicher()!.stand().vollstaendig, 'neu geladen');
+  expect(copy.calls).toEqual({ head: 2, tree: 2, text: 4 });
+});
+
+/** Ein Werkzeugschritt wie von Sonnet: Denkblock mit Signatur, dann der Aufruf `lesen` mit `pfad`. */
+function leseSchritt(pfad: string): string[] {
+  const json = JSON.stringify({ pfad });
+  return [
+    messageStart(5000, 1),
+    blockStart(0, { type: 'thinking', thinking: '', signature: '' }),
+    thinkingDelta(0, 'Ich lese.'),
+    signatureDelta(0, 'sig-test'),
+    blockStop(0),
+    blockStart(1, { type: 'tool_use', id: 'toolu_1', name: 'lesen', input: {} }),
+    inputJsonDelta(1, json),
+    blockStop(1),
+    messageDelta('tool_use', 100),
+    messageStop(),
+  ];
+}
+
+test('Quellen einer Nachfrage: what an earlier round read counts, a note never read still drops', async () => {
+  const A = '02 Projekte/Beispiel Projekt.md';
+  const B = '05 Daily Notes/2026-10-28.md';
+  const C = '06 Archiv/Projekt Reiher.md';
+  const copy = fakeCopy({ notizen: { ...NOTIZEN, [C]: '# Projekt Reiher\n\nAbgeschlossen im Oktober 2026.\n' } });
+  // Runde 1 liest A und nennt auch C, das erst Runde 2 liest. Die Nachfrage liest C und nennt A, B und C. B las keine Runde.
+  const f = stepsOf([leseSchritt(A), reply(`Am 25.11.\nQuellen: ${A} | ${C}`), leseSchritt(C), reply(`Wie vorhin.\nQuellen: ${A} | ${B} | ${C}`)]);
+  vi.stubGlobal('fetch', f);
+  const { host } = await opened({ client: copy.client });
+  await ask(host, 'Wann ging die Bestellung hinaus?');
+  await until(() => costs(host).length === 1, 'erste Antwort');
+  await ask(host, 'Und was steht im Archiv?');
+  await until(() => costs(host).length === 2, 'Nachfrage');
+  // Es ist eine Nachfrage: Die erste Runde ging mit.
+  expect(bodyOf(f.calls[2]).messages[0].content.at(-1).text).toContain('Frage: Wann ging die Bestellung hinaus?');
+  const quellen = (round: Element) => [...round.querySelectorAll('.frag-quelle')].map((b) => b.textContent);
+  // Die neueste Runde steht oben. Die erste Runde kennt C noch nicht: Es kam erst später vor.
+  expect(quellen(rounds(host)[0])).toEqual(['Beispiel Projekt', 'Projekt Reiher']);
+  expect(quellen(rounds(host)[1])).toEqual(['Beispiel Projekt']);
 });

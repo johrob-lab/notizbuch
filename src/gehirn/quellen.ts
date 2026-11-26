@@ -3,7 +3,7 @@ import { dailyNotePath } from '../lib/filenames';
 
 // Die Zeile „Quellen:“ am Ende einer Antwort von Claude (`Quellen: <pfad>[#Abschnitt] | <pfad>`): Sie steht nie im Text der Antwort,
 // ihre Pfade werden Knöpfe unter der Antwort und beim Übernehmen die Wikilinks des letzten Punkts. Eine Quelle zählt nur, wenn es
-// die Notiz in der Kopie gibt und sie in dieser Frage vorkam: Was Claude sonst nennt, fällt weg, die Antwort bleibt.
+// die Notiz in der Kopie gibt und sie im Gespräch bis zu dieser Frage vorkam: Was Claude sonst nennt, fällt weg, die Antwort bleibt.
 
 /** Eine Quelle unter der Antwort: der Pfad in der Kopie, der Abschnitt, der Tag einer Tagesnotiz und der Text des Knopfs. */
 export type Quelle = {
@@ -45,8 +45,9 @@ export function ohneQuellenZeile(text: string, laeuft = false): string {
 }
 
 /**
- * Die Pfade, die in dieser Frage vorkamen (`pfade` der Runde), und die Tagesnotiz des Tages der Seite, aber nur, wenn eine Tagesseite
- * mitging (`seitenTag`, sonst `null`: Woche, Monat, keine Seite oder Schalter aus).
+ * Die Pfade, die im Gespräch bis zu dieser Frage vorkamen (`pfade` dieser Runde und der früheren), und die Tagesnotiz des Tages der
+ * Seite, aber nur, wenn mit dieser Frage eine Tagesseite mitging (`seitenTag`, sonst `null`: Woche, Monat, keine Seite oder Schalter
+ * aus).
  */
 export function erlaubtePfade(pfade: readonly string[], seitenTag: Day | null): string[] {
   return seitenTag === null ? [...pfade] : [...pfade, dailyNotePath(seitenTag)];

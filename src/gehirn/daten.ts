@@ -48,13 +48,14 @@ const MONATE: Record<string, number> = {
   dezember: 12,
 };
 
-// Eine Runde von links nach rechts, damit `24.08.2027` nicht zugleich als `24.08.` zählt.
+// Eine Runde von links nach rechts, damit `24.08.2027` nicht zugleich als `24.08.` zählt. Das Jahr einer Kalenderwoche ist keines,
+// wenn ein `-` folgt: In `KW 40 2027-03-01` beginnt dort ein Datum.
 const DATUM = new RegExp(
   [
     String.raw`(?<![\d.])(?<t>\d{1,2})\.(?<m>\d{1,2})\.(?<j>\d{4}|\d{2})?(?!\d)`,
     String.raw`(?<![\d-])(?<iso>\d{4}-\d{2}-\d{2})(?!\d)`,
     String.raw`(?<![a-z])(?<mn>${Object.keys(MONATE).join('|')})\s+(?<mj>\d{4})(?!\d)`,
-    String.raw`(?<![a-z])kw\s?(?<kw>\d{1,2})(?:[\s/]+(?<kj>\d{4})(?!\d))?(?!\d)`,
+    String.raw`(?<![a-z])kw\s?(?<kw>\d{1,2})(?:[\s/]+(?<kj>\d{4})(?![\d-]))?(?!\d)`,
   ].join('|'),
   'g',
 );
