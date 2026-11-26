@@ -16,7 +16,7 @@ import {
   projectNames,
 } from '../lib/meetings';
 import { csvDateiname, KEINE_CSV, neuesterStrich } from '../lib/tabelleCsv';
-import { meetingLayout } from '../pages/layouts';
+import { meetingLayout, vorbereitetRect } from '../pages/layouts';
 import { meetingPageText } from '../pages/meetingText';
 import { type ListDir, type ReadFile } from '../sync/github';
 import { normalizePath } from '../sync/paths';
@@ -24,6 +24,7 @@ import { confirmDialog } from './Dialog';
 import { PageView, type Kopf, type KopfTools, type PageProps } from './PageView';
 import { routeHash, type Steps } from './router';
 import { useCsvDownload } from './useCsvDownload';
+import { VorbereitetCard } from './VorbereitetCard';
 
 // Eine Seite einer Besprechung: Über der Schreibfläche steht ein Formular für Thema, Datum, Zeit, Ort und Projekt, daneben
 // die Leiste für die Seiten (welche Seite von wie vielen, neue Seite, Seite löschen). Das Formular ist HTML und nicht auf
@@ -362,5 +363,8 @@ export function BesprechungPage({ base: address, n, listDir, readFile, onSteps, 
     ),
   };
 
-  return <PageView key={attempt} {...rest} readOnly={readOnly} layout={layout} path={path} kopf={head} />;
+  // Über den Linien stehen die Punkte, die Claude für diese Besprechung in der Tagesnotiz vorbereitet hat, ab Seite 1.
+  const overlay = <VorbereitetCard engine={engine} base={base} seite={n} rect={vorbereitetRect()} />;
+
+  return <PageView key={attempt} {...rest} readOnly={readOnly} layout={layout} path={path} kopf={head} overlay={overlay} />;
 }

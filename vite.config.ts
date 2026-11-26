@@ -14,7 +14,8 @@ export default defineConfig({
       // Wechsel selbst neu lädt, einmal Neuladen genügt.
       registerType: 'autoUpdate',
       injectRegister: false,
-      workbox: { skipWaiting: true, clientsClaim: true },
+      // Die Schriften (Handschrift der vorbereiteten Punkte) gehören zur App und müssen auch ohne Netz da sein.
+      workbox: { skipWaiting: true, clientsClaim: true, globPatterns: ['**/*.{js,css,html,woff2}'] },
       manifest: {
         name: 'Notizbuch',
         short_name: 'Notizbuch',

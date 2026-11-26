@@ -433,6 +433,18 @@ export function besprechungLayout(meta: Record<string, string>): Layout {
   };
 }
 
+/**
+ * Wo auf einer Besprechungsseite die vorbereiteten Punkte stehen (`VorbereitetCard`): rechts vom roten Rand, über allen Linien
+ * des Schreibfelds. Jede Zeile der Punkte liegt auf einer Linie (Zeilenabstand 7 mm). Nur auf dem Bildschirm, nie in der Datei.
+ */
+export function vorbereitetRect(): Rect {
+  const x = MEETING_MARGIN + 14;
+  return [x, MEETING_HEAD, RIGHT - x, MEETING_ROWS * LINE];
+}
+
+/** Der Zeilenabstand der Besprechungsseite in Seiteneinheiten (7 mm). */
+export const MEETING_LINE = LINE;
+
 /** Das leere Element, aus dem die Abendroutine die Geometrie der Tabelle liest. Genau diese Zeichen, nicht zusammengebaut. */
 const TABELLE_MARKER =
   '<g data-tabelle="1" data-spalten="23 215 269 341 395 449 509 581 713 845 941 1037 1169" data-zeilen="248 296 344 392 440 488 536 584 632 680 728 776 824 872 920 968 1016 1064 1112 1160 1208 1256 1304 1352 1400 1448 1496 1544" data-kopfzeile="212 248"/>';
