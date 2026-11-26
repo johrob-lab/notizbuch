@@ -305,12 +305,12 @@ function tablePage(): Built {
 }
 
 /**
- * Sperrenseite des 1. Quartals 2027 (Fachlinie IB) mit erfundenen Einträgen: ein Abschnitt in Platz 1 an drei Werktagen (15. bis 17.2.),
- * am 16.2. dazu Gleis und Uhrzeit in Platz 2, und am 1.3. ein durchgestrichenes Wort. Die Schrift ist klein, damit der Text in die
+ * Sperrenseite für Jänner und Februar 2027 (Fachlinie IB) mit erfundenen Einträgen: ein Abschnitt in Platz 1 an drei Werktagen (15. bis 17.2.),
+ * am 16.2. dazu je ein Eintrag in Platz 2 und Platz 3, und am 22.2. ein durchgestrichenes Wort in Platz 1. Die Schrift ist klein, damit der Text in die
  * schmalen Felder passt: jeder Strich liegt mit seiner Mitte im Feld, das ihn aufnimmt.
  */
 function sperrenPage(): Built {
-  const key = 'IB-2027-Q1';
+  const key = 'IB-2027-01';
   const layout = sperrenLayout(key);
   return seeded(20270215, (rng) => {
     const s = new Scribe(rng, Date.UTC(2026, 10, 25, 9, 0)); // 25.11.2026, ab 10:00 Uhr Wiener Zeit
@@ -323,8 +323,9 @@ function sperrenPage(): Built {
     };
     for (const id of ['sperre-2027-02-15-1', 'sperre-2027-02-16-1', 'sperre-2027-02-17-1']) write(id, 'Muster Abschnitt 1', 'schwarz');
     write('sperre-2027-02-16-2', 'Nord Gl. 2 8-14', 'blau');
+    write('sperre-2027-02-16-3', 'Süd Gl. 1', 'blau');
     // Ein Wort, das gleich wieder durchgestrichen wird
-    const w = write('sperre-2027-03-01-1', 'Muster', 'schwarz');
+    const w = write('sperre-2027-02-22-1', 'Muster', 'schwarz');
     s.stroke([[w.x0 - 2, w.base - 5], [(w.x0 + w.x1) / 2, w.base - 5.8], [w.x1 + 2, w.base - 4.6]], 'schwarz');
     return { page: { kind: 'sperren', key, meta: {}, strokes: s.strokes }, layout };
   });
@@ -397,7 +398,7 @@ export type Sample = {
  * - `lauf3-nachtrag`: dieselbe Tagesseite, am Nachmittag weitergeschrieben
  * - `stifte`: Tagesseite vom 30.10.2026 mit je einer Zeile in Kugelschreiber, Fineliner, Füllfeder und Bleistift (Version 2)
  * - `tabelle`: Tabellenseite der Arbeitsvorbereitung vom 30.10.2026 (Version 3)
- * - `sperren`: Sperrenseite IB, 1. Quartal 2027, mit erfundenen Einträgen
+ * - `sperren`: Sperrenseite IB, Jänner und Februar 2027, mit erfundenen Einträgen
  */
 export function buildSamples(): Sample[] {
   const samples: Sample[] = [];
@@ -416,6 +417,6 @@ export function buildSamples(): Sample[] {
   add('stifte', tagPagePath(PEN_DAY), penPage());
   const table = tablePage();
   add('tabelle', besprechungPagePath(table.layout.key, 1), table);
-  add('sperren', sperrenPagePath('IB-2027-Q1'), sperrenPage());
+  add('sperren', sperrenPagePath('IB-2027-01'), sperrenPage());
   return samples;
 }

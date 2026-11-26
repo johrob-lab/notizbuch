@@ -68,7 +68,7 @@ export type Settings = {
   prediction: boolean;
   /** Ort des Schnellwechsel-Knopfs als Anteil (0 bis 1) der freien Fläche, von links und von oben. Ohne Angabe unten rechts. */
   quickSwitchPos?: [number, number];
-  /** Schlüssel der Sperrenseite, die auf diesem Gerät zuletzt offen war (`IB-2027-Q1`): Dorthin führt „Sperren“ in der Leiste. */
+  /** Schlüssel der Sperrenseite, die auf diesem Gerät zuletzt offen war (`IB-2027-03`): Dorthin führt „Sperren“ in der Leiste. */
   sperren?: string;
   /** Ablaufdatum des Tokens. Der Browser kann es nicht aus der Antwort von GitHub lesen, darum fragt die Einrichtung danach. */
   tokenExpiry?: Day;

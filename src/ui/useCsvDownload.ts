@@ -12,7 +12,7 @@ export type CsvDownload = {
   csvPath: string;
   jsonPath: string;
   name: string;
-  seite: number;
+  seite: number | string;
   /** Zeit des neuesten Strichs der offenen Seite. */
   neuester: number;
   /** Der Hinweis, wenn es die CSV (noch) nicht gibt. */

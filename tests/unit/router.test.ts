@@ -325,22 +325,24 @@ test('stepTargets', () => {
   expect(stepTargets(m, { prev: null, next: { ...m, n: 2 } })).toEqual({ back: m, forward: { ...m, n: 2 } });
 });
 
-test('the Sperren page has its own address and steps by quarter', () => {
-  expect(parseRoute('#/sperren/IB-2027-Q1')).toEqual({ view: 'sperren', key: 'IB-2027-Q1' });
-  expect(parseRoute('#/sperren/IB-2027-Q7')).toEqual({ view: 'tag', key: todayVienna() });
-  expect(parseRoute('#/sperren/Muster-2027-Q1')).toEqual({ view: 'tag', key: todayVienna() });
-  expect(routeHash({ view: 'sperren', key: 'Lehne-2027-Q2' })).toBe('#/sperren/Lehne-2027-Q2');
-  expect(nextRoute({ view: 'sperren', key: 'IB-2026-Q4' })).toEqual({ view: 'sperren', key: 'IB-2027-Q1' });
-  expect(prevRoute({ view: 'sperren', key: 'IB-2027-Q1' })).toEqual({ view: 'sperren', key: 'IB-2026-Q4' });
-  expect(shownDay({ view: 'sperren', key: 'IB-2026-Q4' }, '2026-11-25')).toBe('2026-11-25');
-  expect(shownDay({ view: 'sperren', key: 'IB-2027-Q1' }, '2026-11-25')).toBe('2027-01-01');
-  expect(STEP_LABELS.sperren).toEqual(['Voriges Quartal', 'Nächstes Quartal']);
+test('the Sperren page has its own address and steps by two months', () => {
+  expect(parseRoute('#/sperren/IB-2027-03')).toEqual({ view: 'sperren', key: 'IB-2027-03' });
+  expect(parseRoute('#/sperren/IB-2027-04')).toEqual({ view: 'tag', key: todayVienna() });
+  expect(parseRoute('#/sperren/Muster-2027-03')).toEqual({ view: 'tag', key: todayVienna() });
+  // Eine alte Adresse mit Quartalsschlüssel öffnet die neue Seite.
+  expect(parseRoute('#/sperren/IB-2027-Q2')).toEqual({ view: 'sperren', key: 'IB-2027-03' });
+  expect(routeHash({ view: 'sperren', key: 'Lehne-2027-05' })).toBe('#/sperren/Lehne-2027-05');
+  expect(nextRoute({ view: 'sperren', key: 'IB-2026-11' })).toEqual({ view: 'sperren', key: 'IB-2027-01' });
+  expect(prevRoute({ view: 'sperren', key: 'IB-2027-01' })).toEqual({ view: 'sperren', key: 'IB-2026-11' });
+  expect(shownDay({ view: 'sperren', key: 'IB-2026-11' }, '2026-11-25')).toBe('2026-11-25');
+  expect(shownDay({ view: 'sperren', key: 'IB-2027-01' }, '2026-11-25')).toBe('2027-01-01');
+  expect(STEP_LABELS.sperren).toEqual(['Vorige zwei Monate', 'Nächste zwei Monate']);
 });
 
 test('the views lead from the Sperren page to the day, week or month shown', () => {
-  const r: Route = { view: 'sperren', key: 'IB-2027-Q1' };
+  const r: Route = { view: 'sperren', key: 'IB-2027-01' };
   expect(viewRoute(r, 'tag', '2026-11-25')).toEqual({ view: 'tag', key: '2027-01-01' });
   expect(viewRoute(r, 'monat', '2026-11-25')).toEqual({ view: 'monat', key: '2027-01' });
-  expect(viewRoute({ view: 'sperren', key: 'Lehne-2026-Q4' }, 'woche', '2026-11-25')).toEqual({ view: 'woche', key: '2026-W48' });
+  expect(viewRoute({ view: 'sperren', key: 'Lehne-2026-11' }, 'woche', '2026-11-25')).toEqual({ view: 'woche', key: '2026-W48' });
   expect(shownMonth(r, '2026-11-25')).toBe('2027-01');
 });

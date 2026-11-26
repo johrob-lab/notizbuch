@@ -2,19 +2,19 @@ import { useEffect, useMemo, useRef } from 'preact/hooks';
 import type { Page } from '../ink/types';
 import { sperrenCsvName, sperrenCsvPath, sperrenJsonPath, sperrenPagePath } from '../lib/filenames';
 import { neuesterStrich } from '../lib/tabelleCsv';
-import { FACHLINIEN, keineListe, mitFachlinie, parseSperrenKey } from '../lib/sperren';
+import { FACHLINIEN, keineListe, mitFachlinie, parseSperrenKey, seitenSchluessel } from '../lib/sperren';
 import { sperrenLayout } from '../pages/layouts';
 import type { ReadFile } from '../sync/github';
 import { PageView, type Kopf, type KopfTools, type PageProps } from './PageView';
 import { routeHash } from './router';
 import { useCsvDownload } from './useCsvDownload';
 
-// Eine Seite der Sperren: ein Quartal einer Fachlinie. Über der Fläche steht ein Formular mit der Wahl der Fachlinie (zwei
-// Links, die dasselbe Quartal der anderen Fachlinie öffnen) und dem Knopf für den Download der Liste. Die Seite hat keine
+// Eine Seite der Sperren: zwei Monate einer Fachlinie. Über der Fläche steht ein Formular mit der Wahl der Fachlinie (zwei
+// Links, die dieselben zwei Monate der anderen Fachlinie öffnen) und dem Knopf für den Download der Liste. Die Seite hat keine
 // Kopfdaten zum Ändern: Das Formular ist nur Bedienung, `complete` setzt nur Art und Schlüssel.
 
 type Props = PageProps & {
-  /** Der Schlüssel der Seite, zum Beispiel `IB-2027-Q1`. */
+  /** Der Schlüssel der Seite, zum Beispiel `IB-2027-03`. */
   sperrenKey: string;
   /** Liest eine Datei aus dem Repository (für die Liste zum Download). */
   readFile: ReadFile;
@@ -87,7 +87,7 @@ export function SperrenPage({ sperrenKey, readFile, onOpen, ...rest }: Props) {
             csvPath: sperrenCsvPath(s.fachlinie, s.jahr),
             jsonPath: sperrenJsonPath(s.fachlinie, s.jahr),
             name: sperrenCsvName(s.fachlinie, s.jahr),
-            seite: s.quartal,
+            seite: seitenSchluessel(s),
             neuester: neuesterStrich(tools.current()),
             keine: keineListe(s.fachlinie, s.jahr),
           });

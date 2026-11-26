@@ -19,6 +19,12 @@ test('a page with newer strokes gets the time of the CSV', () => {
   expect(standHinweis(STORE, 3, 5)).toBe(HINWEIS);
 });
 
+test('a Sperren page reads its entry by the first month', () => {
+  const store = JSON.stringify({ format: 1, verarbeitet: '2026-11-17 19:02', seiten: { '03': { stand: 5 } } });
+  expect(standHinweis(store, '03', 9)).toBe(HINWEIS);
+  expect(standHinweis(store, '03', 5)).toBeNull();
+});
+
 test('a missing or broken store gives no hint', () => {
   expect(standHinweis(null, 2, 9)).toBeNull();
   expect(standHinweis('{', 2, 9)).toBeNull();

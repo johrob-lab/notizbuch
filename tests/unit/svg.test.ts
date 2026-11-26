@@ -1288,14 +1288,14 @@ test('the strokes of a table page are grouped by row', () => {
 });
 
 test('a sperren page is written and read back with its kind, key and stroke', () => {
-  const layout = sperrenLayout('IB-2027-Q1');
-  const page: Page = { kind: 'sperren', key: 'IB-2027-Q1', meta: {}, strokes: [strokeAt(200, 206, 'blau', 'sp1')] };
+  const layout = sperrenLayout('IB-2027-01');
+  const page: Page = { kind: 'sperren', key: 'IB-2027-01', meta: {}, strokes: [strokeAt(200, 206, 'blau', 'sp1')] };
   const svg = serializePage(page, layout.fields, layout.background());
   expect(svg).toContain('data-seite="sperren"');
-  expect(svg).toContain('data-schluessel="IB-2027-Q1"');
+  expect(svg).toContain('data-schluessel="IB-2027-01"');
   expect(svg).toContain('<g data-feld="sperre-2027-01-01-1" data-datum="2027-01-01">');
   const back = parsePage(svg);
   expect(back.kind).toBe('sperren');
-  expect(back.key).toBe('IB-2027-Q1');
+  expect(back.key).toBe('IB-2027-01');
   expect(back.strokes.map((s) => s.id)).toEqual(['sp1']);
 });

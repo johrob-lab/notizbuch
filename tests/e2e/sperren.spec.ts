@@ -1,11 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test as base, type Locator, type Page } from '@playwright/test';
-import { localFiles, openSeeded, queued, savedSettings, shareRepos } from './helpers/app';
+import { changeStoredSettings, localFiles, openSeeded, queued, savedSettings, shareRepos } from './helpers/app';
 import { mouse, pen } from './helpers/pointer';
 
 /**
  * Jeder Test achtet auf Fehler, die im Browser unbehandelt bleiben, und darauf, dass die App nie einen Dialog des
- * Browsers öffnet. Heute ist in allen Tests der 29.10.2026 (Wiener Zeit), das 4. Quartal 2026.
+ * Browsers öffnet. Heute ist in allen Tests der 29.10.2026 (Wiener Zeit), die Seite Sept. und Okt. 2026 (IB-2026-09).
  */
 const test = base.extend<{ browserErrors: void; noBrowserDialogs: void; fixedToday: void }>({
   browserErrors: [
@@ -47,12 +47,17 @@ const test = base.extend<{ browserErrors: void; noBrowserDialogs: void; fixedTod
 test.use({ serviceWorkers: 'block', viewport: { width: 1200, height: 1700 } });
 
 const DAY = '#/tag/2026-10-29';
-const Q4 = '#/sperren/IB-2026-Q4';
-const FILE = '07 Anhänge/Notizbuch/2026/2026-Q4 Sperren IB.svg';
-/** Ein Strich in Platz 1 des 3. Oktober: x 116 bis 259, y 184 + 2 · 44 bis + 44, Seiteneinheiten. */
+const SEITE = '#/sperren/IB-2026-09';
+const FILE = '07 Anhänge/Notizbuch/2026/2026-09 Sperren IB.svg';
+/** Ein Strich in Platz 1 des 3. Oktober (rechte Spalte): x 684 bis 840, y 272 bis 316, Seiteneinheiten. */
 const PLATZ_1: [number, number][] = [
-  [150, 294],
-  [220, 298],
+  [720, 294],
+  [790, 298],
+];
+/** Ein Strich in Platz 3 desselben Tages: x 996 bis 1152. */
+const PLATZ_3: [number, number][] = [
+  [1030, 294],
+  [1100, 298],
 ];
 
 const hash = (page: Page) => page.evaluate(() => window.location.hash);
@@ -61,15 +66,15 @@ const fachlinie = (page: Page) => page.getByRole('group', { name: 'Fachlinie', e
 const strokeCount = (page: Page) => page.evaluate(() => window.__notizbuch.currentPage().strokes.length);
 const opened = (page: Page) => page.waitForFunction(() => 'currentPage' in (window.__notizbuch ?? {}));
 
-test('the Sperren button opens the current quarter of IB', async ({ page }) => {
+test('the Sperren button opens the current page of IB', async ({ page }) => {
   await openSeeded(page, DAY);
   await link(page, 'Sperren').click();
-  await expect.poll(() => hash(page)).toBe(Q4);
+  await expect.poll(() => hash(page)).toBe(SEITE);
   await expect(link(page, 'Sperren')).toHaveAttribute('aria-current', 'page');
 });
 
 test('a pen stroke in a day lands in that field', async ({ page }) => {
-  await openSeeded(page, Q4);
+  await openSeeded(page, SEITE);
   await pen(page).stroke(PLATZ_1);
   await expect.poll(() => strokeCount(page)).toBe(1);
   await expect.poll(async () => (await queued(page))[FILE] ?? '').toContain('data-feld="sperre-2026-10-03-1"');
@@ -78,69 +83,95 @@ test('a pen stroke in a day lands in that field', async ({ page }) => {
   expect(text).toMatch(/data-feld="sperre-2026-10-03-1"[^]*<path/);
 });
 
-test('the arrows step by quarter and keep the Fachlinie', async ({ page }) => {
-  await openSeeded(page, Q4);
-  await expect(page.getByRole('link', { name: 'Voriges Quartal' })).toBeVisible();
-  await page.getByRole('link', { name: 'Nächstes Quartal' }).click();
-  await expect.poll(() => hash(page)).toBe('#/sperren/IB-2027-Q1');
-  await page.getByRole('link', { name: 'Voriges Quartal' }).click();
-  await expect.poll(() => hash(page)).toBe(Q4);
+test('a pen stroke in the third place lands in the field of place 3', async ({ page }) => {
+  await openSeeded(page, SEITE);
+  await pen(page).stroke(PLATZ_3);
+  await expect.poll(() => strokeCount(page)).toBe(1);
+  await expect.poll(async () => (await queued(page))[FILE] ?? '').toContain('data-feld="sperre-2026-10-03-3"');
 });
 
-test('Lehne keeps the quarter', async ({ page }) => {
-  await openSeeded(page, '#/sperren/IB-2027-Q1');
+test('the arrows step by two months and keep the Fachlinie', async ({ page }) => {
+  await openSeeded(page, SEITE);
+  await expect(page.getByRole('link', { name: 'Vorige zwei Monate' })).toBeVisible();
+  await page.getByRole('link', { name: 'Nächste zwei Monate' }).click();
+  await expect.poll(() => hash(page)).toBe('#/sperren/IB-2026-11');
+  await page.getByRole('link', { name: 'Nächste zwei Monate' }).click();
+  await expect.poll(() => hash(page)).toBe('#/sperren/IB-2027-01');
+  await page.getByRole('link', { name: 'Vorige zwei Monate' }).click();
+  await expect.poll(() => hash(page)).toBe('#/sperren/IB-2026-11');
+  await page.getByRole('link', { name: 'Vorige zwei Monate' }).click();
+  await expect.poll(() => hash(page)).toBe(SEITE);
+});
+
+test('Lehne keeps the page', async ({ page }) => {
+  await openSeeded(page, '#/sperren/IB-2027-01');
   await expect(link(fachlinie(page), 'IB')).toHaveAttribute('aria-current', 'page');
   await link(fachlinie(page), 'Lehne').click();
-  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-Q1');
+  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-01');
   await expect(link(fachlinie(page), 'Lehne')).toHaveAttribute('aria-current', 'page');
   await expect(link(fachlinie(page), 'IB')).not.toHaveAttribute('aria-current', 'page');
   await link(fachlinie(page), 'IB').click();
-  await expect.poll(() => hash(page)).toBe('#/sperren/IB-2027-Q1');
+  await expect.poll(() => hash(page)).toBe('#/sperren/IB-2027-01');
   await expect(link(fachlinie(page), 'IB')).toHaveAttribute('aria-current', 'page');
 });
 
-test('starting on Lehne, the arrows keep Lehne and IB keeps the quarter', async ({ page }) => {
-  await openSeeded(page, '#/sperren/Lehne-2026-Q4');
+test('starting on Lehne, the arrows keep Lehne and IB keeps the page', async ({ page }) => {
+  await openSeeded(page, '#/sperren/Lehne-2026-11');
   await expect(link(fachlinie(page), 'Lehne')).toHaveAttribute('aria-current', 'page');
-  await page.getByRole('link', { name: 'Nächstes Quartal' }).click();
-  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-Q1');
+  await page.getByRole('link', { name: 'Nächste zwei Monate' }).click();
+  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-01');
   await expect(link(fachlinie(page), 'Lehne')).toHaveAttribute('aria-current', 'page');
-  await page.getByRole('link', { name: 'Voriges Quartal' }).click();
-  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2026-Q4');
-  await page.getByRole('link', { name: 'Nächstes Quartal' }).click();
-  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-Q1');
+  await page.getByRole('link', { name: 'Vorige zwei Monate' }).click();
+  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2026-11');
+  await page.getByRole('link', { name: 'Nächste zwei Monate' }).click();
+  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-01');
   await link(fachlinie(page), 'IB').click();
-  await expect.poll(() => hash(page)).toBe('#/sperren/IB-2027-Q1');
+  await expect.poll(() => hash(page)).toBe('#/sperren/IB-2027-01');
   await expect(link(fachlinie(page), 'IB')).toHaveAttribute('aria-current', 'page');
 });
 
-test('the last opened quarter comes back, also after a reload', async ({ page }) => {
-  await openSeeded(page, '#/sperren/Lehne-2027-Q2');
-  await expect.poll(async () => (await savedSettings(page))?.sperren).toBe('Lehne-2027-Q2');
+test('the last opened page comes back, also after a reload', async ({ page }) => {
+  await openSeeded(page, '#/sperren/Lehne-2027-03');
+  await expect.poll(async () => (await savedSettings(page))?.sperren).toBe('Lehne-2027-03');
   await page.evaluate(() => (window.location.hash = '#/tag/2026-10-29'));
   await link(page, 'Sperren').click();
-  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-Q2');
+  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-03');
 
   await page.evaluate(() => (window.location.hash = '#/tag/2026-10-29'));
   await page.reload();
   await opened(page);
   await link(page, 'Sperren').click();
-  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-Q2');
+  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-03');
 });
 
-test('the second window shows the quarter but saves nothing', async ({ context, page }) => {
+test('an old quarter key in the settings leads to the new page', async ({ page }) => {
+  await openSeeded(page, DAY);
+  await changeStoredSettings(page, { sperren: 'Lehne-2027-Q2' });
+  await page.reload();
+  await opened(page);
+  await link(page, 'Sperren').click();
+  await expect.poll(() => hash(page)).toBe('#/sperren/Lehne-2027-03');
+});
+
+test('an old address with a quarter key shows the new page', async ({ page }) => {
+  await openSeeded(page, '#/sperren/IB-2027-Q4');
+  await opened(page);
+  await expect.poll(() => page.evaluate(() => window.__notizbuch.currentPage().key)).toBe('IB-2027-09');
+});
+
+test('the second window shows the page but saves nothing', async ({ context, page }) => {
   await openSeeded(page, DAY);
   const before = await savedSettings(page);
   const second = await context.newPage();
   await shareRepos(page, second);
-  await second.goto('/notizbuch/#/sperren/Lehne-2027-Q3');
+  await second.goto('/notizbuch/#/sperren/Lehne-2027-07');
   await opened(second);
   await expect(second.getByText('Das Notizbuch ist schon in einem anderen Fenster offen.', { exact: true })).toBeVisible();
   await expect(second.getByRole('group', { name: 'Fachlinie', exact: true })).toBeVisible();
   // Die Leiste kennt den Schlüssel sofort, gespeichert wird nichts.
   await second.evaluate(() => (window.location.hash = '#/tag/2026-10-29'));
   await link(second, 'Sperren').click();
-  await expect.poll(() => second.evaluate(() => window.location.hash)).toBe('#/sperren/Lehne-2027-Q3');
+  await expect.poll(() => second.evaluate(() => window.location.hash)).toBe('#/sperren/Lehne-2027-07');
   await second.waitForTimeout(300);
   expect(await savedSettings(page)).toEqual(before);
 });
@@ -152,13 +183,13 @@ async function tops(page: Page, selector: string): Promise<number[]> {
 
 test('the bar stays one row on an iPad in portrait', async ({ page }) => {
   await page.setViewportSize({ width: 1194, height: 1194 });
-  await openSeeded(page, '#/sperren/IB-2027-Q1');
+  await openSeeded(page, '#/sperren/IB-2027-01');
   const platzhalter = ['Index', 'Jahr', 'To-Dos'].map((name) => page.locator('header.topbar').getByRole('button', { name, exact: true }));
   for (const p of platzhalter) await expect(p).toBeVisible();
   const wide = (await page.locator('header.topbar').boundingBox())!.height;
 
   await page.setViewportSize({ width: 834, height: 1194 });
-  for (const hash of ['#/sperren/IB-2027-Q1', DAY]) {
+  for (const hash of ['#/sperren/IB-2027-01', DAY]) {
     await page.evaluate((h) => (window.location.hash = h), hash);
     await expect(link(page, 'Sperren')).toBeVisible();
     for (const p of platzhalter) await expect(p).toBeHidden();
@@ -167,7 +198,7 @@ test('the bar stays one row on an iPad in portrait', async ({ page }) => {
     expect((await page.locator('header.topbar').boundingBox())!.height).toBe(wide);
   }
 
-  await page.evaluate(() => (window.location.hash = '#/sperren/IB-2027-Q1'));
+  await page.evaluate(() => (window.location.hash = '#/sperren/IB-2027-01'));
   const kopf = page.locator('.kopf');
   const edges = await Promise.all(
     [kopf.getByRole('link', { name: 'IB', exact: true }), kopf.getByRole('link', { name: 'Lehne', exact: true }), kopf.getByRole('button', { name: 'Für Excel herunterladen', exact: true })].map(async (el) =>
@@ -180,8 +211,8 @@ test('the bar stays one row on an iPad in portrait', async ({ page }) => {
 for (const width of [960, 1100, 1101]) {
   test(`the bar fits at ${width} px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
-    await openSeeded(page, '#/sperren/IB-2027-Q1');
-    for (const hash of ['#/sperren/IB-2027-Q1', DAY]) {
+    await openSeeded(page, '#/sperren/IB-2027-01');
+    for (const hash of ['#/sperren/IB-2027-01', DAY]) {
       await page.evaluate((h) => (window.location.hash = h), hash);
       await expect(link(page, 'Sperren')).toBeVisible();
       const m = await page.evaluate(() => {
@@ -212,13 +243,13 @@ test('no month tabs on the Sperren page', async ({ page }) => {
   await openSeeded(page, DAY);
   const tabs = page.locator('nav[aria-label="Monate"]');
   await expect(tabs).toHaveCount(1);
-  await page.evaluate(() => (window.location.hash = '#/sperren/IB-2027-Q1'));
+  await page.evaluate(() => (window.location.hash = '#/sperren/IB-2027-01'));
   await expect(link(page, 'Sperren')).toHaveAttribute('aria-current', 'page');
   await expect(tabs).toHaveCount(0);
 });
 
 test('the Firmen-PC sees the page read-only', async ({ page }) => {
-  await openSeeded(page, Q4, { device: 'Firmen-PC' });
+  await openSeeded(page, SEITE, { device: 'Firmen-PC' });
   await expect(page.locator('.leiste')).toHaveCount(0);
   await expect(link(fachlinie(page), 'IB')).toBeVisible();
   await expect(link(fachlinie(page), 'Lehne')).toBeVisible();
@@ -236,13 +267,13 @@ const LISTE_KOPF = 'Fachlinie;Abschnitt;Von;Bis;Bemerkung';
 const csvOf = (jahr: number) => `\uFEFF${LISTE_KOPF}\r\nIB;Muster Abschnitt 1;${jahr}-03-01;${jahr}-03-04;Beispiel ${jahr}\r\n`;
 
 test('download without a list says so', async ({ page }) => {
-  await openSeeded(page, '#/sperren/IB-2027-Q1');
+  await openSeeded(page, '#/sperren/IB-2027-01');
   await page.getByRole('button', { name: DOWNLOAD, exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: KEINE_LISTE })).toBeVisible();
 });
 
 test("download takes the list of the page's year", async ({ page }) => {
-  await openSeeded(page, '#/sperren/IB-2027-Q1', {
+  await openSeeded(page, '#/sperren/IB-2027-01', {
     device: 'Firmen-PC',
     files: {
       '07 Anhänge/Notizbuch/2027/Sperren IB 2027.csv': csvOf(2027),
@@ -257,7 +288,7 @@ test("download takes the list of the page's year", async ({ page }) => {
 });
 
 test('download offline says so', async ({ page }) => {
-  const repo = await openSeeded(page, '#/sperren/IB-2027-Q1');
+  const repo = await openSeeded(page, '#/sperren/IB-2027-01');
   repo.offline = true;
   await page.getByRole('button', { name: DOWNLOAD, exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: NO_NETWORK })).toBeVisible();

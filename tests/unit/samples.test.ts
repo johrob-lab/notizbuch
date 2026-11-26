@@ -43,7 +43,7 @@ describe('sample pages', () => {
       `lauf3-nachtrag: ${tagPagePath(DAY)}`,
       `stifte: ${tagPagePath(PEN_DAY)}`,
       `tabelle: ${besprechungPagePath('2026-10-30 0900 Abstimmung Muster 2027', 1)}`,
-      `sperren: ${sperrenPagePath('IB-2027-Q1')}`,
+      `sperren: ${sperrenPagePath('IB-2027-01')}`,
     ]);
   });
 
@@ -123,14 +123,14 @@ describe('sample pages', () => {
     expect(page.strokes.length).toBe(sample.page.strokes.length);
   });
 
-  test('the Sperren sample has strokes in exactly the five fields of the invented entries', () => {
-    const sample = find(samples, 'sperren', '07 Anhänge/Notizbuch/2027/2027-Q1 Sperren IB.svg');
+  test('the Sperren sample has strokes in exactly the six fields of the invented entries', () => {
+    const sample = find(samples, 'sperren', '07 Anhänge/Notizbuch/2027/2027-01 Sperren IB.svg');
     expect(sample.svg).toContain('data-seite="sperren"');
-    expect(sample.svg).toContain('data-schluessel="IB-2027-Q1"');
+    expect(sample.svg).toContain('data-schluessel="IB-2027-01"');
     const groups = [...sample.svg.matchAll(/<g data-feld="([^"]+)"/g)].map((m) => m[1]);
-    expect(groups.sort()).toEqual(['sperre-2027-02-15-1', 'sperre-2027-02-16-1', 'sperre-2027-02-16-2', 'sperre-2027-02-17-1', 'sperre-2027-03-01-1']);
+    expect(groups.sort()).toEqual(['sperre-2027-02-15-1', 'sperre-2027-02-16-1', 'sperre-2027-02-16-2', 'sperre-2027-02-16-3', 'sperre-2027-02-17-1', 'sperre-2027-02-22-1']);
     const page = parsePage(sample.svg);
-    expect(page).toMatchObject({ kind: 'sperren', key: 'IB-2027-Q1' });
+    expect(page).toMatchObject({ kind: 'sperren', key: 'IB-2027-01' });
     expect(page.strokes.length).toBe(sample.page.strokes.length);
     expect(buildSamples().find((s) => s.folder === 'sperren')?.svg).toBe(sample.svg);
   });

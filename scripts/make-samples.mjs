@@ -14,7 +14,7 @@
 //   lauf3-nachtrag/   dieselbe Tagesseite, am Nachmittag weitergeschrieben (der Anfang bleibt Strich für Strich gleich)
 //   stifte/           Tagesseite 30.10.2026 mit je einer Zeile in Kugelschreiber, Fineliner, Füllfeder und Bleistift (Seitenformat Version 2)
 //   tabelle/          Tabellenseite der Arbeitsvorbereitung (Besprechung "Abstimmung Muster 2027", 30.10.2026, Seitenformat Version 3)
-//   sperren/          Sperrenseite IB, 1. Quartal 2027, mit erfundenen Einträgen (Muster Abschnitt 1, Feld Platz 1 und Platz 2)
+//   sperren/          Sperrenseite IB, Jänner und Februar 2027, mit erfundenen Einträgen (Muster Abschnitt 1 ... Feld Platz 1 bis 3)
 // Darunter liegen die Dateien so, wie sie im Vault liegen (07 Anhänge/Notizbuch/2026/...). Sie lassen sich dorthin kopieren.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
