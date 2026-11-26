@@ -456,6 +456,12 @@ test.describe('Excel-Stand', () => {
     await expect.poll(async () => (await queued(page))[MAERZ_FILE] ?? '').toMatch(/data-feld="sperre-2027-03-01-1"[^]*<path/);
   });
 
+  test('a file that is not UTF-8 cannot be read either: the head says so and nothing is grey', async ({ page }) => {
+    await openSeeded(page, MAERZ, { files, invalidUtf8: [EXCEL_2027] });
+    await expect(stand(page)).toHaveText('Der Excel-Stand für IB 2027 lässt sich nicht lesen.');
+    await expect(page.locator('.graue-sperren')).toHaveCount(0);
+  });
+
   test('Lehne, May and the next year show only their own closures', async ({ page }) => {
     const datei2028 = excelCsv([{ datum: '2028-01-05', abschnitt: 'Beispielstrecke Süd', platz: '1', stand: '2026-11-27 07:15' }]);
     await openSeeded(page, '#/sperren/Lehne-2027-03', { files: { ...files, [EXCEL_2028]: datei2028 } });

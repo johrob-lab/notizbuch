@@ -4,14 +4,14 @@ import type { Page } from '../ink/types';
 import { excelStandPath, sperrenCsvName, sperrenCsvPath, sperrenJsonPath, sperrenPagePath } from '../lib/filenames';
 import { neuesterStrich } from '../lib/tabelleCsv';
 import { FACHLINIEN, keineListe, mitFachlinie, parseSperrenKey, seitenSchluessel } from '../lib/sperren';
-import { excelStandText, graueSperren, gueltigeEintraege, leseExcelStand } from '../lib/sperrenExcel';
+import { excelStandText, graueSperren, gueltigeEintraege, leseExcelStand, type ExcelLesung } from '../lib/sperrenExcel';
 import { sperrenLayout } from '../pages/layouts';
 import type { ReadFile } from '../sync/github';
 import { GraueSperren } from './GraueSperren';
 import { PageView, type Kopf, type KopfTools, type PageProps } from './PageView';
 import { routeHash } from './router';
 import { useCsvDownload } from './useCsvDownload';
-import { useVaultText } from './useVaultText';
+import { UNLESBAR, useVaultText } from './useVaultText';
 
 // Eine Seite der Sperren: zwei Monate einer Fachlinie. Über der Fläche steht ein Formular mit der Wahl der Fachlinie (zwei
 // Links, die dieselben zwei Monate der anderen Fachlinie öffnen), dem Knopf für den Download der Liste und dem Stand aus Excel.
@@ -20,6 +20,9 @@ import { useVaultText } from './useVaultText';
 // Die abgestimmten Sperren aus dem Excel-Stand stehen grau in den freien Plätzen (`GraueSperren`, nur auf dem Bildschirm). Was
 // schon aus dem Notizbuch stammt oder dort an dem Tag gültig ist (Liste der Abendroutine), steht als Schrift da und kommt nicht
 // grau. Ein Platz mit Tinte ist nicht frei: Wer in einen grauen Platz schreibt, schiebt das Grau weiter.
+
+/** Ein Excel-Stand, den die Engine nicht lesen kann (zum Beispiel kein UTF-8): Der Kopf sagt, dass er sich nicht lesen lässt. */
+const UNLESBARER_STAND: ExcelLesung = { ok: false, fehler: 'Die Datei lässt sich nicht lesen.' };
 
 type Props = PageProps & {
   /** Der Schlüssel der Seite, zum Beispiel `IB-2027-03`. */
@@ -78,8 +81,12 @@ export function SperrenPage({ sperrenKey, readFile, onOpen, ...rest }: Props) {
   // Fläche nach jeder Änderung (`onStrokes`). Neu gezeichnet wird nur, wenn sich die belegten Plätze ändern, nicht bei jedem Strich.
   const excel = useVaultText(rest.engine, excelStandPath(fachlinie, jahr));
   const liste = useVaultText(rest.engine, sperrenCsvPath(fachlinie, jahr));
-  const lesung = useMemo(() => (excel === undefined || excel === null ? excel : leseExcelStand(excel, { fachlinie, jahr })), [excel, fachlinie, jahr]);
-  const gueltig = useMemo(() => gueltigeEintraege(liste ?? null), [liste]);
+  const lesung = useMemo((): ExcelLesung | null | undefined => {
+    if (excel === UNLESBAR) return UNLESBARER_STAND;
+    return excel === undefined || excel === null ? excel : leseExcelStand(excel, { fachlinie, jahr });
+  }, [excel, fachlinie, jahr]);
+  // Eine Liste, die fehlt oder sich nicht lesen lässt, hat keine gültigen Einträge.
+  const gueltig = useMemo(() => gueltigeEintraege(typeof liste === 'string' ? liste : null), [liste]);
   const tage = useMemo(() => [...new Set(layout.fields.map((f) => f.datum))], [layout]);
   const [belegt, setBelegt] = useState<ReadonlySet<string>>(() => new Set());
   const belegtKey = useRef('');

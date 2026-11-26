@@ -3,7 +3,7 @@ import { act } from 'preact/test-utils';
 import { afterEach, expect, test, vi } from 'vitest';
 import type { SyncEngine } from '../../src/sync/engine';
 import { announceNoteWrite } from '../../src/ui/noteQueue';
-import { useVaultText } from '../../src/ui/useVaultText';
+import { UNLESBAR, useVaultText } from '../../src/ui/useVaultText';
 
 // Der Haken `useVaultText` mit einer erfundenen Engine: Hier lässt sich zählen, wie oft gelesen wird, und eine Änderung von einem
 // anderen Gerät auslösen.
@@ -25,7 +25,8 @@ function fakeEngine(text: string | null = 'a') {
 }
 
 function Text(props: { engine: SyncEngine; path: string }) {
-  return h('p', { id: 'text' }, String(useVaultText(props.engine, props.path)));
+  const text = useVaultText(props.engine, props.path);
+  return h('p', { id: 'text' }, text === UNLESBAR ? 'UNLESBAR' : String(text));
 }
 
 const hosts: HTMLElement[] = [];
@@ -83,7 +84,7 @@ test('ohne Datei null', async () => {
   expect(shown(host)).toBe('null');
 });
 
-test('wirft read, ist der Text null und kein Fehler bleibt unbehandelt', async () => {
+test('wirft read, ist der Text UNLESBAR (nicht null wie ohne Datei) und kein Fehler bleibt unbehandelt', async () => {
   const unhandled = vi.fn();
   process.on('unhandledRejection', unhandled);
   try {
@@ -95,8 +96,11 @@ test('wirft read, ist der Text null und kein Fehler bleibt unbehandelt', async (
     await settle();
     // Der Fehler des Versprechens meldet sich erst nach einem Durchgang der Ereignisschleife.
     await new Promise((resolve) => setImmediate(resolve));
-    expect(shown(host)).toBe('null');
+    expect(shown(host)).toBe('UNLESBAR');
     expect(unhandled).not.toHaveBeenCalled();
+    // Die Engine merkt sich dafür null: Eine Seite, die danach aufgeht, beginnt damit, bis ihre eigene Anfrage antwortet.
+    engine.read.mockImplementation(() => later().promise);
+    expect(shown(mount(as))).toBe('null');
   } finally {
     process.off('unhandledRejection', unhandled);
   }
