@@ -134,6 +134,17 @@ describe('auflisten', () => {
     const wurzel = run('auflisten', {});
     expect(wurzel.text).toContain('02 Projekte/');
   });
+  it('schneidet NFD-Pfade und Zeichen mit längerem Kleinbuchstaben richtig', () => {
+    const nfd = [d('07 Anha\u0308nge/Sub/Datei.md', 'x'), d('07 Anha\u0308nge/Lose.md', 'x')];
+    const r = run('auflisten', { ordner: '07 Anhänge' }, nfd);
+    expect(r.text).toContain('Sub/');
+    expect(r.text).toContain('Lose.md');
+    expect(r.text).not.toContain('Datei');
+    const lang = [d('\u0130 Ordner/Unter/A.md', 'x'), d('\u0130 Ordner/B.md', 'x')];
+    const r2 = run('auflisten', { ordner: '\u0130 Ordner' }, lang);
+    expect(r2.text).toContain('Unter/');
+    expect(r2.text).toContain('B.md');
+  });
   it('höchstens 200', () => {
     const viele = Array.from({ length: 250 }, (_, i) => d(`Ordner/N${String(i).padStart(3, '0')}.md`, 'x'));
     const r = run('auflisten', { ordner: 'Ordner' }, viele);

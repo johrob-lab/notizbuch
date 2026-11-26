@@ -241,15 +241,17 @@ function liesAus(dateien: readonly KopieDatei[], stand: KopieStand, eingabe: Obj
 function listeAus(dateien: readonly KopieDatei[], stand: KopieStand, eingabe: Obj): WerkzeugErgebnis {
   const ordner = optText(eingabe, 'ordner')?.replace(/^\/+|\/+$/g, '');
   const zeile = ordner ? `Listet ${ordner}` : 'Listet das Vault';
-  const vorne = ordner ? `${nfcKlein(ordner)}/` : '';
+  // Je Pfadteil vergleichen: Länge und Schreibweise (NFC/NFD, Groß und Klein) dürfen sich je Teil ändern.
+  const ordnerTeile = ordner ? ordner.split('/').map(nfcKlein) : [];
   const ordnerNamen = new Map<string, string>();
   const dateiEintraege: { name: string; datei: KopieDatei }[] = [];
   for (const datei of dateien) {
-    if (!nfcKlein(datei.path).startsWith(vorne)) continue;
-    const rest = datei.path.slice(vorne.length);
-    const i = rest.indexOf('/');
-    if (i >= 0) ordnerNamen.set(nfcKlein(rest.slice(0, i)), rest.slice(0, i));
-    else dateiEintraege.push({ name: rest, datei });
+    const teile = datei.path.split('/');
+    if (teile.length <= ordnerTeile.length) continue;
+    if (!ordnerTeile.every((t, i) => nfcKlein(teile[i]) === t)) continue;
+    const rest = teile.slice(ordnerTeile.length).map((t) => t.normalize('NFC'));
+    if (rest.length > 1) ordnerNamen.set(nfcKlein(rest[0]), rest[0]);
+    else dateiEintraege.push({ name: rest[0], datei });
   }
   const eintraege = [
     ...[...ordnerNamen.values()].sort((a, b) => a.localeCompare(b, 'de')).map((n) => `${n}/`),
