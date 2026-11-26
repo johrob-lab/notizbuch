@@ -244,6 +244,11 @@ describe('graueSperren', () => {
     expect(r.mehr).toEqual([{ feld: f(3), anzahl: 1 }]);
   });
 
+  test('Platz 2 mit Tinte in 2 geht nach rechts in Platz 3, nicht nach 1', () => {
+    const r = graueSperren([z({ platz: 2 })], { tage, belegt: new Set([f(2)]), gueltig: leer });
+    expect(feldNamen(r)).toEqual([f(3)]);
+  });
+
   test('Platz 3 mit Tinte in 3 geht nach 1', () => {
     expect(feldNamen(graueSperren([z({ platz: 3 })], { tage, belegt: new Set([f(3)]), gueltig: leer }))).toEqual([f(1)]);
   });

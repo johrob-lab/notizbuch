@@ -150,7 +150,7 @@ export type GrauesMehr = { feld: string; anzahl: number };
  * Verteilt die Zeilen des Excel-Stands auf die Plätze der Seite. Zeilen aus dem Notizbuch (Kennung),
  * im Notizbuch schon gültige Zeilen (Datum und Abschnitt) und Zeilen ohne Text bleiben draußen. Je Tag
  * stabil nach Platz sortiert (ohne Platz und über 3 zuletzt) bekommt jede Zeile ihren Wunschplatz, wenn
- * er frei ist, sonst den ersten freien. Frei heißt weder Tinte (`belegt`) noch schon grau.
+ * er frei ist, sonst den nächsten freien rechts davon, dann von links. Frei heißt weder Tinte (`belegt`) noch schon grau.
  */
 export function graueSperren(
   zeilen: readonly ExcelZeile[],
@@ -172,10 +172,15 @@ export function graueSperren(
 
     const vergeben = new Set<Platz>();
     const frei = (p: Platz): boolean => !o.belegt.has(sperrenFeldId(tag, p)) && !vergeben.has(p);
+    // R6: zuerst der Platz aus Excel, sonst der nächste freie rechts davon, dann von links. Ohne Platz der erste freie.
+    const suche = (wunsch: number | null): Platz | undefined => {
+      const gueltig = wunsch !== null && wunsch >= 1 && wunsch <= 3;
+      if (!gueltig) return PLAETZE.find(frei);
+      return PLAETZE.find((p) => p >= wunsch && frei(p)) ?? PLAETZE.find(frei);
+    };
     let ueber = 0;
     for (const z of heute) {
-      const wunsch = PLAETZE.find((p) => p === z.platz);
-      const platz = wunsch !== undefined && frei(wunsch) ? wunsch : PLAETZE.find(frei);
+      const platz = suche(z.platz);
       if (platz === undefined) {
         ueber++;
         continue;
