@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { assertAllowedPath, hasBlockedWordPart, normalizePath, PathNotAllowedError, type Mode } from '../../src/sync/paths';
+import { assertAllowedPath, hasBlockedWordPart, isCopyPath, normalizePath, PathNotAllowedError, type Mode } from '../../src/sync/paths';
 
 const MODES: Mode[] = ['read', 'write', 'list'];
 
@@ -262,4 +262,54 @@ test('hasBlockedWordPart', () => {
   expect(hasBlockedWordPart('05 Daily Notes/2026-10-29.md')).toBe(false);
   expect(hasBlockedWordPart('Monkey.md')).toBe(false);
   expect(hasBlockedWordPart('')).toBe(false);
+});
+
+test('isCopyPath erlaubt Notizen und die CSV des Notizbuchs, auch in privaten Ordnern', () => {
+  for (const path of [
+    '05 Daily Notes/2026-11-26.md',
+    '02 Projekte/Beispiel Projekt.md',
+    'README.md',
+    'Notiz.MD',
+    '07 Anhänge/Notizbuch/Sperren IB 2027 Excel.csv',
+    '07 Anhänge/Notizbuch/2027/Liste.CSV',
+    '03 Bereiche/Gesundheit/Beispiel.md',
+    '02 Projekte/CLAUDE.md',
+  ]) {
+    expect(isCopyPath(path), path).toBe(true);
+  }
+});
+
+test('isCopyPath lehnt versteckte Ordner, Zugangsdaten, andere Endungen und Formfehler ab', () => {
+  for (const path of [
+    '.obsidian/workspace.md',
+    '02 Projekte/.trash/Alt.md',
+    '.claude/skills/x.md',
+    'CLAUDE.md',
+    '02 Projekte/Plan (Konflikt).md',
+    '01 Inbox/Mein Passwort.md',
+    '01 Inbox/github-TOKEN.md',
+    'Recovery Codes.md',
+    '01 Inbox/server.key.md',
+    '07 Anhänge/Notizbuch/Sperren IB 2027.json',
+    '07 Anhänge/Notizbuch/2026-11-26 Tag.svg',
+    '01 Inbox/Liste.csv',
+    '07 Anhänge/bild.png',
+    'a//b.md',
+    '../x.md',
+    'a\\b.md',
+    'x\u0007.md',
+    '',
+  ]) {
+    expect(isCopyPath(path), path).toBe(false);
+  }
+});
+
+test('isCopyPath prüft die NFC-Form', () => {
+  expect(isCopyPath('07 Anha\u0308nge/Notizbuch/Liste.csv')).toBe(true);
+  expect(isCopyPath('07 Anha\u0308nge/Notizbuch/Token.csv')).toBe(false);
+});
+
+test('isCopyPath lehnt Nicht-Texte ab', () => {
+  expect(isCopyPath(undefined as unknown as string)).toBe(false);
+  expect(isCopyPath(42 as unknown as string)).toBe(false);
 });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { utf8ToBase64 } from '../../src/sync/base64';
-import { AuthError, ConflictError, errorFor, GitHubClient, OfflineError, RateLimitError, statusOf } from '../../src/sync/github';
+import { AuthError, ConflictError, errorFor, GitHubClient, MAX_KOPIE_BYTES, OfflineError, RateLimitError, statusOf } from '../../src/sync/github';
 import { PathNotAllowedError } from '../../src/sync/paths';
 
 // Alles hier ist erfunden: Token, Repo und Dateien. Es geht keine Anfrage ins Netz, fetch ist ein Fake.
@@ -1122,4 +1122,67 @@ test('listDir: the extra requests of the Git Trees route map errors like every o
   respond(PARENT_LISTING);
   respondStatus(403, '', { 'x-ratelimit-remaining': '0' });
   await expect(client.listDir(BIG_DIR)).rejects.toBeInstanceOf(RateLimitError);
+});
+
+// Paket 12: die Kopie des Vaults für "Frag Claude".
+test('vaultTree fragt den ganzen Baum eines Commits', async () => {
+  respond({
+    sha: 'abc123',
+    truncated: true,
+    tree: [
+      { path: '05 Daily Notes', type: 'tree', sha: 't1' },
+      { path: '05 Daily Notes/2026-11-26.md', type: 'blob', sha: 's1', size: 10 },
+      { path: '.obsidian/app.md', type: 'blob', sha: 's2', size: 5 },
+      { path: '01 Inbox/Passwort.md', type: 'blob', sha: 's3', size: 5 },
+      { path: 'CLAUDE.md', type: 'blob', sha: 's4', size: 5 },
+      { path: '07 Anhänge/Notizbuch/x.svg', type: 'blob', sha: 's5', size: 5 },
+      { path: '02 Projekte/Gross.md', type: 'blob', sha: 's6', size: MAX_KOPIE_BYTES + 1 },
+    ],
+  });
+  const result = await client.vaultTree('abc123');
+  expect(calls).toHaveLength(1);
+  expect(calls[0].method).toBe('GET');
+  expect(calls[0].url).toBe(`${API}/git/trees/abc123?recursive=1`);
+  expect(result).toEqual({ entries: [{ path: '05 Daily Notes/2026-11-26.md', sha: 's1', size: 10 }], truncated: true });
+});
+
+test('vaultTree behält eine Datei genau an der Größengrenze und meldet truncated false', async () => {
+  respond({ tree: [{ path: 'Grenze.md', type: 'blob', sha: 's1', size: MAX_KOPIE_BYTES }] });
+  const result = await client.vaultTree('abc123');
+  expect(result.entries).toHaveLength(1);
+  expect(result.truncated).toBe(false);
+});
+
+test('vaultTree gibt NFC-Pfade', async () => {
+  respond({ tree: [{ path: '07 Anha\u0308nge/Notizbuch/L.csv', type: 'blob', sha: 's1', size: 3 }], truncated: false });
+  const { entries } = await client.vaultTree('abc123');
+  expect(entries).toEqual([{ path: '07 Anh\u00e4nge/Notizbuch/L.csv', sha: 's1', size: 3 }]);
+});
+
+test('vaultTree: eine Antwort ohne Baum ist unerwartet', async () => {
+  respond({ sha: 'abc123' });
+  await expect(client.vaultTree('abc123')).rejects.toThrow('Unerwartete Antwort');
+});
+
+test('copyText holt nur erlaubte Pfade', async () => {
+  const denied = await errorOf(client.copyText({ path: '01 Inbox/Passwort.md', sha: 'x', size: 1 }));
+  expect(denied).toBeInstanceOf(PathNotAllowedError);
+  expect(calls).toHaveLength(0);
+
+  respond({ content: utf8ToBase64('\uFEFFGrüße'), encoding: 'base64' });
+  const text = await client.copyText({ path: '02 Projekte/Beispiel.md', sha: 'blob9', size: 9 });
+  expect(text).toBe('\uFEFFGrüße');
+  expect(calls).toHaveLength(1);
+  expect(calls[0].url).toBe(`${API}/git/blobs/blob9`);
+});
+
+test('vaultTree und copyText bilden Fehler wie die anderen Aufrufe ab', async () => {
+  respondStatus(401);
+  await expect(client.vaultTree('abc123')).rejects.toBeInstanceOf(AuthError);
+  failNetwork();
+  await expect(client.vaultTree('abc123')).rejects.toBeInstanceOf(OfflineError);
+  respondStatus(401);
+  await expect(client.copyText({ path: 'Notiz.md', sha: 'x', size: 1 })).rejects.toBeInstanceOf(AuthError);
+  failNetwork();
+  await expect(client.copyText({ path: 'Notiz.md', sha: 'x', size: 1 })).rejects.toBeInstanceOf(OfflineError);
 });
