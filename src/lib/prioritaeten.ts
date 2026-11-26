@@ -16,7 +16,7 @@ const WIKILINK = /\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g;
  * Fettschrift (`**` und `__`) verliert ihre Zeichen. Eine Tabellenzeile (beginnt mit `|`) wird zu ihren nicht leeren Zellen,
  * getrennt durch " · ". Trennzeilen von Tabellen ergeben einen leeren Text.
  */
-function plain(text: string): string {
+export function plain(text: string): string {
   let t = text.replace(WIKILINK, (_all, target: string, label?: string) => label || target).replace(/\*\*|__/g, '');
   const trimmed = t.trim();
   if (trimmed.startsWith('|')) {

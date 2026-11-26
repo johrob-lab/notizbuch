@@ -2545,3 +2545,125 @@ body {
   color: #7d877f;
   font-size: 13px;
 }
+
+/*
+ * Die vorbereiteten Punkte auf Seite 1 einer Besprechung (VorbereitetCard.tsx): Handschrift in der Farbe des blauen Stifts,
+ * jede Zeile auf einer Linie der Seite (42 Einheiten = 7 mm). Die Karte ist durchsichtig und lässt Stift und Finger durch,
+ * nur die Kästchen nehmen einen Tipp an.
+ */
+.karte.vorbereitet {
+  padding: 0;
+  background: transparent;
+  pointer-events: none;
+  font-family: 'Caveat', 'Bradley Hand', 'Segoe Print', cursive;
+  font-weight: 500;
+  font-size: 32px;
+  line-height: 42px;
+  color: #1f4fa3;
+}
+
+.karte.vorbereitet .zeilen {
+  overflow: hidden;
+  overflow: clip;
+}
+
+.karte.vorbereitet ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.karte.vorbereitet li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  /* Die Schrift sitzt auf der Linie statt mitten zwischen zwei Linien. */
+  position: relative;
+  top: -7px;
+}
+
+.karte.vorbereitet li.titel {
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+
+.karte.vorbereitet li.erledigt > span {
+  color: #5f6862;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.karte.vorbereitet .punkt {
+  flex: 0 0 34px;
+  height: 42px;
+  /* Ein Punkt aus Tinte, etwas über der Linie */
+  background: radial-gradient(circle at 15px 27px, currentColor 0 4px, transparent 4.5px);
+}
+
+.karte.vorbereitet .haken {
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  margin: 0 -4px 0 -8px;
+  padding: 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.karte.vorbereitet .haken:disabled {
+  cursor: default;
+}
+
+.karte.vorbereitet .haken svg {
+  display: block;
+  width: 30px;
+  height: 30px;
+  overflow: visible;
+}
+
+.karte.vorbereitet .haken .kasten,
+.karte.vorbereitet .haken .strich {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.karte.vorbereitet .haken .strich {
+  stroke: #2e7d32;
+  stroke-width: 3;
+}
+
+.karte.vorbereitet .mehr {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 7px; /* wie die Zeilen: auf der letzten Linie */
+  height: 42px;
+  margin: 0;
+  color: #5f6862;
+  font-size: 28px;
+  line-height: 42px;
+  text-align: right;
+}
+
+.karte.vorbereitet .karten-hinweis:empty {
+  display: none;
+}
+
+.karte.vorbereitet .karten-hinweis {
+  position: absolute;
+  right: 0;
+  top: -40px;
+  margin: 0;
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  background: #fffefa;
+}
