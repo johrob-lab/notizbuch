@@ -50,6 +50,15 @@ export function sperrenJsonPath(f: Fachlinie, jahr: number): string {
   return `${PAGES_DIR}/${jahr}/Sperren ${f} ${jahr}.json`;
 }
 
+/** Der Stand der abgestimmten Sperren, den das Excel-Makro exportiert. Die App liest ihn nur. */
+export function excelStandName(f: Fachlinie, jahr: number): string {
+  return `Sperren ${f} ${jahr} Excel.csv`;
+}
+
+export function excelStandPath(f: Fachlinie, jahr: number): string {
+  return `${PAGES_DIR}/${jahr}/${excelStandName(f, jahr)}`;
+}
+
 /**
  * Macht aus einem Thema einen Dateinamen-Teil: verbotene Zeichen werden zu Leerzeichen, Leerzeichen
  * zusammengefasst, höchstens 80 Zeichen. `\ / : * ? " < > |` vertragen Windows-Dateinamen nicht,

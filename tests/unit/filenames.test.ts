@@ -3,6 +3,8 @@ import { todayVienna } from '../../src/lib/dates';
 import { assertAllowedPath } from '../../src/sync/paths';
 import {
   besprechungBase,
+  excelStandName,
+  excelStandPath,
   besprechungPagePath,
   pageName,
   conflictPath,
@@ -120,4 +122,9 @@ test('Pfade und Namen der Sperrenseiten', () => {
   expect(pageName('07 Anhänge/Notizbuch/2027/2027-03 Sperren IB.svg')).toBe('Sperren IB, März und April 2027');
   expect(pageName('07 Anhänge/Notizbuch/2027/2027-04 Sperren IB.svg')).toBe('2027-04 Sperren IB');
   expect(pageName('07 Anhänge/Notizbuch/2027/2027-Q1 Sperren IB.svg')).toBe('2027-Q1 Sperren IB');
+});
+
+test('Excel-Stand: Name und Pfad', () => {
+  expect(excelStandName('IB', 2027)).toBe('Sperren IB 2027 Excel.csv');
+  expect(excelStandPath('Lehne', 2028)).toBe('07 Anhänge/Notizbuch/2028/Sperren Lehne 2028 Excel.csv');
 });
